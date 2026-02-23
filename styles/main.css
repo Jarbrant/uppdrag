@@ -1,11 +1,10 @@
 /* ============================================================
    FIL: styles/main.css  (HEL FIL)
-   AO 1/15 — Tokens + Bas-komponenter (mobil-first)
-   Policy: UI-only, inga externa deps
+   AO 1/15 + AO 5/15 — Tokens kvar + UI helpers CSS (toast/modal/error card)
 ============================================================ */
 
 /* ============================================================
-   BLOCK 1 — Tokens (Designsystem light)
+   BLOCK 1 — Tokens (Designsystem light)  (OFÖRÄNDRAT)
 ============================================================ */
 :root {
   /* Spacing (8px grid) */
@@ -188,7 +187,7 @@ a:focus-visible, button:focus-visible, [tabindex="0"]:focus-visible {
 .hint { margin-top: var(--sp-2); font-size: var(--fs-2); }
 
 /* ============================================================
-   BLOCK 7 — Card component
+   BLOCK 7 — Card component (utökad i AO-5)
 ============================================================ */
 .card {
   border-radius: var(--r-3);
@@ -255,8 +254,27 @@ a:focus-visible, button:focus-visible, [tabindex="0"]:focus-visible {
   text-align: left;
 }
 
+/* AO-5: Error card variant */
+.card--error {
+  border-color: rgba(251, 113, 133, .35);
+  background: rgba(251, 113, 133, .08);
+}
+
+.card__head {
+  display: flex;
+  gap: var(--sp-3);
+  align-items: flex-start;
+}
+
+.card__actions {
+  display: flex;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+  margin-top: var(--sp-3);
+}
+
 /* ============================================================
-   BLOCK 8 — Button component
+   BLOCK 8 — Button component (utökad i AO-5)
 ============================================================ */
 .btn {
   appearance: none;
@@ -297,6 +315,15 @@ a:focus-visible, button:focus-visible, [tabindex="0"]:focus-visible {
   border-color: rgba(255,255,255,.14);
 }
 
+/* AO-5: Danger button */
+.btn-danger {
+  color: #14050a;
+  background: linear-gradient(180deg, var(--danger), #ff93a7);
+  border-color: rgba(251, 113, 133, .55);
+}
+
+.btn-danger:hover { filter: brightness(1.02); }
+
 .btn:disabled {
   opacity: .55;
   cursor: not-allowed;
@@ -326,16 +353,15 @@ a:focus-visible, button:focus-visible, [tabindex="0"]:focus-visible {
 }
 
 /* ============================================================
-   BLOCK 10 — Toast component
+   BLOCK 10 — Toast component (utökad i AO-5)
 ============================================================ */
 .toast {
   width: 100%;
   max-width: 520px;
-  margin: 0 auto;
-  padding: var(--sp-4);
+  padding: var(--sp-3) var(--sp-4);
   border-radius: var(--r-3);
   border: 1px solid var(--border);
-  background: rgba(16, 26, 47, .80);
+  background: rgba(16, 26, 47, .86);
   box-shadow: var(--sh-1);
 }
 
@@ -344,10 +370,143 @@ a:focus-visible, button:focus-visible, [tabindex="0"]:focus-visible {
   background: rgba(110,231,255,.10);
 }
 
-.toast strong { display: block; font-size: var(--fs-4); margin-bottom: var(--sp-1); }
+.toast--success {
+  border-color: rgba(74,222,128,.35);
+  background: rgba(74,222,128,.10);
+}
+
+.toast--warn {
+  border-color: rgba(251,191,36,.40);
+  background: rgba(251,191,36,.10);
+}
+
+.toast--danger {
+  border-color: rgba(251,113,133,.40);
+  background: rgba(251,113,133,.10);
+}
+
+.toast__row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+
+.toast__text {
+  font-size: var(--fs-2);
+  line-height: 1.35;
+  padding-top: 2px;
+}
+
+.toast__close {
+  min-height: 36px;
+  padding: 8px 10px;
+  border-radius: 12px;
+}
+
+.toast--hide {
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity .14s ease, transform .14s ease;
+}
+
+/* Toast stack placement */
+.toastStack {
+  position: fixed;
+  z-index: 1000;
+  right: var(--sp-4);
+  left: var(--sp-4);
+  bottom: var(--sp-4);
+  display: grid;
+  gap: var(--sp-2);
+  pointer-events: none; /* toasts själva kan få events via child */
+}
+
+.toastStack .toast {
+  pointer-events: auto;
+}
+
+@media (min-width: 720px) {
+  .toastStack {
+    left: auto;
+    width: 420px;
+  }
+}
 
 /* ============================================================
-   BLOCK 11 — Hero + footer helpers
+   BLOCK 11 — Modal component (AO-5)
+============================================================ */
+.modalPortal {
+  position: relative;
+  z-index: 1100;
+}
+
+.modalOverlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.55);
+  display: grid;
+  place-items: center;
+  padding: var(--sp-4);
+  animation: overlayIn .14s ease-out;
+}
+
+@keyframes overlayIn {
+  from { opacity: .6; }
+  to { opacity: 1; }
+}
+
+.modalOverlay--hide {
+  opacity: 0;
+  transition: opacity .14s ease;
+}
+
+.modal {
+  width: 100%;
+  max-width: 560px;
+  border-radius: var(--r-4);
+  border: 1px solid var(--border);
+  background: rgba(16, 26, 47, .92);
+  box-shadow: var(--sh-2);
+  overflow: hidden;
+}
+
+.modal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.modal__title {
+  margin: 0;
+  font-size: var(--fs-4);
+  letter-spacing: -0.01em;
+}
+
+.modal__close {
+  min-height: 36px;
+  padding: 8px 10px;
+  border-radius: 12px;
+}
+
+.modal__body {
+  padding: var(--sp-4);
+}
+
+.modal__footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+  padding: var(--sp-4);
+  border-top: 1px solid var(--border);
+}
+
+/* ============================================================
+   BLOCK 12 — Hero + footer helpers
 ============================================================ */
 .hero { padding-top: var(--sp-4); }
 .hero--center { text-align: center; padding-top: var(--sp-7); }
@@ -360,7 +519,7 @@ a:focus-visible, button:focus-visible, [tabindex="0"]:focus-visible {
 }
 
 /* ============================================================
-   BLOCK 12 — Responsive (desktop-first enhancements)
+   BLOCK 13 — Responsive (desktop-first enhancements)
 ============================================================ */
 @media (min-width: 720px) {
   .grid--modes {
