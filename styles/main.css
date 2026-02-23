@@ -1,6 +1,7 @@
 /* ============================================================
    FIL: styles/main.css  (HEL FIL)
    AO 1/15 + AO 5/15 + AO 14/15 — Tokens kvar + A11y + mobil states + safe areas
+   AO 5/8 (FAS 1.5) — Leaflet overlays + “cleared” visuals helpers
 ============================================================ */
 
 /* ============================================================
@@ -540,10 +541,6 @@ a { color: inherit; text-decoration: none; }
 
 /* ============================================================
    BLOCK 14 — AO-14 A11y + mobil states + safe areas
-   KRAV:
-   - Synlig focus ring på alla interaktiva element
-   - Buttons min 44px höjd (redan i .btn)
-   - Safe areas för sticky bars / toasts
 ============================================================ */
 
 /* Focus ring: matcha alla vanliga interaktiva element */
@@ -609,4 +606,36 @@ a { color: inherit; text-decoration: none; }
     transition-duration: 0.001ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* ============================================================
+   BLOCK 15 — AO 5/8 (FAS 1.5) Leaflet helpers
+   Syfte:
+   - Se till att Leaflet-kartor matchar typografi och inte “läcker” styles
+   - Små, säkra hooks för marker/overlay states (cleared/active)
+   OBS: Vi undviker aggressiva Leaflet overrides för att inte bryta kartans UI.
+============================================================ */
+
+/* Leaflet container: ärva font för enhetlig känsla */
+.leaflet-container {
+  font-family: var(--font);
+  color: var(--text);
+}
+
+/* Vår divIcon wrapper ska inte skapa extra box runt ikonen */
+.cpMarker,
+.partyCpMarker {
+  background: transparent !important;
+  border: none !important;
+}
+
+/* “Cleared” helper om vi senare vill använda CSS-klass i HTML */
+.is-cleared {
+  color: rgba(74,222,128,.95);
+}
+
+/* Liten overlay-boost: gör circle kanterna lite tydligare mot mörk bakgrund */
+.leaflet-interactive {
+  /* lämna minimal justering – Leaflet styr i övrigt */
+  filter: drop-shadow(0 6px 14px rgba(0,0,0,.20));
 }
