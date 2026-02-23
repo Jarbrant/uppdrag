@@ -1,1 +1,242 @@
+<!-- ============================================================
+     FIL: pages/party.html  (HEL FIL)
+     AO 9/15 — Party mode demo page (utan admin)
+     Mål: Demo-skattejakt kan starta och visa checkpoints (1..5)
+     Policy: UI-only, mobil-first, inga externa deps
+============================================================ -->
+<!doctype html>
+<html lang="sv">
+<head>
+  <!-- ==========================================================
+       BLOCK 1 — Meta + CSS
+  =========================================================== -->
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Skattjakt — Demo</title>
+  <meta name="description" content="Demo-skattejakt med 5 checkpoints." />
+  <link rel="stylesheet" href="../styles/main.css" />
+</head>
 
+<body>
+  <!-- ==========================================================
+       BLOCK 2 — App Root
+  =========================================================== -->
+  <div id="app" class="app"> <!-- HOOK: app-root -->
+    <!-- ========================================================
+         BLOCK 3 — Header
+    ========================================================= -->
+    <header class="topbar">
+      <div class="topbar__inner">
+        <div class="row row--header">
+          <button id="backBtn" class="btn btn-ghost btn--icon" type="button" aria-label="Tillbaka">
+            ←
+          </button>
+          <!-- HOOK: back-button -->
+
+          <div class="headerTitle">
+            <div class="muted small">Skattjakt</div>
+            <div id="partyName" class="headerName">Kalas-demo</div>
+            <!-- HOOK: party-name -->
+          </div>
+
+          <div class="headerRight">
+            <span id="stepPill" class="pill pill--level">Steg 1/5</span>
+            <!-- HOOK: step-pill -->
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <!-- ========================================================
+         BLOCK 4 — Main
+         KRAV: stepper 1..5 + ledtråd + “Nästa”
+    ========================================================= -->
+    <main class="main">
+      <div class="container">
+        <!-- Stepper -->
+        <section class="card card--list">
+          <div class="listHead">
+            <h1 class="h2">Checkpoints</h1>
+            <p class="muted small">Följ ledtråden och gå vidare steg för steg.</p>
+          </div>
+
+          <div id="stepper" class="stepper" aria-label="Stegindikator">
+            <!-- HOOK: stepper -->
+            <button class="stepDot is-active" type="button" data-step="1" aria-label="Steg 1">1</button>
+            <button class="stepDot" type="button" data-step="2" aria-label="Steg 2">2</button>
+            <button class="stepDot" type="button" data-step="3" aria-label="Steg 3">3</button>
+            <button class="stepDot" type="button" data-step="4" aria-label="Steg 4">4</button>
+            <button class="stepDot" type="button" data-step="5" aria-label="Steg 5">5</button>
+          </div>
+        </section>
+
+        <!-- Clue card -->
+        <section class="card card--mission">
+          <div class="card__head">
+            <div class="card__meta">
+              <h2 class="card__title">Ledtråd</h2>
+              <p id="clueText" class="card__desc muted">
+                Leta efter något som glittrar. Det kan vara nära fönstret.
+              </p>
+              <!-- HOOK: clue-text -->
+            </div>
+            <div class="card__side">
+              <span class="pill pill--difficulty" id="cluePill">checkpoint</span>
+              <!-- HOOK: clue-pill -->
+            </div>
+          </div>
+        </section>
+
+        <div class="muted small footerNote">
+          Detta är en demo (utan admin). Data och logik kopplas mer fullt i senare AO.
+        </div>
+      </div>
+    </main>
+
+    <!-- ========================================================
+         BLOCK 5 — Sticky CTA
+         KRAV: “Nästa”
+    ========================================================= -->
+    <div class="ctaBar">
+      <div class="ctaBar__inner">
+        <button id="nextBtn" class="btn btn-primary" type="button">
+          Nästa
+        </button>
+        <!-- HOOK: next-button -->
+      </div>
+    </div>
+  </div>
+
+  <!-- ==========================================================
+       BLOCK 6 — Page-only inline styles
+  =========================================================== -->
+  <style>
+    .row { display:flex; align-items:center; gap: var(--sp-3); }
+    .row--header { width:100%; }
+    .btn--icon { width:44px; padding: 10px 10px; }
+    .headerTitle { flex: 1; min-width: 0; }
+    .headerName { font-weight: 800; font-size: var(--fs-4); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .headerRight { display:flex; align-items:center; gap: var(--sp-2); }
+
+    .pill { display:inline-flex; align-items:center; justify-content:center; padding: 7px 10px; border-radius: 999px; border: 1px solid var(--border); background: rgba(255,255,255,.06); font-weight: 800; font-size: var(--fs-1); }
+    .pill--level { border-color: rgba(110,231,255,.30); background: rgba(110,231,255,.10); color: rgba(255,255,255,.92); }
+    .pill--difficulty { border-color: rgba(255,255,255,.14); }
+
+    .stepper {
+      display:flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items:center;
+      justify-content: space-between;
+      padding-top: var(--sp-2);
+    }
+
+    .stepDot {
+      width: 44px;
+      height: 44px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,.04);
+      color: var(--text);
+      font-weight: 900;
+      cursor: pointer;
+      transition: transform .08s ease, border-color .12s ease, background .12s ease;
+    }
+    .stepDot:active { transform: translateY(1px); }
+    .stepDot:hover { border-color: rgba(110,231,255,.25); background: rgba(255,255,255,.06); }
+    .stepDot.is-active {
+      border-color: rgba(110,231,255,.55);
+      background: rgba(110,231,255,.10);
+      box-shadow: var(--sh-1);
+    }
+
+    .footerNote { margin-top: var(--sp-5); text-align:center; opacity:.85; }
+    .ctaBar { position: sticky; bottom: 0; left:0; right:0; z-index: 20; padding: var(--sp-3) var(--sp-4); background: rgba(5,10,20,.75); border-top: 1px solid var(--border); backdrop-filter: blur(10px); }
+    .ctaBar__inner { max-width: var(--container); margin: 0 auto; display:flex; gap: var(--sp-2); }
+    .ctaBar__inner .btn { flex: 1; }
+  </style>
+
+  <!-- ==========================================================
+       BLOCK 7 — Minimal demo logic (UI-only)
+       NOTE: Ingen ny fil enligt AO-9 (bara party.html + index JSON)
+  =========================================================== -->
+  <script>
+    (function () {
+      'use strict';
+
+      // INIT-GUARD
+      if (window.__AO9_PARTY_INIT__) return; // HOOK: init-guard-party
+      window.__AO9_PARTY_INIT__ = true;
+
+      const backBtn = document.getElementById('backBtn'); // HOOK: back-button
+      const partyName = document.getElementById('partyName'); // HOOK: party-name
+      const stepPill = document.getElementById('stepPill'); // HOOK: step-pill
+      const clueText = document.getElementById('clueText'); // HOOK: clue-text
+      const nextBtn = document.getElementById('nextBtn'); // HOOK: next-button
+
+      const dots = Array.from(document.querySelectorAll('.stepDot')); // HOOK: stepper-dots
+
+      // Demo clues (5 steg)
+      const clues = [
+        'Leta efter något som glittrar. Det kan vara nära fönstret.',
+        'Titta där man brukar lägga något gott. En ledtråd väntar.',
+        'Sök efter något mjukt och varmt. Nära finns nästa steg.',
+        'Där du kan se dig själv i spegeln… finns en hemlighet.',
+        'Final: Leta efter en gömd plats nära dörren. Skatten är nära!'
+      ];
+
+      let step = 1;
+
+      function setStep(n) {
+        const i = Math.max(1, Math.min(5, Number(n) || 1));
+        step = i;
+
+        if (stepPill) stepPill.textContent = `Steg ${step}/5`;
+        if (clueText) clueText.textContent = clues[step - 1] || '—';
+
+        dots.forEach((d) => {
+          const s = Number(d.getAttribute('data-step'));
+          d.classList.toggle('is-active', s === step);
+        });
+      }
+
+      // Bind UI
+      if (backBtn) {
+        backBtn.addEventListener('click', () => {
+          if (window.history.length > 1) window.history.back();
+          else window.location.assign('/index.html');
+        });
+      }
+
+      if (nextBtn) {
+        nextBtn.addEventListener('click', () => {
+          if (step < 5) setStep(step + 1);
+          else {
+            // Demo-finish
+            setStep(5);
+            nextBtn.textContent = 'Klar!';
+            nextBtn.disabled = true;
+          }
+        });
+      }
+
+      dots.forEach((d) => {
+        d.addEventListener('click', () => {
+          const s = Number(d.getAttribute('data-step'));
+          setStep(s);
+        });
+      });
+
+      // Optional: read id/name from query (UI-hook)
+      // HOOK: future-party-pack-loader
+      try {
+        const qs = new URLSearchParams(window.location.search);
+        const id = (qs.get('id') || '').trim();
+        if (id && partyName) partyName.textContent = 'Kalas-demo';
+      } catch (_) {}
+
+      setStep(1);
+    })();
+  </script>
+</body>
+</html>
