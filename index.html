@@ -1,6 +1,6 @@
 <!-- ============================================================
      FIL: index.html  (HEL FIL)
-     AO 1/15 — NY BASELINE + Landningssida + Auto-start UI-hook
+     AO 1/15 + AO 11/15 — Landningssida + URL-start + felvisning
      Policy: UI-only, mobil-first, inga externa deps
 ============================================================ -->
 <!doctype html>
@@ -48,10 +48,18 @@
             <p class="lead muted">Välj ett läge och tryck Starta.</p>
           </div>
 
+          <!-- ======================================================
+               BLOCK 3.1 — Error slot (AO-11)
+               KRAV: Fel: err= visas som Error Card på index
+          ======================================================= -->
+          <div id="errorSlot" class="slot"> <!-- HOOK: error-slot -->
+            <!-- JS renderar error card här om err= finns -->
+          </div>
+
           <div class="grid grid--modes" role="list">
-            <!-- MODE CARD: Naturjakt -->
+            <!-- MODE CARD: Naturjakt => mode=zone -->
             <article class="card card--mode" role="listitem" tabindex="0"
-                     data-mode-card="nature"> <!-- HOOK: select-mode-nature -->
+                     data-mode-card="zone"> <!-- HOOK: select-mode-zone -->
               <div class="card__top">
                 <div class="card__icon" aria-hidden="true">🌿</div>
                 <div class="card__meta">
@@ -63,25 +71,25 @@
               </div>
               <div class="card__bottom">
                 <span class="badge">Utomhus</span>
-                <span class="badge badge-success">Barnvänligt</span>
+                <span class="badge badge-success">Demo: Skogsrundan</span>
               </div>
             </article>
 
-            <!-- MODE CARD: Skattjakt -->
+            <!-- MODE CARD: Skattjakt => mode=party -->
             <article class="card card--mode" role="listitem" tabindex="0"
-                     data-mode-card="treasure"> <!-- HOOK: select-mode-treasure -->
+                     data-mode-card="party"> <!-- HOOK: select-mode-party -->
               <div class="card__top">
                 <div class="card__icon" aria-hidden="true">🗺️</div>
                 <div class="card__meta">
                   <h2 class="card__title">Skattjakt</h2>
                   <p class="card__desc muted">
-                    Följ uppdrag och ledtrådar. Perfekt för kalas eller plats-event.
+                    Följ checkpoints och ledtrådar. Perfekt för kalas.
                   </p>
                 </div>
               </div>
               <div class="card__bottom">
                 <span class="badge">Kalas</span>
-                <span class="badge badge-success">Lagspel</span>
+                <span class="badge badge-success">Demo: Kalas</span>
               </div>
             </article>
           </div>
@@ -108,13 +116,14 @@
           </div>
 
           <footer class="footer muted">
-            <span>Tips: QR-kod kan starta direkt via URL-parametrar.</span>
+            <span>Tips: QR-kod kan starta direkt via URL: <span class="muted small">/?mode=zone&id=skogsrundan</span></span>
           </footer>
         </div>
       </section>
 
       <!-- ========================================================
            BLOCK 4 — Auto-start View (UI-hook, minimal logik)
+           OBS: AO-11 gör att boot.js tar över och routar vidare.
       ========================================================= -->
       <section id="autostartView" class="view" aria-label="Autostart" hidden> <!-- HOOK: view-autostart -->
         <div class="container">
@@ -127,19 +136,19 @@
             <div class="card card--info">
               <h2 class="h2">Autostart-läge</h2>
               <p class="muted">
-                Den här vyn är en UI-hook. Riktig navigation kopplas in i senare AO.
+                QR-länk upptäckt. Du skickas vidare automatiskt.
               </p>
 
-              <a id="autostartLink" class="btn btn-primary" href="#"
-                 aria-label="Gå vidare"> <!-- HOOK: autostart-link (href placeholder) -->
+              <a id="autostartLink" class="btn btn-primary" href="#" aria-label="Gå vidare">
                 Gå vidare
               </a>
+              <!-- HOOK: autostart-link (fallback) -->
             </div>
 
             <button class="btn btn-ghost" type="button" id="backToStartBtn">
               Tillbaka
             </button>
-            <!-- HOOK: back-to-start (hjälp för test; JS init-guard) -->
+            <!-- HOOK: back-to-start -->
           </div>
         </div>
       </section>
@@ -147,20 +156,27 @@
   </div>
 
   <!-- ==========================================================
-       BLOCK 5 — Minimal init (endast UI-toggle + hooks)
-       NOTE: Ingen riktig navigation/flow här.
+       BLOCK 5 — Boot routing (AO-11)
+       KRAV: QR-länk ska "bara funka"
+       - Inkludera boot.js alltid; den gör inget om inga params finns.
   =========================================================== -->
-  <script>
+  <script type="module" src="./src/boot.js"></script>
+
+  <!-- ==========================================================
+       BLOCK 6 — Index UI controller (mode-select + Start links + err-card)
+       - XSS-safe: textContent/DOM API
+       - Hooks för kommande JS
+  =========================================================== -->
+  <script type="module">
+    import { qsGet } from './src/util.js';
+    import { renderErrorCard } from './src/ui.js';
+
     (function () {
       'use strict';
 
-      // INIT-GUARD: förhindrar dubbel init om sidan laddas om i SPA-liknande miljö
-      if (window.__AO1_BASELINE_INIT__) return; // HOOK: init-guard
-      window.__AO1_BASELINE_INIT__ = true;
-
-      const qs = new URLSearchParams(window.location.search);
-      const mode = (qs.get('mode') || '').trim();
-      const id = (qs.get('id') || '').trim();
+      // INIT-GUARD
+      if (window.__AO11_INDEX_INIT__) return; // HOOK: init-guard-index
+      window.__AO11_INDEX_INIT__ = true;
 
       const startView = document.getElementById('startView');         // HOOK: view-start
       const autostartView = document.getElementById('autostartView'); // HOOK: view-autostart
@@ -168,72 +184,98 @@
       const selectedModeLabel = document.getElementById('selectedModeLabel'); // HOOK: selected-mode-label
       const startBtn = document.getElementById('startBtn'); // HOOK: start-button
       const startHint = document.getElementById('startHint'); // HOOK: hint-area
+      const errorSlot = document.getElementById('errorSlot'); // HOOK: error-slot
 
       const autostartText = document.getElementById('autostartText'); // HOOK: autostart-text
       const autostartMeta = document.getElementById('autostartMeta'); // HOOK: autostart-meta
       const autostartLink = document.getElementById('autostartLink'); // HOOK: autostart-link
       const backToStartBtn = document.getElementById('backToStartBtn'); // HOOK: back-to-start
 
-      // Helper: toggle views (fail-soft)
-      function showAutostartUI() {
+      function showAutostartUI(mode, id) {
         if (startView) startView.hidden = true;
-        if (autostartView) {
-          autostartView.hidden = false;
-          autostartView.classList.add('view--active');
-        }
-      }
-
-      function showStartUI() {
-        if (autostartView) autostartView.hidden = true;
-        if (startView) {
-          startView.hidden = false;
-          startView.classList.add('view--active');
-        }
-      }
-
-      // Autostart: ENDast UI-hook om mode + id finns
-      if (mode && id) {
-        showAutostartUI();
+        if (autostartView) autostartView.hidden = false;
 
         if (autostartText) autostartText.textContent = 'Startar…';
         if (autostartMeta) autostartMeta.textContent = `mode=${mode} • id=${id}`;
 
-        // Placeholder-länk (kopplas till riktig route i senare AO)
+        // Fallback-länk (boot.js routar automatiskt; detta är bara en hook)
         if (autostartLink) {
-          autostartLink.href = '#';
-          autostartLink.setAttribute('data-next', 'game'); // HOOK: future-router-target
+          autostartLink.href = `/?mode=${encodeURIComponent(mode)}&id=${encodeURIComponent(id)}`;
+          autostartLink.setAttribute('data-next', 'boot'); // HOOK: future-router-target
         }
+      }
 
+      // =========================================
+      // KRAV: err= visas som Error Card på index
+      // =========================================
+      const err = qsGet('err'); // HOOK: qs-err
+      const rid = qsGet('rid'); // HOOK: qs-rid (om boot skickar med)
+
+      if (err && errorSlot) {
+        const msg = rid ? `Start kunde inte genomföras. Felkod: ${err} (rid: ${rid})`
+                        : `Start kunde inte genomföras. Felkod: ${err}`;
+
+        const card = renderErrorCard(msg, [
+          {
+            label: 'Rensa fel',
+            variant: 'ghost',
+            onClick: () => {
+              const url = new URL(window.location.href);
+              url.searchParams.delete('err');
+              url.searchParams.delete('rid');
+              window.history.replaceState({}, '', url.toString());
+              errorSlot.innerHTML = '';
+            }
+          }
+        ]);
+
+        errorSlot.innerHTML = '';
+        errorSlot.appendChild(card);
+      }
+
+      // Om URL redan har mode+id: visa autostart UI-hook.
+      // OBS: boot.js kommer routa vidare direkt, men detta ger “Startar…” om det hinner rendera.
+      const qsMode = qsGet('mode');
+      const qsId = qsGet('id');
+      if (qsMode && qsId) {
+        showAutostartUI(qsMode, qsId);
         if (backToStartBtn) {
-          backToStartBtn.addEventListener('click', function () {
-            showStartUI();
+          backToStartBtn.addEventListener('click', () => {
+            const url = new URL(window.location.href);
+            url.searchParams.delete('mode');
+            url.searchParams.delete('id');
+            window.location.assign(url.toString());
           }, { passive: true });
         }
-
+        // Låt boot.js sköta routing
         return;
       }
 
-      // Mode selection hooks (enkelt, UI-only)
+      // =========================================
+      // Mode selection + Start links (AO-11)
+      // Starta bygger en QR-kompatibel URL:
+      //  - zone -> /?mode=zone&id=skogsrundan
+      //  - party -> /?mode=party&id=kalas_demo
+      // =========================================
       let selectedMode = '';
 
       function setSelectedMode(nextMode) {
-        selectedMode = nextMode;
+        selectedMode = (nextMode || '').trim();
 
-        // update label + enable start
         if (selectedModeLabel) {
           selectedModeLabel.textContent =
-            selectedMode === 'nature' ? 'Naturjakt' :
-            selectedMode === 'treasure' ? 'Skattjakt' : 'Inget valt';
+            selectedMode === 'zone' ? 'Naturjakt (zon)' :
+            selectedMode === 'party' ? 'Skattjakt (party)' :
+            'Inget valt';
         }
 
         if (startBtn) startBtn.disabled = !selectedMode;
         if (startHint) {
           startHint.textContent = selectedMode
-            ? 'Tryck Starta för att gå vidare (kopplas senare).'
+            ? 'Tryck Starta för att öppna demo via QR-länk.'
             : 'Välj ett läge för att aktivera Starta.';
         }
 
-        // highlight selected card
         document.querySelectorAll('[data-mode-card]').forEach((el) => {
           const isActive = el.getAttribute('data-mode-card') === selectedMode;
           el.classList.toggle('is-selected', isActive);
@@ -241,14 +283,11 @@
         });
       }
 
-      // Bind cards (no inline handlers)
       document.querySelectorAll('[data-mode-card]').forEach((card) => {
         card.addEventListener('click', () => {
           const m = (card.getAttribute('data-mode-card') || '').trim();
           setSelectedMode(m);
         });
-
-        // keyboard
         card.addEventListener('keydown', (e) => {
           if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault();
@@ -258,12 +297,18 @@
         });
       });
 
-      // Start button (UI-hook only)
       if (startBtn) {
         startBtn.addEventListener('click', () => {
           if (!selectedMode) return;
-          // HOOK: future-start-action
-          if (startHint) startHint.textContent = 'Starta är en hook i AO-1. Navigation kopplas i senare AO.';
+
+          const id = selectedMode === 'zone' ? 'skogsrundan'
+                   : selectedMode === 'party' ? 'kalas_demo'
+                   : '';
+
+          if (!id) return;
+
+          // KRAV: QR-länk ska “bara funka” -> gå till /?mode=...&id=...
+          window.location.assign(`/?mode=${encodeURIComponent(selectedMode)}&id=${encodeURIComponent(id)}`);
         });
       }
     })();
