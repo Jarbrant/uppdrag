@@ -1,1 +1,383 @@
+/* ============================================================
+   FIL: styles/main.css  (HEL FIL)
+   AO 1/15 — Tokens + Bas-komponenter (mobil-first)
+   Policy: UI-only, inga externa deps
+============================================================ */
 
+/* ============================================================
+   BLOCK 1 — Tokens (Designsystem light)
+============================================================ */
+:root {
+  /* Spacing (8px grid) */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-7: 32px;
+  --sp-8: 40px;
+  --sp-9: 48px;
+
+  /* Radius */
+  --r-1: 10px;
+  --r-2: 14px;
+  --r-3: 18px;
+  --r-4: 22px;
+
+  /* Shadows */
+  --sh-1: 0 6px 20px rgba(0,0,0,.10);
+  --sh-2: 0 10px 28px rgba(0,0,0,.14);
+
+  /* Colors */
+  --bg: #0b1220;
+  --surface: #101a2f;
+  --surface-2: #0e1730;
+  --border: rgba(255,255,255,.10);
+
+  --text: rgba(255,255,255,.92);
+  --muted: rgba(255,255,255,.70);
+
+  --primary: #6ee7ff;
+  --primary-2: #46c3ff;
+
+  --success: #4ade80;
+  --warn: #fbbf24;
+  --danger: #fb7185;
+
+  /* Typography */
+  --font: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, "Noto Sans", "Apple Color Emoji", "Segoe UI Emoji";
+  --fs-1: 12px;
+  --fs-2: 14px;
+  --fs-3: 16px;
+  --fs-4: 18px;
+  --fs-5: 22px;
+  --fs-6: 28px;
+
+  --lh: 1.45;
+
+  /* Focus ring */
+  --focus: 0 0 0 3px rgba(110, 231, 255, .30);
+
+  /* Max content */
+  --container: 980px;
+}
+
+/* ============================================================
+   BLOCK 2 — Base reset + body/layout
+============================================================ */
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+
+body {
+  margin: 0;
+  font-family: var(--font);
+  line-height: var(--lh);
+  color: var(--text);
+  background:
+    radial-gradient(1200px 600px at 20% -10%, rgba(110,231,255,.20), transparent 60%),
+    radial-gradient(900px 500px at 100% 0%, rgba(74,222,128,.16), transparent 55%),
+    linear-gradient(180deg, var(--bg), #070c16 70%);
+}
+
+a { color: inherit; text-decoration: none; }
+a:focus-visible, button:focus-visible, [tabindex="0"]:focus-visible {
+  outline: none;
+  box-shadow: var(--focus);
+  border-radius: var(--r-2);
+}
+
+.app { min-height: 100%; }
+
+.container {
+  width: 100%;
+  max-width: var(--container);
+  margin: 0 auto;
+  padding: var(--sp-6) var(--sp-4);
+}
+
+.main { padding-bottom: var(--sp-8); }
+
+/* ============================================================
+   BLOCK 3 — Typography helpers
+============================================================ */
+.h1 { font-size: var(--fs-6); margin: 0 0 var(--sp-2) 0; letter-spacing: -0.02em; }
+.h2 { font-size: var(--fs-5); margin: 0 0 var(--sp-2) 0; letter-spacing: -0.01em; }
+.lead { font-size: var(--fs-3); margin: 0; }
+
+.small { font-size: var(--fs-2); }
+.muted { color: var(--muted); }
+
+/* ============================================================
+   BLOCK 4 — Topbar / brand
+============================================================ */
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  backdrop-filter: blur(10px);
+  background: rgba(5, 10, 20, .55);
+  border-bottom: 1px solid var(--border);
+}
+
+.topbar__inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  padding: var(--sp-3) var(--sp-4);
+  max-width: var(--container);
+  margin: 0 auto;
+}
+
+.brand { display: flex; align-items: center; gap: var(--sp-3); }
+.brand__mark {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  background: rgba(110,231,255,.14);
+  border: 1px solid rgba(110,231,255,.25);
+}
+.brand__name { font-weight: 700; }
+.brand__tag { font-size: var(--fs-1); margin-top: 2px; }
+
+.topbar__right { display: flex; align-items: center; gap: var(--sp-2); }
+
+/* ============================================================
+   BLOCK 5 — Views
+============================================================ */
+.view { display: block; }
+.view--active { animation: fadeIn .18s ease-out; }
+
+@keyframes fadeIn {
+  from { opacity: .5; transform: translateY(2px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ============================================================
+   BLOCK 6 — Grid & panels
+============================================================ */
+.grid { display: grid; gap: var(--sp-4); }
+
+.grid--modes {
+  grid-template-columns: 1fr;
+  margin-top: var(--sp-5);
+}
+
+.panel {
+  margin-top: var(--sp-5);
+  padding: var(--sp-4);
+  border-radius: var(--r-3);
+  background: rgba(16, 26, 47, .72);
+  border: 1px solid var(--border);
+  box-shadow: var(--sh-1);
+}
+
+.panel__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-4);
+}
+
+.label { font-size: var(--fs-1); text-transform: uppercase; letter-spacing: .08em; }
+.value { font-size: var(--fs-4); font-weight: 700; }
+
+.hint { margin-top: var(--sp-2); font-size: var(--fs-2); }
+
+/* ============================================================
+   BLOCK 7 — Card component
+============================================================ */
+.card {
+  border-radius: var(--r-3);
+  background: rgba(16, 26, 47, .68);
+  border: 1px solid var(--border);
+  box-shadow: var(--sh-1);
+  padding: var(--sp-4);
+}
+
+.card--mode {
+  cursor: pointer;
+  user-select: none;
+  transition: transform .12s ease, border-color .12s ease, background .12s ease;
+  min-height: 124px;
+}
+
+.card--mode:hover {
+  transform: translateY(-1px);
+  border-color: rgba(110,231,255,.28);
+  background: rgba(16, 26, 47, .78);
+}
+
+.card--mode.is-selected {
+  border-color: rgba(110,231,255,.55);
+  box-shadow: var(--sh-2);
+  background: rgba(16, 26, 47, .88);
+}
+
+.card__top {
+  display: flex;
+  gap: var(--sp-3);
+  align-items: flex-start;
+}
+
+.card__icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 16px;
+  display: grid;
+  place-items: center;
+  background: rgba(255,255,255,.06);
+  border: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+
+.card__title {
+  margin: 0 0 var(--sp-1) 0;
+  font-size: var(--fs-4);
+  letter-spacing: -0.01em;
+}
+
+.card__desc { margin: 0; font-size: var(--fs-2); }
+
+.card__bottom {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+}
+
+.card--info {
+  max-width: 520px;
+  margin: var(--sp-5) auto 0 auto;
+  text-align: left;
+}
+
+/* ============================================================
+   BLOCK 8 — Button component
+============================================================ */
+.btn {
+  appearance: none;
+  border: 1px solid transparent;
+  border-radius: 14px;
+  padding: 12px 14px;
+  font-weight: 700;
+  font-size: var(--fs-3);
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  min-height: 44px; /* mobil-klickyta */
+  transition: transform .08s ease, filter .12s ease, border-color .12s ease, background .12s ease, opacity .12s ease;
+  text-decoration: none;
+}
+
+.btn:active { transform: translateY(1px); }
+
+.btn-primary {
+  color: #06101d;
+  background: linear-gradient(180deg, var(--primary), var(--primary-2));
+  border-color: rgba(110,231,255,.45);
+}
+
+.btn-primary:hover { filter: brightness(1.02); }
+
+.btn-ghost {
+  color: var(--text);
+  background: rgba(255,255,255,.06);
+  border-color: var(--border);
+}
+
+.btn-ghost:hover {
+  background: rgba(255,255,255,.08);
+  border-color: rgba(255,255,255,.14);
+}
+
+.btn:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* ============================================================
+   BLOCK 9 — Badge component
+============================================================ */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  font-size: var(--fs-1);
+  font-weight: 700;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,.06);
+  color: var(--text);
+}
+
+.badge-success {
+  border-color: rgba(74,222,128,.30);
+  background: rgba(74,222,128,.12);
+  color: rgba(255,255,255,.92);
+}
+
+/* ============================================================
+   BLOCK 10 — Toast component
+============================================================ */
+.toast {
+  width: 100%;
+  max-width: 520px;
+  margin: 0 auto;
+  padding: var(--sp-4);
+  border-radius: var(--r-3);
+  border: 1px solid var(--border);
+  background: rgba(16, 26, 47, .80);
+  box-shadow: var(--sh-1);
+}
+
+.toast--info {
+  border-color: rgba(110,231,255,.30);
+  background: rgba(110,231,255,.10);
+}
+
+.toast strong { display: block; font-size: var(--fs-4); margin-bottom: var(--sp-1); }
+
+/* ============================================================
+   BLOCK 11 — Hero + footer helpers
+============================================================ */
+.hero { padding-top: var(--sp-4); }
+.hero--center { text-align: center; padding-top: var(--sp-7); }
+
+.footer {
+  margin-top: var(--sp-6);
+  font-size: var(--fs-2);
+  text-align: center;
+  opacity: .85;
+}
+
+/* ============================================================
+   BLOCK 12 — Responsive (desktop-first enhancements)
+============================================================ */
+@media (min-width: 720px) {
+  .grid--modes {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .panel__row {
+    align-items: flex-end;
+  }
+
+  .topbar__inner {
+    padding-left: var(--sp-6);
+    padding-right: var(--sp-6);
+  }
+
+  .container {
+    padding-left: var(--sp-6);
+    padding-right: var(--sp-6);
+  }
+}
