@@ -373,7 +373,9 @@ function renderPreview() {
       const li = document.createElement('li');
       li.className = 'previewItem';
       const cp = draft.checkpoints[i] || {};
-      const label = (i === draft.checkpointCount - 1 && cp.isFinal) ? `🎁 Skattkista: ${draft.clues[i]}` : draft.clues[i];
+      const label = (i === draft.checkpointCount - 1 && cp.isFinal)
+        ? `🎁 Skattkista: ${draft.clues[i]}`
+        : draft.clues[i];
       li.textContent = safeText(label ?? `Checkpoint ${i + 1}`);
       elPreviewList.appendChild(li);
     }
@@ -422,10 +424,35 @@ function renderCheckpointEditorFULL() {
     row.tabIndex = 0;
     row.setAttribute('role', 'button');
     row.setAttribute('aria-label', `Välj checkpoint ${i + 1}`);
-    row.addEventListener('click', () => setActiveCp(i, { centerMap: true }));
-    row.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setActiveCp(i, { centerMap: true }); }
+
+    // ==============================
+    // FIX: Space/Enter ska INTE sabotera input-fält
+    // - Om fokus är i ett input/textarea/select/contentEditable -> ignorera
+    // ==============================
+    function isEditableTarget(evt) {
+      const t = evt?.target;
+      const tag = (t?.tagName || '').toUpperCase();
+      return (
+        tag === 'INPUT' ||
+        tag === 'TEXTAREA' ||
+        tag === 'SELECT' ||
+        t?.isContentEditable === true
+      );
+    }
+
+    row.addEventListener('click', (e) => {
+      if (isEditableTarget(e)) return; // klick i input ska inte “välja rad”
+      setActiveCp(i, { centerMap: true });
     });
+
+    row.addEventListener('keydown', (e) => {
+      if (isEditableTarget(e)) return; // FIX: mellanslag funkar i input
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        setActiveCp(i, { centerMap: true });
+      }
+    });
+
     if (i === activeCpIndex) row.classList.add('is-active');
 
     const meta = document.createElement('div');
@@ -560,7 +587,6 @@ function renderCheckpointEditorFULL() {
       const next = generateUniqueCode(used, 5);
       draft.checkpoints[k].code = next;
 
-      // skriv direkt i input utan full rerender
       const input = document.querySelector(`input[data-cp-code="${k}"]`);
       if (input) input.value = next;
 
@@ -571,7 +597,7 @@ function renderCheckpointEditorFULL() {
     codeRow.appendChild(codeHint);
     codeRow.appendChild(btnRnd);
 
-    // Final toggle (endast sista cp) — tydligare text
+    // Final toggle (endast sista cp)
     const finalRow = document.createElement('div');
     finalRow.style.display = 'flex';
     finalRow.style.alignItems = 'center';
@@ -611,7 +637,7 @@ function renderCheckpointEditorFULL() {
       draft.checkpoints[k].isFinal = !!e.target.checked;
       enforceFinalOnlyOnLast(draft);
       markDirtyLIGHT(true, { rerenderQR: false });
-      renderPreview(); // preview ska visa 🎁
+      renderPreview();
     });
 
     finalRow.appendChild(finalLeft);
@@ -645,7 +671,6 @@ function renderAllLIGHT({ rerenderQR = false } = {}) {
   renderErrorsAndPill();
   if (rerenderQR) renderQRPanelDebounced();
 }
-
 /* ============================================================
    BLOCK 11 — Autosave (debounced)
 ============================================================ */
