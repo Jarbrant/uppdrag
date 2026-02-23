@@ -1,11 +1,13 @@
 /* ============================================================
    FIL: src/play.js  (HEL FIL)
-   AO 6/15 + AO 7/15 + AO 12/15 + AO 13/15 — Play page controller
-   Mål: Robust felhantering (pack saknas / nätfel / tom missions)
-   KRAV:
-   - Alla fetch-fel mappas till tydliga felkoder (packs.js)
-   - play.js visar Error Card + “Tillbaka” + “Försök igen”
-   - Inga okontrollerade exceptions
+   AO 1/6 (FAS 1.1) — Difficulty på uppdrag + UI-pill + filter (initialt: easy)
+   Mål:
+   - Missions kan vara easy|normal (default easy)
+   - UI visar difficulty pill på missionkort
+   - Missions listas filtrerat enligt aktiv difficulty (initialt: easy)
+   Fail-closed:
+   - okänd difficulty => treat as easy + console.warn
+   Policy: UI-only, fail-closed, XSS-safe (DOM API + textContent), inga nya storage keys
 ============================================================ */
 
 /* ============================================================
@@ -13,13 +15,14 @@
 ============================================================ */
 import { qsGet } from './util.js';
 import { createStore } from './store.js';
-import { awardMissionComplete, completedCount, isNormalUnlocked, NORMAL_UNLOCK_AFTER } from './engine.js';
+import { awardMissionComplete } from './engine.js';
 import { loadZonePack } from './packs.js';
 import { toast, modal, renderErrorCard } from './ui.js';
 import { createCamera } from './camera.js';
 
 /* ============================================================
-   BLOCK 2 — DOM hooks
+   BLOCK 2 — DOM hooks (IDs i play.html)
+   Inline-kommentarer vid UI hooks (KRAV)
 ============================================================ */
 const $ = (sel) => document.querySelector(sel);
 
@@ -35,7 +38,7 @@ const elStatusSlot = $('#statusSlot');        // HOOK: status-slot
 const elMissionCard = $('#missionCard');      // HOOK: mission-card
 const elMissionTitle = $('#missionTitle');    // HOOK: mission-title
 const elMissionInstruction = $('#missionInstruction'); // HOOK: mission-instruction
-const elDifficulty = $('#difficultyPill');    // HOOK: difficulty-pill
+const elDifficultyPill = $('#difficultyPill'); // HOOK: difficulty-pill
 
 const elMissionsList = $('#missionsList');    // HOOK: missions-list
 const elComplete = $('#completeBtn');         // HOOK: complete-button
@@ -46,28 +49,34 @@ const elSwitch = $('#switchBtn');             // HOOK: switch-mission-button
 ============================================================ */
 const store = createStore(); // HOOK: store
 let pack = null;
+
+// NOTE: activeIndex pekar alltid på ORIGINAL-index i pack.missions (inte filter-index)
 let activeIndex = -1;
 
+// Difficulty filter (KRAV: initialt easy)
+let activeDifficulty = 'easy'; // HOOK: difficulty-filter (in-memory)
+
+// Camera state (in-memory only)
 let camera = null;           // HOOK: camera-instance
 let cameraMountPoint = null; // HOOK: camera-mount-point
-let lockHintNode = null;     // HOOK: lock-hint-node
+
+// Warn-once för okänd difficulty (fail-closed)
+const warnedDifficulty = new Set(); // HOOK: warn-once-set
 
 /* ============================================================
-   BLOCK 4 — Fail-closed redirect helper (index.html?err=...)
+   BLOCK 4 — Fail-closed redirect helper
 ============================================================ */
 function redirectToIndex(err) {
   const code = (err || 'PLAY_BAD_PARAMS').toString().trim() || 'PLAY_BAD_PARAMS';
-  const url = new URL('/index.html', window.location.origin);
+  const url = new URL('../index.html', window.location.href); // subpath-safe
   url.searchParams.set('err', code);
   window.location.assign(url.toString());
 }
 
 /* ============================================================
-   BLOCK 5 — Safe utils (no uncontrolled exceptions)
+   BLOCK 5 — Safe helpers
 ============================================================ */
-function safeText(x) {
-  return (x ?? '').toString();
-}
+function safeText(x) { return (x ?? '').toString(); }
 
 function setText(node, text) {
   if (!node) return;
@@ -75,73 +84,18 @@ function setText(node, text) {
 }
 
 function clear(node) {
-  try {
-    while (node && node.firstChild) node.removeChild(node.firstChild);
-  } catch (_) { /* ignore */ }
+  try { while (node && node.firstChild) node.removeChild(node.firstChild); } catch (_) {}
 }
 
 function safeDisable(el, disabled) {
   try { if (el) el.disabled = !!disabled; } catch (_) {}
 }
 
-function safeHide(el, hidden) {
-  try { if (el) el.hidden = !!hidden; } catch (_) {}
-}
-
-function mapPackError(e) {
-  // KRAV: tydliga felkoder
-  const code = safeText(e?.code || 'UNKNOWN');
-  const rid = safeText(e?.requestId || '');
-  const msg = safeText(e?.message || 'Kunde inte ladda paket.');
-
-  const suffix = rid ? ` (rid: ${rid})` : '';
-  return {
-    code,
-    message: `${msg} Felkod: ${code}${suffix}`
-  };
-}
-
 /* ============================================================
-   BLOCK 6 — Difficulty rules (AO-12)
+   BLOCK 6 — Mission shape + difficulty (KRAV)
+   mission-shape (KRAV inline comment):
+   mission = { id?, title|name, instruction|text|hint, difficulty?, points?, xp? }
 ============================================================ */
-function missionDifficultyOf(m) {
-  const raw = safeText(m?.difficulty || 'easy').trim().toLowerCase();
-  if (raw === 'normal') return 'normal';
-  if (raw === 'easy') return 'easy';
-  if (raw === 'intro') return 'easy';
-  return 'easy';
-}
-
-function isMissionLocked(m) {
-  const d = missionDifficultyOf(m);
-  if (d !== 'normal') return false;
-  const s = store.getState();
-  return !isNormalUnlocked(s, NORMAL_UNLOCK_AFTER);
-}
-
-function unlockHintText() {
-  const s = store.getState();
-  const done = completedCount(s);
-  const left = Math.max(0, NORMAL_UNLOCK_AFTER - done);
-  if (left <= 0) return '';
-  return `Lås upp efter ${NORMAL_UNLOCK_AFTER} klarade (${left} kvar)`;
-}
-
-/* ============================================================
-   BLOCK 7 — Render progress
-============================================================ */
-function renderProgress() {
-  try {
-    const s = store.getState();
-    setText(elLevelPill, `Lvl ${s.level}`);
-    setText(elXp, `XP: ${s.xp}`);
-    setText(elPoints, `Poäng: ${s.points}`);
-    setText(elStreak, `Streak: ${s.streak?.count ?? 0}`);
-  } catch (_) {
-    // Fail-soft: lämna UI, store är redan fail-closed i sig
-  }
-}
-
 function missionTitleOf(m, i) {
   const t = safeText(m?.title ?? m?.name).trim();
   return t || `Uppdrag ${i + 1}`;
@@ -152,117 +106,57 @@ function missionInstructionOf(m) {
     || 'Följ instruktionen och ta ett foto. Tryck “Klar” när du är klar.';
 }
 
+/* ============================================================
+   BLOCK 7 — Difficulty normalize + filter (KRAV)
+   - difficulty: "easy"|"normal" (default easy)
+   - okänd => treat as easy + console.warn
+============================================================ */
+function normalizeDifficulty(m) {
+  const raw = safeText(m?.difficulty).trim().toLowerCase();
+
+  if (!raw) return 'easy';
+  if (raw === 'easy' || raw === 'normal') return raw;
+
+  // Fail-closed: okänd difficulty => easy + warn (en gång per mission)
+  const key = safeText(m?.id || missionTitleOf(m, 0) || 'unknown');
+  if (!warnedDifficulty.has(key)) {
+    warnedDifficulty.add(key);
+    console.warn('[PLAY] Unknown difficulty -> treat as easy', { mission: key, difficulty: raw });
+  }
+  return 'easy';
+}
+
+function filteredMissionIndexes() {
+  const missions = Array.isArray(pack?.missions) ? pack.missions : [];
+  const idxs = [];
+
+  for (let i = 0; i < missions.length; i++) {
+    const d = normalizeDifficulty(missions[i]);
+    if (d === activeDifficulty) idxs.push(i);
+  }
+
+  return idxs; // ORIGINAL-indexar
+}
+
+/* ============================================================
+   BLOCK 8 — Render: progress
+============================================================ */
+function renderProgress() {
+  try {
+    const s = store.getState();
+    setText(elLevelPill, `Lvl ${s.level}`);
+    setText(elXp, `XP: ${s.xp}`);
+    setText(elPoints, `Poäng: ${s.points}`);
+    setText(elStreak, `Streak: ${s.streak?.count ?? 0}`);
+  } catch (_) {}
+}
+
 function renderPackHeader() {
   setText(elPackName, pack?.name || '—');
 }
 
 /* ============================================================
-   BLOCK 8 — Error handling UI (KRAV)
-============================================================ */
-function renderStatusError(message, actions = []) {
-  clear(elStatusSlot);
-  try {
-    elStatusSlot.appendChild(renderErrorCard(message, actions));
-  } catch (_) {
-    // Absolut sista fallback
-    const p = document.createElement('p');
-    p.textContent = message;
-    elStatusSlot.appendChild(p);
-  }
-}
-
-function showFatalError(errObj) {
-  const message = safeText(errObj?.message || 'Okänt fel.');
-
-  // Disable/lock UI fail-closed
-  safeDisable(elComplete, true);
-  safeDisable(elSwitch, true);
-  safeHide(elMissionCard, true);
-
-  renderStatusError(message, [
-    { label: 'Tillbaka', variant: 'ghost', onClick: () => window.location.assign('/index.html') },
-    { label: 'Försök igen', variant: 'primary', onClick: () => window.location.reload() }
-  ]);
-}
-
-/* ============================================================
-   BLOCK 9 — Missions list render (med lock UI)
-============================================================ */
-function renderMissionList() {
-  clear(elMissionsList);
-
-  const missions = Array.isArray(pack?.missions) ? pack.missions : [];
-  if (!missions.length) {
-    // KRAV: tom missions hanteras med Error Card
-    elMissionsList.appendChild(renderErrorCard('Paketet saknar uppdrag (missions är tom).', [
-      { label: 'Tillbaka', variant: 'ghost', onClick: () => window.location.assign('/index.html') },
-      { label: 'Försök igen', variant: 'primary', onClick: () => window.location.reload() }
-    ]));
-    return;
-  }
-
-  const hint = unlockHintText();
-
-  missions.forEach((m, i) => {
-    const locked = isMissionLocked(m);
-
-    const item = document.createElement('div');
-    item.className = 'missionItem' + (i === activeIndex ? ' is-active' : '') + (locked ? ' is-locked' : '');
-    item.setAttribute('role', 'listitem');
-    item.setAttribute('tabindex', '0');
-    item.setAttribute('data-mission-index', String(i)); // HOOK: mission-item-index
-
-    const meta = document.createElement('div');
-    meta.className = 'missionItem__meta';
-
-    const title = document.createElement('div');
-    title.className = 'missionItem__title';
-    title.textContent = missionTitleOf(m, i);
-
-    const sub = document.createElement('div');
-    sub.className = 'missionItem__sub muted';
-
-    if (locked) {
-      // Lock-ikon + unlock-text (hook)
-      const lock = document.createElement('span');
-      lock.textContent = '🔒';
-      lock.setAttribute('aria-hidden', 'true');
-      lock.style.marginRight = '6px';
-
-      const txt = document.createElement('span');
-      txt.textContent = hint || `Lås upp efter ${NORMAL_UNLOCK_AFTER} klarade`;
-      txt.setAttribute('data-hook', 'unlock-hint'); // HOOK: unlock-hint
-
-      sub.appendChild(lock);
-      sub.appendChild(txt);
-    } else {
-      sub.textContent = `Svårighet: ${missionDifficultyOf(m)}`;
-    }
-
-    meta.appendChild(title);
-    meta.appendChild(sub);
-
-    const pill = document.createElement('span');
-    pill.className = 'pill pill--difficulty';
-    pill.textContent = missionDifficultyOf(m);
-
-    item.appendChild(meta);
-    item.appendChild(pill);
-
-    item.addEventListener('click', () => setActiveMission(i));
-    item.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault();
-        setActiveMission(i);
-      }
-    });
-
-    elMissionsList.appendChild(item);
-  });
-}
-
-/* ============================================================
-   BLOCK 10 — Camera UI
+   BLOCK 9 — Camera UI
 ============================================================ */
 function ensureCameraUI() {
   if (!elMissionCard) return;
@@ -276,9 +170,7 @@ function ensureCameraUI() {
   if (!camera) {
     camera = createCamera({
       maxBytes: 6_000_000,
-      onChange: ({ hasPhoto }) => {
-        updateCTAState({ hasPhoto });
-      }
+      onChange: ({ hasPhoto }) => updateCTAState({ hasPhoto })
     });
   }
 
@@ -286,88 +178,149 @@ function ensureCameraUI() {
 }
 
 /* ============================================================
-   BLOCK 11 — CTA state (mission + lock + foto)
+   BLOCK 10 — CTA state (mission + foto)
 ============================================================ */
 function updateCTAState({ hasPhoto } = {}) {
   const missions = Array.isArray(pack?.missions) ? pack.missions : [];
   const m = missions[activeIndex];
 
   const missionActive = activeIndex >= 0 && !!m;
-  const locked = m ? isMissionLocked(m) : false;
-
   const photoOk = typeof hasPhoto === 'boolean'
     ? hasPhoto
     : (camera?.hasPhoto?.() || false);
 
-  safeDisable(elComplete, !(missionActive && !locked && photoOk));
+  // Fail-closed: måste ha mission + foto
+  safeDisable(elComplete, !(missionActive && photoOk));
 }
 
 /* ============================================================
-   BLOCK 12 — Active mission render (med lock-hint)
+   BLOCK 11 — Render: missions list (filtrerad)
+============================================================ */
+function renderMissionList() {
+  clear(elMissionsList);
+
+  const missions = Array.isArray(pack?.missions) ? pack.missions : [];
+  if (!missions.length) {
+    elMissionsList.appendChild(renderErrorCard('Paketet saknar uppdrag.', [
+      { label: 'Tillbaka', variant: 'ghost', onClick: () => window.location.assign('../index.html') },
+      { label: 'Försök igen', variant: 'primary', onClick: () => window.location.reload() }
+    ]));
+    return;
+  }
+
+  const idxs = filteredMissionIndexes(); // ORIGINAL-index list
+
+  if (!idxs.length) {
+    // Filter kan göra att listan blir tom (t.ex. normal saknas)
+    elMissionsList.appendChild(renderErrorCard(
+      `Inga uppdrag med difficulty "${activeDifficulty}" i detta paket.`,
+      [{ label: 'Tillbaka', variant: 'ghost', onClick: () => window.location.assign('../index.html') }]
+    ));
+    return;
+  }
+
+  idxs.forEach((origIndex, visiblePos) => {
+    const m = missions[origIndex];
+    const d = normalizeDifficulty(m);
+
+    const item = document.createElement('div');
+    item.className = 'missionItem' + (origIndex === activeIndex ? ' is-active' : '');
+    item.setAttribute('role', 'listitem');
+    item.setAttribute('tabindex', '0');
+    item.setAttribute('data-mission-index', String(origIndex)); // HOOK: mission-item-index (ORIGINAL)
+
+    const meta = document.createElement('div');
+    meta.className = 'missionItem__meta';
+
+    const title = document.createElement('div');
+    title.className = 'missionItem__title';
+    title.textContent = missionTitleOf(m, visiblePos);
+
+    const sub = document.createElement('div');
+    sub.className = 'missionItem__sub muted';
+    sub.textContent = `Svårighet: ${d}`;
+
+    meta.appendChild(title);
+    meta.appendChild(sub);
+
+    const pill = document.createElement('span');
+    pill.className = 'pill pill--difficulty';
+    pill.textContent = d;
+
+    item.appendChild(meta);
+    item.appendChild(pill);
+
+    item.addEventListener('click', () => setActiveMission(origIndex));
+    item.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        setActiveMission(origIndex);
+      }
+    });
+
+    elMissionsList.appendChild(item);
+  });
+}
+
+/* ============================================================
+   BLOCK 12 — Render: active mission card + difficulty pill (KRAV)
 ============================================================ */
 function renderActiveMission() {
-  try {
-    const missions = Array.isArray(pack?.missions) ? pack.missions : [];
-    const m = missions[activeIndex];
+  const missions = Array.isArray(pack?.missions) ? pack.missions : [];
+  const m = missions[activeIndex];
 
-    if (lockHintNode && lockHintNode.isConnected) lockHintNode.remove();
-    lockHintNode = null;
-
-    if (!m) {
-      safeHide(elMissionCard, true);
-      setText(elActiveMissionPill, 'Inget uppdrag valt');
-      if (camera) camera.clear();
-      updateCTAState({ hasPhoto: false });
-      return;
-    }
-
-    const locked = isMissionLocked(m);
-
-    safeHide(elMissionCard, false);
-    setText(elMissionTitle, missionTitleOf(m, activeIndex));
-    setText(elMissionInstruction, missionInstructionOf(m));
-    setText(elDifficulty, missionDifficultyOf(m));
-    setText(elActiveMissionPill, `Aktivt: ${activeIndex + 1}/${missions.length}`);
-
-    if (locked) {
-      lockHintNode = document.createElement('div');
-      lockHintNode.className = 'muted small';
-      lockHintNode.setAttribute('data-hook', 'unlock-hint'); // HOOK: unlock-hint
-      lockHintNode.style.marginTop = '8px';
-      lockHintNode.textContent = `🔒 ${unlockHintText() || `Lås upp efter ${NORMAL_UNLOCK_AFTER} klarade`}`;
-      elMissionInstruction.insertAdjacentElement('afterend', lockHintNode);
-    }
-
-    ensureCameraUI();
-    if (camera) camera.clear(); // ny mission => nytt foto krävs
+  if (!m) {
+    if (elMissionCard) elMissionCard.hidden = true;
+    setText(elActiveMissionPill, 'Inget uppdrag valt');
+    if (camera) camera.clear();
     updateCTAState({ hasPhoto: false });
-
-    document.querySelectorAll('.missionItem').forEach((n) => {
-      const idx = Number(n.getAttribute('data-mission-index'));
-      n.classList.toggle('is-active', idx === activeIndex);
-    });
-  } catch (_) {
-    showFatalError({ message: 'UI-rendering misslyckades.' });
+    return;
   }
+
+  if (elMissionCard) elMissionCard.hidden = false;
+
+  setText(elMissionTitle, missionTitleOf(m, activeIndex));
+  setText(elMissionInstruction, missionInstructionOf(m));
+
+  // KRAV: difficulty pill på missionkort
+  const d = normalizeDifficulty(m);
+  setText(elDifficultyPill, d);
+
+  setText(elActiveMissionPill, `Aktivt: ${activeIndex + 1}/${missions.length}`);
+
+  ensureCameraUI();
+
+  // Nytt uppdrag => nytt foto krävs (fail-closed)
+  if (camera) camera.clear();
+  updateCTAState({ hasPhoto: false });
+
+  // Markera list items
+  document.querySelectorAll('.missionItem').forEach((n) => {
+    const idx = Number(n.getAttribute('data-mission-index'));
+    n.classList.toggle('is-active', idx === activeIndex);
+  });
 }
 
 /* ============================================================
    BLOCK 13 — Controller actions
 ============================================================ */
-function setActiveMission(i) {
-  try {
-    const missions = Array.isArray(pack?.missions) ? pack.missions : [];
-    if (!missions.length) return;
+function setActiveMission(origIndex) {
+  const missions = Array.isArray(pack?.missions) ? pack.missions : [];
+  if (!missions.length) return;
 
-    const idx = Number(i);
-    if (!Number.isFinite(idx) || idx < 0 || idx >= missions.length) return;
+  const idx = Number(origIndex);
+  if (!Number.isFinite(idx) || idx < 0 || idx >= missions.length) return;
 
-    activeIndex = idx;
-    renderMissionList();
-    renderActiveMission();
-  } catch (_) {
-    showFatalError({ message: 'Kunde inte välja uppdrag.' });
+  // Guard: mission måste matcha aktiv difficulty (filtrerat läge)
+  const d = normalizeDifficulty(missions[idx]);
+  if (d !== activeDifficulty) {
+    toast(`Det uppdraget är "${d}". Du är i läge "${activeDifficulty}".`, 'warn', { ttlMs: 2200 });
+    return;
   }
+
+  activeIndex = idx;
+  renderMissionList();
+  renderActiveMission();
 }
 
 function getAwardForMission(m) {
@@ -377,90 +330,83 @@ function getAwardForMission(m) {
 }
 
 function completeActiveMission() {
-  try {
-    const missions = Array.isArray(pack?.missions) ? pack.missions : [];
-    const m = missions[activeIndex];
-    if (!m) return;
+  const missions = Array.isArray(pack?.missions) ? pack.missions : [];
+  const m = missions[activeIndex];
+  if (!m) return;
 
-    if (isMissionLocked(m)) {
-      toast(`Låst: ${unlockHintText() || `Lås upp efter ${NORMAL_UNLOCK_AFTER} klarade`}`, 'warn', { ttlMs: 2600 });
-      updateCTAState({ hasPhoto: camera?.hasPhoto?.() || false });
-      return;
-    }
-
-    const file = camera?.getFile?.() || null;
-    if (!file) {
-      toast('Du måste ta/välja en bild innan du kan markera “Klar”.', 'warn', { ttlMs: 2600 });
-      updateCTAState({ hasPhoto: false });
-      return;
-    }
-
-    const award = getAwardForMission(m);
-
-    const res = store.update((s) => {
-      const next = awardMissionComplete(s, award);
-      return next || s;
-    });
-
-    if (!res.ok) {
-      toast('Kunde inte spara progression.', 'danger');
-      return;
-    }
-
-    renderProgress();
-    renderMissionList();
-
-    toast(`Klar! +${award.points} poäng • +${award.xp} XP`, 'success');
-
-    if (camera) camera.clear();
+  // Fail-closed: foto krävs
+  const file = camera?.getFile?.() || null; // HOOK: photo-file
+  if (!file) {
+    toast('Du måste ta/välja en bild innan du kan markera “Klar”.', 'warn', { ttlMs: 2600 });
     updateCTAState({ hasPhoto: false });
+    return;
+  }
 
-    if (activeIndex + 1 < missions.length) {
-      setActiveMission(activeIndex + 1);
-    } else {
-      setActiveMission(activeIndex);
-      toast('Alla uppdrag i paketet är klara (för nu).', 'info', { ttlMs: 2200 });
-    }
-  } catch (_) {
-    showFatalError({ message: 'Kunde inte slutföra uppdrag.' });
+  const award = getAwardForMission(m);
+
+  const res = store.update((s) => {
+    const next = awardMissionComplete(s, award);
+    return next || s;
+  });
+
+  if (!res.ok) {
+    toast('Kunde inte spara progression.', 'danger');
+    return;
+  }
+
+  renderProgress();
+
+  toast(`Klar! +${award.points} poäng • +${award.xp} XP`, 'success');
+
+  // Rensa foto efter completion
+  if (camera) camera.clear();
+  updateCTAState({ hasPhoto: false });
+
+  // Auto-advance inom samma difficulty-filter
+  const idxs = filteredMissionIndexes();
+  const pos = idxs.indexOf(activeIndex);
+  const nextOrig = pos >= 0 && pos + 1 < idxs.length ? idxs[pos + 1] : null;
+
+  if (nextOrig !== null && nextOrig !== undefined) {
+    setActiveMission(nextOrig);
+  } else {
+    // Stanna kvar (eller visa info)
+    renderMissionList();
+    renderActiveMission();
+    toast(`Alla "${activeDifficulty}"-uppdrag klara (för nu).`, 'info', { ttlMs: 2200 });
   }
 }
 
 function openSwitchMissionDialog() {
-  try {
-    const missions = Array.isArray(pack?.missions) ? pack.missions : [];
-    if (!missions.length) return;
+  const missions = Array.isArray(pack?.missions) ? pack.missions : [];
+  if (!missions.length) return;
 
-    const body = document.createElement('div');
-    body.style.display = 'grid';
-    body.style.gap = '8px';
+  const idxs = filteredMissionIndexes();
 
-    missions.forEach((m, i) => {
-      const locked = isMissionLocked(m);
+  const body = document.createElement('div');
+  body.style.display = 'grid';
+  body.style.gap = '8px';
 
-      const b = document.createElement('button');
-      b.className = 'btn btn-ghost';
-      b.type = 'button';
-      b.textContent = locked
-        ? `🔒 ${i + 1}. ${missionTitleOf(m, i)}`
-        : `${i + 1}. ${missionTitleOf(m, i)}`;
+  idxs.forEach((origIndex, i) => {
+    const m = missions[origIndex];
+    const b = document.createElement('button');
+    b.className = 'btn btn-ghost';
+    b.type = 'button';
+    b.textContent = `${i + 1}. ${missionTitleOf(m, origIndex)}`;
 
-      b.addEventListener('click', () => {
-        setActiveMission(i);
-        toast(locked ? 'Uppdrag valt (låst).' : 'Uppdrag bytt.', 'info', { ttlMs: 1400 });
-      });
-
-      body.appendChild(b);
+    b.addEventListener('click', () => {
+      setActiveMission(origIndex);
+      toast('Uppdrag bytt.', 'info', { ttlMs: 1200 });
     });
 
-    modal({
-      title: 'Byt uppdrag',
-      body,
-      secondary: { label: 'Stäng', variant: 'ghost' }
-    });
-  } catch (_) {
-    toast('Kunde inte öppna listan.', 'danger');
-  }
+    body.appendChild(b);
+  });
+
+  modal({
+    title: `Byt uppdrag (${activeDifficulty})`,
+    body,
+    secondary: { label: 'Stäng', variant: 'ghost' }
+  });
 }
 
 /* ============================================================
@@ -469,86 +415,88 @@ function openSwitchMissionDialog() {
 (function bootPlay() {
   'use strict';
 
-  try {
-    if (window.__AO13_PLAY_INIT__) return; // HOOK: init-guard-play
-    window.__AO13_PLAY_INIT__ = true;
+  // INIT-GUARD
+  if (window.__FAS11_AO1_PLAY_INIT__) return; // HOOK: init-guard-play
+  window.__FAS11_AO1_PLAY_INIT__ = true;
 
-    const mode = qsGet('mode'); // HOOK: qs-mode
-    const id = qsGet('id');     // HOOK: qs-id
+  const mode = qsGet('mode'); // HOOK: qs-mode
+  const id = qsGet('id');     // HOOK: qs-id
 
-    if (!mode || !id) return redirectToIndex('PLAY_MISSING_PARAMS');
+  if (!mode || !id) return redirectToIndex('PLAY_MISSING_PARAMS');
+  if (mode !== 'zone') return redirectToIndex('PLAY_MODE_REQUIRED');
 
-    store.init();
-    renderProgress();
+  // Start store
+  store.init();
+  renderProgress();
 
-    if (elBack) {
-      elBack.addEventListener('click', () => {
-        if (window.history.length > 1) window.history.back();
-        else window.location.assign('/index.html');
-      });
-    }
-
-    if (elComplete) elComplete.addEventListener('click', completeActiveMission);
-    if (elSwitch) elSwitch.addEventListener('click', openSwitchMissionDialog);
-
-    safeDisable(elComplete, true);
-
-    // Loading state (fail-soft)
-    clear(elStatusSlot);
-    const loading = document.createElement('div');
-    loading.className = 'toast toast--info';
-    loading.setAttribute('role', 'status');
-    loading.textContent = 'Laddar paket…';
-    elStatusSlot.appendChild(loading);
-
-    (async () => {
-      try {
-        if (mode !== 'zone') {
-          showFatalError({ message: 'Endast zonpaket stöds här.' });
-          return;
-        }
-
-        pack = await loadZonePack(id);
-
-        // Pack saknas/ogiltigt (tom missions) → fail-closed
-        if (!pack || typeof pack !== 'object') {
-          showFatalError({ message: 'Paket saknas eller är ogiltigt.' });
-          return;
-        }
-
-        if (!Array.isArray(pack.missions) || pack.missions.length < 1) {
-          // Tom missions: visa error card + actions
-          clear(elStatusSlot);
-          renderMissionList();
-          safeDisable(elComplete, true);
-          safeDisable(elSwitch, true);
-          return;
-        }
-
-        clear(elStatusSlot);
-        renderPackHeader();
-        renderMissionList();
-        setActiveMission(0);
-        renderActiveMission();
-
-        if (!isNormalUnlocked(store.getState(), NORMAL_UNLOCK_AFTER)) {
-          toast(`Normal låses upp efter ${NORMAL_UNLOCK_AFTER} klarade.`, 'info', { ttlMs: 2200 });
-        }
-
-        // Live updates
-        store.subscribe(() => {
-          renderProgress();
-          renderMissionList();
-          renderActiveMission();
-        });
-      } catch (e) {
-        // KRAV: fetch-fel mappas till tydliga felkoder
-        const mapped = mapPackError(e);
-        showFatalError(mapped);
-      }
-    })();
-  } catch (_) {
-    // Absolut sista skyddet
-    showFatalError({ message: 'Start misslyckades (okänt fel).' });
+  // Back
+  if (elBack) {
+    elBack.addEventListener('click', () => {
+      if (window.history.length > 1) window.history.back();
+      else window.location.assign('../index.html');
+    });
   }
+
+  // Bind CTA
+  if (elComplete) elComplete.addEventListener('click', completeActiveMission);
+  if (elSwitch) elSwitch.addEventListener('click', openSwitchMissionDialog);
+  safeDisable(elComplete, true);
+
+  // Loading state
+  clear(elStatusSlot);
+  const loading = document.createElement('div');
+  loading.className = 'toast toast--info';
+  loading.setAttribute('role', 'status');
+  loading.textContent = 'Laddar paket…';
+  elStatusSlot.appendChild(loading);
+
+  (async () => {
+    try {
+      pack = await loadZonePack(id);
+
+      // Fail-closed: tom missions
+      if (!pack || typeof pack !== 'object' || !Array.isArray(pack.missions) || pack.missions.length < 1) {
+        clear(elStatusSlot);
+        elStatusSlot.appendChild(renderErrorCard('Paketet saknar uppdrag (missions är tom).', [
+          { label: 'Tillbaka', variant: 'ghost', onClick: () => window.location.assign('../index.html') },
+          { label: 'Försök igen', variant: 'primary', onClick: () => window.location.reload() }
+        ]));
+        safeDisable(elComplete, true);
+        safeDisable(elSwitch, true);
+        return;
+      }
+
+      clear(elStatusSlot);
+      renderPackHeader();
+
+      // KRAV: initialt easy filter
+      activeDifficulty = 'easy';
+
+      renderMissionList();
+
+      // Auto-select första mission i filtret
+      const idxs = filteredMissionIndexes();
+      if (idxs.length) setActiveMission(idxs[0]);
+      else renderActiveMission();
+
+      // Live updates
+      store.subscribe(() => {
+        renderProgress();
+        // missions påverkas inte av store, men UI håller sig fräscht
+      });
+    } catch (e) {
+      const code = safeText(e?.code || 'UNKNOWN');
+      const rid = safeText(e?.requestId || '');
+      const msg = safeText(e?.message || 'Kunde inte ladda paket.');
+
+      clear(elStatusSlot);
+      elStatusSlot.appendChild(renderErrorCard(`${msg} Felkod: ${code}${rid ? ` (rid: ${rid})` : ''}`, [
+        { label: 'Tillbaka', variant: 'ghost', onClick: () => window.location.assign('../index.html') },
+        { label: 'Försök igen', variant: 'primary', onClick: () => window.location.reload() }
+      ]));
+
+      safeDisable(elComplete, true);
+      safeDisable(elSwitch, true);
+    }
+  })();
 })();
