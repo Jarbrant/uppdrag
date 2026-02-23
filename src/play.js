@@ -1,7 +1,8 @@
 /* ============================================================
    FIL: src/play.js  (HEL FIL)
-   AO 6/15 + AO 7/15 — Play page controller + Camera (capture + preview)
-   Mål: Spelvy som visar uppdrag och “Klar” med foto-krav (AO-7)
+   AO 6/15 + AO 7/15 + AO 12/15 — Play page controller
+   - Kamera krävs för “Klar” (AO-7)
+   - Difficulty unlock: normal låses upp efter 15 klarade (AO-12)
    Policy: UI-only, fail-closed, XSS-safe rendering (DOM API + textContent),
            inga nya storage keys/datamodell.
 ============================================================ */
@@ -11,7 +12,7 @@
 ============================================================ */
 import { qsGet } from './util.js';
 import { createStore } from './store.js';
-import { awardMissionComplete } from './engine.js';
+import { awardMissionComplete, completedCount, isNormalUnlocked, NORMAL_UNLOCK_AFTER } from './engine.js';
 import { loadZonePack } from './packs.js';
 import { toast, modal, renderErrorCard } from './ui.js';
 import { createCamera } from './camera.js';
@@ -61,7 +62,7 @@ function redirectToIndex(err) {
 }
 
 /* ============================================================
-   BLOCK 5 — Rendering (render = render)
+   BLOCK 5 — Rendering helpers (render = render)
 ============================================================ */
 function setText(node, text) {
   if (!node) return;
@@ -72,6 +73,37 @@ function clear(node) {
   while (node && node.firstChild) node.removeChild(node.firstChild);
 }
 
+/* ============================================================
+   BLOCK 6 — Difficulty rules (AO-12)
+   KRAV: Missions har difficulty (easy|normal).
+   - Vi accepterar även "intro" som easy (bakåtkompat).
+============================================================ */
+function missionDifficultyOf(m) {
+  const raw = (m?.difficulty ?? 'easy').toString().trim().toLowerCase();
+  if (raw === 'normal') return 'normal';
+  if (raw === 'easy') return 'easy';
+  if (raw === 'intro') return 'easy';
+  return 'easy';
+}
+
+function isMissionLocked(m) {
+  const d = missionDifficultyOf(m);
+  if (d !== 'normal') return false; // easy alltid ok
+  const s = store.getState();
+  return !isNormalUnlocked(s, NORMAL_UNLOCK_AFTER);
+}
+
+function unlockHintText() {
+  const s = store.getState();
+  const done = completedCount(s);
+  const left = Math.max(0, NORMAL_UNLOCK_AFTER - done);
+  if (left <= 0) return '';
+  return `Lås upp efter ${NORMAL_UNLOCK_AFTER} klarade (${left} kvar)`;
+}
+
+/* ============================================================
+   BLOCK 7 — Render progress
+============================================================ */
 function renderProgress() {
   const s = store.getState();
   setText(elLevelPill, `Lvl ${s.level}`);
@@ -90,16 +122,14 @@ function missionInstructionOf(m) {
     || 'Följ instruktionen och ta ett foto. Tryck “Klar” när du är klar.';
 }
 
-function missionDifficultyOf(m) {
-  const d = (m?.difficulty ?? 'normal').toString().trim().toLowerCase();
-  if (d === 'intro' || d === 'advanced' || d === 'normal') return d;
-  return 'normal';
-}
-
 function renderPackHeader() {
   setText(elPackName, pack?.name || '—');
 }
 
+/* ============================================================
+   BLOCK 8 — Missions list render (med lock UI)
+   KRAV: UI visar lock-ikon + “Lås upp efter 15 klarade” (hook).
+============================================================ */
 function renderMissionList() {
   clear(elMissionsList);
 
@@ -111,9 +141,13 @@ function renderMissionList() {
     return;
   }
 
+  const hint = unlockHintText();
+
   missions.forEach((m, i) => {
+    const locked = isMissionLocked(m);
+
     const item = document.createElement('div');
-    item.className = 'missionItem' + (i === activeIndex ? ' is-active' : '');
+    item.className = 'missionItem' + (i === activeIndex ? ' is-active' : '') + (locked ? ' is-locked' : '');
     item.setAttribute('role', 'listitem');
     item.setAttribute('tabindex', '0');
     item.setAttribute('data-mission-index', String(i)); // HOOK: mission-item-index
@@ -127,7 +161,24 @@ function renderMissionList() {
 
     const sub = document.createElement('div');
     sub.className = 'missionItem__sub muted';
-    sub.textContent = `Svårighet: ${missionDifficultyOf(m)}`;
+
+    if (locked) {
+      // KRAV: lock-ikon + unlock-text (hook)
+      sub.innerHTML = ''; // safe: we build nodes, not inject user content
+      const lock = document.createElement('span');
+      lock.textContent = '🔒';
+      lock.setAttribute('aria-hidden', 'true');
+      lock.style.marginRight = '6px';
+
+      const txt = document.createElement('span');
+      txt.textContent = hint || `Lås upp efter ${NORMAL_UNLOCK_AFTER} klarade`;
+      txt.setAttribute('data-hook', 'unlock-hint'); // HOOK: unlock-hint
+
+      sub.appendChild(lock);
+      sub.appendChild(txt);
+    } else {
+      sub.textContent = `Svårighet: ${missionDifficultyOf(m)}`;
+    }
 
     meta.appendChild(title);
     meta.appendChild(sub);
@@ -151,14 +202,15 @@ function renderMissionList() {
   });
 }
 
+/* ============================================================
+   BLOCK 9 — Camera UI
+============================================================ */
 function ensureCameraUI() {
-  // Mounta kameran i missionCard när den finns
   if (!elMissionCard) return;
 
   if (!cameraMountPoint) {
     cameraMountPoint = document.createElement('div');
-    // HOOK: camera-ui-slot
-    cameraMountPoint.setAttribute('data-hook', 'camera-slot');
+    cameraMountPoint.setAttribute('data-hook', 'camera-slot'); // HOOK: camera-slot
     elMissionCard.appendChild(cameraMountPoint);
   }
 
@@ -166,7 +218,6 @@ function ensureCameraUI() {
     camera = createCamera({
       maxBytes: 6_000_000,
       onChange: ({ hasPhoto }) => {
-        // Fail-closed: “Klar” kräver mission + foto
         updateCTAState({ hasPhoto });
       }
     });
@@ -175,19 +226,38 @@ function ensureCameraUI() {
   camera.mount(cameraMountPoint);
 }
 
+/* ============================================================
+   BLOCK 10 — CTA state (mission + lock + foto)
+============================================================ */
 function updateCTAState({ hasPhoto } = {}) {
-  const missionActive = activeIndex >= 0;
-  const photoOk = typeof hasPhoto === 'boolean' ? hasPhoto : (camera?.hasPhoto?.() || false);
+  const missions = Array.isArray(pack?.missions) ? pack.missions : [];
+  const m = missions[activeIndex];
+
+  const missionActive = activeIndex >= 0 && !!m;
+  const locked = m ? isMissionLocked(m) : false;
+
+  const photoOk = typeof hasPhoto === 'boolean'
+    ? hasPhoto
+    : (camera?.hasPhoto?.() || false);
 
   if (elComplete) {
-    // KRAV: “Klar” ska blockas om ingen bild
-    elComplete.disabled = !(missionActive && photoOk);
+    // Fail-closed: kräver mission + ej locked + foto
+    elComplete.disabled = !(missionActive && !locked && photoOk);
   }
 }
+
+/* ============================================================
+   BLOCK 11 — Active mission render (med lock-hint)
+============================================================ */
+let lockHintNode = null; // HOOK: lock-hint-node
 
 function renderActiveMission() {
   const missions = Array.isArray(pack?.missions) ? pack.missions : [];
   const m = missions[activeIndex];
+
+  // cleanup lock hint
+  if (lockHintNode && lockHintNode.isConnected) lockHintNode.remove();
+  lockHintNode = null;
 
   if (!m) {
     elMissionCard.hidden = true;
@@ -197,15 +267,29 @@ function renderActiveMission() {
     return;
   }
 
+  const locked = isMissionLocked(m);
+
   elMissionCard.hidden = false;
   setText(elMissionTitle, missionTitleOf(m, activeIndex));
   setText(elMissionInstruction, missionInstructionOf(m));
   setText(elDifficulty, missionDifficultyOf(m));
   setText(elActiveMissionPill, `Aktivt: ${activeIndex + 1}/${missions.length}`);
 
-  // Camera UI (AO-7)
+  // Lock hint under instruction (KRAV hook)
+  if (locked) {
+    lockHintNode = document.createElement('div');
+    lockHintNode.className = 'muted small';
+    lockHintNode.setAttribute('data-hook', 'unlock-hint'); // HOOK: unlock-hint
+    lockHintNode.style.marginTop = '8px';
+    lockHintNode.textContent = `🔒 ${unlockHintText() || `Lås upp efter ${NORMAL_UNLOCK_AFTER} klarade`}`;
+    elMissionInstruction.insertAdjacentElement('afterend', lockHintNode);
+  }
+
+  // Camera always shown, but “Klar” blocked if locked
   ensureCameraUI();
-  if (camera) camera.clear(); // ny mission => nytt foto krävs (fail-closed)
+
+  // Ny mission => nytt foto krävs (fail-closed)
+  if (camera) camera.clear();
   updateCTAState({ hasPhoto: false });
 
   // Markera list items
@@ -215,6 +299,9 @@ function renderActiveMission() {
   });
 }
 
+/* ============================================================
+   BLOCK 12 — Status render
+============================================================ */
 function renderStatusLoading(text = 'Laddar paket…') {
   clear(elStatusSlot);
   const node = document.createElement('div');
@@ -230,7 +317,7 @@ function renderStatusError(message, actions = []) {
 }
 
 /* ============================================================
-   BLOCK 6 — Controller actions
+   BLOCK 13 — Controller actions
 ============================================================ */
 function setActiveMission(i) {
   const missions = Array.isArray(pack?.missions) ? pack.missions : [];
@@ -245,7 +332,6 @@ function setActiveMission(i) {
 }
 
 function getAwardForMission(m) {
-  // Foto är nu KRAV (AO-7), men award kan fortfarande vara stub/fallback
   const points = Number.isFinite(Number(m?.points)) ? Number(m.points) : 10;
   const xp = Number.isFinite(Number(m?.xp)) ? Number(m.xp) : 25;
   return { points, xp };
@@ -255,6 +341,13 @@ function completeActiveMission() {
   const missions = Array.isArray(pack?.missions) ? pack.missions : [];
   const m = missions[activeIndex];
   if (!m) return;
+
+  // KRAV: låst normal blockas (fail-closed)
+  if (isMissionLocked(m)) {
+    toast(`Låst: ${unlockHintText() || `Lås upp efter ${NORMAL_UNLOCK_AFTER} klarade`}`, 'warn', { ttlMs: 2600 });
+    updateCTAState({ hasPhoto: camera?.hasPhoto?.() || false });
+    return;
+  }
 
   // KRAV: Fail-closed om ingen bild
   const file = camera?.getFile?.() || null; // HOOK: photo-file
@@ -267,12 +360,7 @@ function completeActiveMission() {
   const award = getAwardForMission(m);
 
   const res = store.update((s) => {
-    // Engine muterar state-draft och returnerar state (ok)
     const next = awardMissionComplete(s, award);
-
-    // NOTE: Vi sparar INTE bilden i state (ingen ny datamodell/storage key i AO-7)
-    // HOOK: future-photo-persist (FÖRSLAG i senare AO om ni vill)
-
     return next || s;
   });
 
@@ -281,18 +369,21 @@ function completeActiveMission() {
     return;
   }
 
+  // Viktigt: unlock kan ändras efter award → rerender list för lock states
   renderProgress();
+  renderMissionList();
+
   toast(`Klar! +${award.points} poäng • +${award.xp} XP`, 'success');
 
-  // Rensa foto efter completion (fail-closed inför nästa mission)
+  // Rensa foto efter completion
   if (camera) camera.clear();
   updateCTAState({ hasPhoto: false });
 
-  // Auto: gå till nästa uppdrag om finns
+  // Auto: gå till nästa mission om finns
   if (activeIndex + 1 < missions.length) {
     setActiveMission(activeIndex + 1);
   } else {
-    setActiveMission(activeIndex); // behåll sista, kräver nytt foto igen om man vill trycka Klar
+    setActiveMission(activeIndex);
     toast('Alla uppdrag i paketet är klara (för nu).', 'info', { ttlMs: 2200 });
   }
 }
@@ -306,14 +397,18 @@ function openSwitchMissionDialog() {
   body.style.gap = '8px';
 
   missions.forEach((m, i) => {
+    const locked = isMissionLocked(m);
+
     const b = document.createElement('button');
     b.className = 'btn btn-ghost';
     b.type = 'button';
-    b.textContent = `${i + 1}. ${missionTitleOf(m, i)}`;
+    b.textContent = locked
+      ? `🔒 ${i + 1}. ${missionTitleOf(m, i)}`
+      : `${i + 1}. ${missionTitleOf(m, i)}`;
 
     b.addEventListener('click', () => {
       setActiveMission(i);
-      toast('Uppdrag bytt.', 'info', { ttlMs: 1400 });
+      toast(locked ? 'Uppdrag valt (låst).' : 'Uppdrag bytt.', 'info', { ttlMs: 1400 });
     });
 
     body.appendChild(b);
@@ -327,27 +422,22 @@ function openSwitchMissionDialog() {
 }
 
 /* ============================================================
-   BLOCK 7 — Boot (load pack + bind UI)
+   BLOCK 14 — Boot
 ============================================================ */
 (function bootPlay() {
   'use strict';
 
-  // INIT-GUARD
-  if (window.__AO7_PLAY_INIT__) return; // HOOK: init-guard-play
-  window.__AO7_PLAY_INIT__ = true;
+  if (window.__AO12_PLAY_INIT__) return; // HOOK: init-guard-play
+  window.__AO12_PLAY_INIT__ = true;
 
-  // Params
   const mode = qsGet('mode'); // HOOK: qs-mode
   const id = qsGet('id');     // HOOK: qs-id
 
-  // Fail-closed: kräver mode/id
   if (!mode || !id) return redirectToIndex('PLAY_MISSING_PARAMS');
 
-  // Start store
   store.init();
   renderProgress();
 
-  // Back button
   if (elBack) {
     elBack.addEventListener('click', () => {
       if (window.history.length > 1) window.history.back();
@@ -355,36 +445,32 @@ function openSwitchMissionDialog() {
     });
   }
 
-  // Bind CTA
   if (elComplete) elComplete.addEventListener('click', completeActiveMission);
   if (elSwitch) elSwitch.addEventListener('click', openSwitchMissionDialog);
 
-  // Initial CTA state: no mission, no photo
   if (elComplete) elComplete.disabled = true;
 
-  // Load pack
   renderStatusLoading('Laddar paket…');
 
   (async () => {
     try {
       if (mode !== 'zone') {
-        // Party-pack kommer senare AO. Fail-closed här.
-        throw { name: 'ModeError', code: 'MODE_NOT_SUPPORTED', message: 'Endast zonpaket stöds i AO-7.' };
+        throw { name: 'ModeError', code: 'MODE_NOT_SUPPORTED', message: 'Endast zonpaket stöds här.' };
       }
 
-      // id tolkas som zoneId
       pack = await loadZonePack(id);
 
-      // UI
       clear(elStatusSlot);
       renderPackHeader();
       renderMissionList();
 
-      // Auto-select första missionen
       setActiveMission(0);
       renderActiveMission();
 
-      toast('Paket laddat. Ta ett foto för att kunna markera “Klar”.', 'info', { ttlMs: 2200 });
+      // info: om normal låst, visa hint via toast en gång
+      if (!isNormalUnlocked(store.getState(), NORMAL_UNLOCK_AFTER)) {
+        toast(`Normal låses upp efter ${NORMAL_UNLOCK_AFTER} klarade.`, 'info', { ttlMs: 2200 });
+      }
     } catch (e) {
       const msg = (e?.message || 'Kunde inte ladda paketet.').toString();
 
@@ -393,9 +479,15 @@ function openSwitchMissionDialog() {
         { label: 'Försök igen', variant: 'primary', onClick: () => window.location.reload() }
       ]);
 
-      // Disable CTAs fail-closed
       if (elComplete) elComplete.disabled = true;
       if (elSwitch) elSwitch.disabled = true;
     }
   })();
+
+  // Live updates if another tab/page changes state
+  store.subscribe(() => {
+    renderProgress();
+    renderMissionList();
+    renderActiveMission();
+  });
 })();
