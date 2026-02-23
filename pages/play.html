@@ -1,7 +1,7 @@
 <!-- ============================================================
      FIL: pages/play.html  (HEL FIL)
-     AO 6/15 + AO 14/15 — Play page UI (missions + progress)
-     Mål: A11y basics + mobil states
+     AO 6/15 + AO 14/15 + AO 3/6 (FAS 1.1) — Play page UI + difficulty toggle
+     Mål: Segmented control (Easy/Normal) med tydliga hooks
 ============================================================ -->
 <!doctype html>
 <html lang="sv">
@@ -28,7 +28,6 @@
   <div id="app" class="app"> <!-- HOOK: app-root -->
     <!-- ========================================================
          BLOCK 4 — Header
-         KRAV: back + packnamn + level-pill (data-hook)
     ========================================================= -->
     <header class="topbar">
       <div class="topbar__inner">
@@ -79,15 +78,47 @@
           </div>
         </section>
 
+        <!-- ======================================================
+             BLOCK 5.1 — Difficulty segmented control (KRAV)
+        ======================================================= -->
+        <section class="panel panel--tight" aria-label="Svårighet" style="margin-top:12px">
+          <div class="segRow">
+            <div class="segLabel">
+              <div class="label muted">Svårighet</div>
+              <div id="difficultyInfo" class="muted small">
+                Välj nivå för att filtrera uppdrag.
+              </div>
+              <!-- HOOK: difficulty-info -->
+            </div>
+
+            <div class="segmented" role="tablist" aria-label="Välj svårighet" data-hook="difficulty-toggle">
+              <!-- HOOK: difficulty-toggle -->
+              <button id="diffEasyBtn" class="segBtn is-active" type="button" role="tab" aria-selected="true" aria-controls="missionsList">
+                Easy
+              </button>
+              <!-- HOOK: diff-easy -->
+
+              <button id="diffNormalBtn" class="segBtn" type="button" role="tab" aria-selected="false" aria-controls="missionsList" aria-disabled="true" disabled>
+                Normal
+              </button>
+              <!-- HOOK: diff-normal -->
+            </div>
+          </div>
+
+          <!-- Lock hint (visas när normal är låst) -->
+          <div id="unlockHintRow" class="unlockRow" hidden>
+            <span class="unlockIcon" aria-hidden="true">🔒</span>
+            <span id="unlockHintText" class="muted small">Lås upp efter 15 klarade</span>
+            <!-- HOOK: unlock-hint -->
+          </div>
+        </section>
+
         <!-- Error / loading slot -->
         <div id="statusSlot" class="slot" aria-live="polite">
           <!-- HOOK: status-slot -->
         </div>
 
-        <!-- ======================================================
-             Mission Card (active)
-             KRAV: titel + instruktion + difficulty pill
-        ======================================================= -->
+        <!-- Active mission card -->
         <section id="missionCard" class="card card--mission" hidden aria-label="Aktivt uppdrag">
           <!-- HOOK: mission-card -->
           <div class="card__head">
@@ -99,12 +130,11 @@
             </div>
 
             <div class="card__side">
-              <span id="difficultyPill" class="pill pill--difficulty" aria-label="Svårighetsgrad">normal</span>
+              <span id="difficultyPill" class="pill pill--difficulty" aria-label="Svårighetsgrad">easy</span>
               <!-- HOOK: difficulty-pill -->
             </div>
           </div>
-          <!-- Kamera UI mountas här av JS (AO-7) -->
-          <!-- HOOK: camera-slot -->
+          <!-- HOOK: camera-slot (JS mountar) -->
         </section>
 
         <!-- Missions list -->
@@ -115,20 +145,17 @@
           </div>
 
           <div id="missionsList" class="missionsList" role="list" aria-label="Uppdrag">
-            <!-- HOOK: missions-list (JS renderar items) -->
+            <!-- HOOK: missions-list -->
           </div>
         </section>
 
         <div class="muted small footerNote">
-          Kamera/foto kopplas i senare AO. (Den här vyn kan kräva foto beroende på AO.)
+          Easy/Normal filtrerar uppdragen. Normal låses upp efter tillräckligt många klarade.
         </div>
       </div>
     </main>
 
-    <!-- ========================================================
-         BLOCK 6 — Sticky CTA bar (safe area)
-         KRAV: “Klar” disabled tills mission aktiv + “Byt uppdrag”
-    ========================================================= -->
+    <!-- Sticky CTA bar -->
     <div class="ctaBar" role="region" aria-label="Åtgärder">
       <div class="ctaBar__inner">
         <button id="completeBtn" class="btn btn-primary" type="button" disabled aria-label="Markera uppdrag som klart">
@@ -145,45 +172,90 @@
   </div>
 
   <!-- ==========================================================
-       BLOCK 7 — Inline styles (page-only)
-       NOTE: Inline-styles tillåtna, men tokens ligger i main.css
+       BLOCK 6 — Page-only inline styles
   =========================================================== -->
   <style>
-    /* AO-6/14 page additions */
     .row { display:flex; align-items:center; gap: var(--sp-3); }
     .row--header { width:100%; }
     .btn--icon { width:44px; padding: 10px 10px; }
     .headerTitle { flex: 1; min-width: 0; }
     .headerName { font-weight: 800; font-size: var(--fs-4); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .headerRight { display:flex; align-items:center; gap: var(--sp-2); }
+
     .pill { display:inline-flex; align-items:center; justify-content:center; padding: 7px 10px; border-radius: 999px; border: 1px solid var(--border); background: rgba(255,255,255,.06); font-weight: 800; font-size: var(--fs-1); }
     .pill--level { border-color: rgba(110,231,255,.30); background: rgba(110,231,255,.10); color: rgba(255,255,255,.92); }
     .pill--difficulty { border-color: rgba(255,255,255,.14); }
     .pill--muted { opacity: .9; }
+
     .sep { opacity:.5; padding: 0 6px; }
     .panel--tight { padding: var(--sp-3); }
     .panel__row--stack { align-items:flex-start; }
     .rightRow { display:flex; align-items:center; justify-content:flex-end; }
     .slot { margin-top: var(--sp-4); }
+
+    /* Segmented control */
+    .segRow { display:flex; align-items:flex-start; justify-content:space-between; gap: var(--sp-3); }
+    .segLabel { min-width:0; }
+    .segmented {
+      display:flex;
+      gap: 6px;
+      padding: 6px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,.05);
+      flex: 0 0 auto;
+    }
+    .segBtn {
+      min-height: 44px;
+      padding: 10px 14px;
+      border-radius: 999px;
+      border: 1px solid transparent;
+      background: transparent;
+      color: var(--text);
+      font-weight: 900;
+      cursor: pointer;
+    }
+    .segBtn.is-active {
+      background: rgba(110,231,255,.12);
+      border-color: rgba(110,231,255,.30);
+      box-shadow: var(--sh-1);
+    }
+    .segBtn:disabled,
+    .segBtn[aria-disabled="true"] {
+      opacity: .55;
+      cursor: not-allowed;
+    }
+
+    .unlockRow {
+      margin-top: 8px;
+      display:flex;
+      align-items:center;
+      gap: 8px;
+      padding: 8px 10px;
+      border-radius: 14px;
+      border: 1px solid rgba(251,191,36,.30);
+      background: rgba(251,191,36,.08);
+    }
+    .unlockIcon { width: 22px; text-align:center; }
+
     .card--mission { margin-top: var(--sp-4); }
     .card__side { display:flex; align-items:flex-start; justify-content:flex-end; }
     .card--list { margin-top: var(--sp-4); }
     .listHead { margin-bottom: var(--sp-3); }
     .missionsList { display:grid; gap: var(--sp-2); }
+
     .missionItem { display:flex; align-items:center; justify-content:space-between; gap: var(--sp-3); padding: var(--sp-3); border-radius: var(--r-3); border: 1px solid var(--border); background: rgba(255,255,255,.04); cursor:pointer; user-select:none; }
     .missionItem:hover { border-color: rgba(110,231,255,.25); background: rgba(255,255,255,.05); }
     .missionItem.is-active { border-color: rgba(110,231,255,.55); background: rgba(110,231,255,.08); }
     .missionItem__meta { min-width:0; }
     .missionItem__title { font-weight: 800; white-space: nowrap; overflow:hidden; text-overflow: ellipsis; }
     .missionItem__sub { margin-top: 2px; font-size: var(--fs-1); }
+
     .footerNote { margin-top: var(--sp-5); text-align:center; opacity:.85; }
 
-    /* AO-14: safe area i sticky bar */
     .ctaBar {
       position: sticky;
-      bottom: 0;
-      left:0;
-      right:0;
+      bottom: 0; left:0; right:0;
       z-index: 20;
       padding: var(--sp-3) var(--sp-4);
       padding-bottom: calc(var(--sp-3) + env(safe-area-inset-bottom, 0px));
@@ -195,9 +267,7 @@
     .ctaBar__inner .btn { flex: 1; }
   </style>
 
-  <!-- ==========================================================
-       BLOCK 8 — Script
-  =========================================================== -->
+  <!-- Script -->
   <script type="module" src="../src/play.js"></script>
 </body>
 </html>
