@@ -1,1 +1,264 @@
+<!-- ============================================================
+     FIL: pages/admin.html  (HEL FIL)
+     AO 5/6 (FAS 1.2) — Admin UI: skapa skattjakt (lokalt, utan konto)
+     Mål: En vuxen kan skapa en jakt på plats (draft i localStorage)
+     Policy: UI-only, inga externa libs, fail-closed validering (inline errors)
+============================================================ -->
+<!doctype html>
+<html lang="sv">
+<head>
+  <!-- ==========================================================
+       BLOCK 1 — Meta + CSS
+  =========================================================== -->
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Admin — Skapa skattjakt</title>
+  <meta name="description" content="Skapa en skattjakt lokalt utan konto." />
+  <link rel="stylesheet" href="../styles/main.css" />
+</head>
 
+<body>
+  <!-- ==========================================================
+       BLOCK 2 — Skip link (A11y)
+  =========================================================== -->
+  <a class="skipLink" href="#mainContent">Hoppa till innehåll</a> <!-- HOOK: skip-link -->
+
+  <!-- ==========================================================
+       BLOCK 3 — App Root
+  =========================================================== -->
+  <div id="app" class="app"> <!-- HOOK: app-root -->
+
+    <!-- ========================================================
+         BLOCK 4 — Header
+    ========================================================= -->
+    <header class="topbar">
+      <div class="topbar__inner">
+        <div class="row row--header">
+          <button id="backBtn" class="btn btn-ghost btn--icon" type="button" aria-label="Tillbaka">
+            ←
+          </button>
+          <!-- HOOK: back-button -->
+
+          <div class="headerTitle">
+            <div class="muted small">Admin</div>
+            <div class="headerName">Skapa skattjakt</div>
+          </div>
+
+          <div class="headerRight">
+            <span id="savePill" class="pill pill--level" aria-live="polite">Utkast</span>
+            <!-- HOOK: save-pill -->
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <!-- ========================================================
+         BLOCK 5 — Main
+    ========================================================= -->
+    <main id="mainContent" class="main" role="main"> <!-- HOOK: main -->
+      <div class="container">
+        <!-- Status / error slot (t.ex. storage read-only) -->
+        <div id="statusSlot" class="slot" aria-live="polite"></div> <!-- HOOK: status-slot -->
+
+        <div class="grid2">
+          <!-- ====================================================
+               BLOCK 6 — Form
+          ===================================================== -->
+          <section class="card" aria-label="Formulär">
+            <div class="card__head">
+              <div class="card__meta">
+                <h1 class="h2" style="margin:0">Skapa jakt</h1>
+                <p class="muted small" style="margin:6px 0 0 0">
+                  Fyll i namn, antal checkpoints och ledtrådar. Utkast sparas lokalt.
+                </p>
+              </div>
+            </div>
+
+            <form id="partyForm" class="form" novalidate>
+              <!-- HOOK: party-form -->
+
+              <!-- Jaktens namn -->
+              <div class="field">
+                <label class="label2" for="partyNameInput">Jaktens namn</label>
+                <input id="partyNameInput" name="partyName" class="input"
+                       type="text" autocomplete="off" placeholder="Ex: Kalas hos Alex" />
+                <!-- HOOK: party-name-input -->
+                <div id="errPartyName" class="errorText" role="alert"></div>
+                <!-- HOOK: err-party-name -->
+              </div>
+
+              <!-- Antal checkpoints -->
+              <div class="field">
+                <label class="label2" for="cpCountInput">Antal checkpoints (1–20)</label>
+                <input id="cpCountInput" name="checkpointCount" class="input"
+                       type="number" inputmode="numeric" min="1" max="20" step="1" />
+                <!-- HOOK: checkpoint-count-input -->
+                <div id="errCpCount" class="errorText" role="alert"></div>
+                <!-- HOOK: err-checkpoint-count -->
+              </div>
+
+              <!-- Poäng per checkpoint -->
+              <div class="field">
+                <label class="label2" for="pointsPerInput">Poäng per checkpoint</label>
+                <input id="pointsPerInput" name="pointsPerCheckpoint" class="input"
+                       type="number" inputmode="numeric" min="0" max="1000" step="1" />
+                <!-- HOOK: points-per-input -->
+                <div id="errPointsPer" class="errorText" role="alert"></div>
+                <!-- HOOK: err-points-per -->
+              </div>
+
+              <!-- Ledtrådar -->
+              <div class="field">
+                <div class="rowBetween">
+                  <label class="label2" for="cluesWrap">Ledtrådar (en per checkpoint)</label>
+                  <div class="miniRow">
+                    <button id="addCpBtn" class="btn btn-ghost miniBtn" type="button">+ checkpoint</button>
+                    <!-- HOOK: add-cp -->
+                    <button id="removeCpBtn" class="btn btn-ghost miniBtn" type="button">− checkpoint</button>
+                    <!-- HOOK: remove-cp -->
+                  </div>
+                </div>
+
+                <div id="cluesWrap" class="cluesWrap" aria-label="Ledtrådar">
+                  <!-- HOOK: clues-wrap (JS renderar inputs) -->
+                </div>
+
+                <div id="errClues" class="errorText" role="alert"></div>
+                <!-- HOOK: err-clues -->
+              </div>
+
+              <div class="rowBetween" style="margin-top:14px">
+                <button id="resetBtn" class="btn btn-ghost" type="button">
+                  Rensa utkast
+                </button>
+                <!-- HOOK: reset-draft -->
+
+                <button id="saveBtn" class="btn btn-primary" type="button">
+                  Spara utkast
+                </button>
+                <!-- HOOK: save-draft -->
+              </div>
+
+              <p class="muted small" style="margin-top:10px">
+                Tips: När du är klar kan du starta jakten via party-läget (koppling kommer i nästa AO).
+              </p>
+            </form>
+          </section>
+
+          <!-- ====================================================
+               BLOCK 7 — Live preview
+          ===================================================== -->
+          <section class="card" aria-label="Live preview">
+            <div class="card__head">
+              <div class="card__meta">
+                <h2 class="h2" style="margin:0">Live preview</h2>
+                <p class="muted small" style="margin:6px 0 0 0">
+                  Så här ser checkpoints ut (uppdateras direkt).
+                </p>
+              </div>
+            </div>
+
+            <div class="preview">
+              <div class="previewTop">
+                <div class="label muted">Jakt</div>
+                <div id="previewName" class="value">—</div>
+                <!-- HOOK: preview-name -->
+              </div>
+
+              <div class="previewTop" style="margin-top:10px">
+                <div class="label muted">Poäng/checkpoint</div>
+                <div id="previewPoints" class="value">—</div>
+                <!-- HOOK: preview-points -->
+              </div>
+
+              <div class="previewListHead">
+                <div class="label muted">Checkpoints</div>
+                <div id="previewCount" class="muted small">0</div>
+                <!-- HOOK: preview-count -->
+              </div>
+
+              <ol id="previewList" class="previewList">
+                <!-- HOOK: preview-list -->
+              </ol>
+            </div>
+          </section>
+        </div>
+
+        <div class="muted small footerNote">
+          Admin kör lokalt (ingen inloggning). Utkast sparas på en stabil localStorage-key.
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- ==========================================================
+       BLOCK 8 — Page-only styles (inline ok)
+  =========================================================== -->
+  <style>
+    .row { display:flex; align-items:center; gap: var(--sp-3); }
+    .row--header { width:100%; }
+    .rowBetween { display:flex; align-items:flex-start; justify-content:space-between; gap: var(--sp-3); }
+    .miniRow { display:flex; gap: 8px; flex-wrap: wrap; }
+
+    .btn--icon { width:44px; padding: 10px 10px; }
+    .headerTitle { flex: 1; min-width: 0; }
+    .headerName { font-weight: 800; font-size: var(--fs-4); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .headerRight { display:flex; align-items:center; gap: var(--sp-2); }
+
+    .pill { display:inline-flex; align-items:center; justify-content:center; padding: 7px 10px; border-radius: 999px; border: 1px solid var(--border); background: rgba(255,255,255,.06); font-weight: 800; font-size: var(--fs-1); }
+    .pill--level { border-color: rgba(110,231,255,.30); background: rgba(110,231,255,.10); color: rgba(255,255,255,.92); }
+
+    .slot { margin-top: var(--sp-4); }
+
+    .grid2 { display:grid; gap: var(--sp-4); margin-top: var(--sp-4); }
+    @media (min-width: 900px) { .grid2 { grid-template-columns: 1fr 1fr; } }
+
+    .form { margin-top: 12px; display:grid; gap: 14px; }
+    .field { display:grid; gap: 6px; }
+    .label2 { font-weight: 800; font-size: var(--fs-2); }
+    .input {
+      min-height: 44px;
+      padding: 12px 12px;
+      border-radius: 14px;
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,.05);
+      color: var(--text);
+      outline: none;
+    }
+    .input::placeholder { color: rgba(255,255,255,.45); }
+    .input:focus-visible { box-shadow: var(--focus); }
+
+    .errorText {
+      min-height: 18px;
+      font-size: var(--fs-2);
+      color: rgba(251,113,133,.95);
+    }
+
+    .miniBtn { padding: 10px 12px; min-height: 44px; }
+
+    .cluesWrap { display:grid; gap: 8px; margin-top: 6px; }
+    .clueRow { display:grid; gap: 6px; }
+    .clueMeta { display:flex; align-items:center; justify-content:space-between; gap: 12px; }
+    .clueIdx { font-weight: 900; }
+    .clueInput { width: 100%; }
+
+    .preview { display:grid; gap: 10px; }
+    .previewTop { display:flex; align-items:baseline; justify-content:space-between; gap: 12px; }
+    .previewListHead { display:flex; align-items:baseline; justify-content:space-between; gap: 12px; margin-top: 6px; }
+    .previewList { margin: 0; padding-left: 18px; display:grid; gap: 8px; }
+    .previewItem {
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: rgba(255,255,255,.04);
+    }
+
+    .footerNote { margin-top: var(--sp-6); text-align:center; opacity:.85; }
+  </style>
+
+  <!-- ==========================================================
+       BLOCK 9 — Script
+  =========================================================== -->
+  <script type="module" src="../src/admin.js"></script>
+</body>
+</html>
