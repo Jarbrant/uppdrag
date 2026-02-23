@@ -1,7 +1,7 @@
 /* ============================================================
-   FIL: src/play.js  (HEL FIL)   (NY FIL)
-   AO 6/15 — Play page controller (missions + progress) utan kamera
-   Mål: Spelvy som visar uppdrag och “Klar” (utan foto än).
+   FIL: src/play.js  (HEL FIL)
+   AO 6/15 + AO 7/15 — Play page controller + Camera (capture + preview)
+   Mål: Spelvy som visar uppdrag och “Klar” med foto-krav (AO-7)
    Policy: UI-only, fail-closed, XSS-safe rendering (DOM API + textContent),
            inga nya storage keys/datamodell.
 ============================================================ */
@@ -14,6 +14,7 @@ import { createStore } from './store.js';
 import { awardMissionComplete } from './engine.js';
 import { loadZonePack } from './packs.js';
 import { toast, modal, renderErrorCard } from './ui.js';
+import { createCamera } from './camera.js';
 
 /* ============================================================
    BLOCK 2 — DOM hooks
@@ -44,6 +45,10 @@ const elSwitch = $('#switchBtn');             // HOOK: switch-mission-button
 const store = createStore(); // HOOK: store
 let pack = null;
 let activeIndex = -1;
+
+// Camera state (in-memory only)
+let camera = null;           // HOOK: camera-instance
+let cameraMountPoint = null; // HOOK: camera-mount-point
 
 /* ============================================================
    BLOCK 4 — Fail-closed redirect helper (index.html?err=...)
@@ -81,7 +86,8 @@ function missionTitleOf(m, i) {
 }
 
 function missionInstructionOf(m) {
-  return (m?.instruction ?? m?.text ?? m?.hint ?? '').toString().trim() || 'Följ instruktionen och tryck “Klar” när du är klar.';
+  return (m?.instruction ?? m?.text ?? m?.hint ?? '').toString().trim()
+    || 'Följ instruktionen och ta ett foto. Tryck “Klar” när du är klar.';
 }
 
 function missionDifficultyOf(m) {
@@ -145,6 +151,40 @@ function renderMissionList() {
   });
 }
 
+function ensureCameraUI() {
+  // Mounta kameran i missionCard när den finns
+  if (!elMissionCard) return;
+
+  if (!cameraMountPoint) {
+    cameraMountPoint = document.createElement('div');
+    // HOOK: camera-ui-slot
+    cameraMountPoint.setAttribute('data-hook', 'camera-slot');
+    elMissionCard.appendChild(cameraMountPoint);
+  }
+
+  if (!camera) {
+    camera = createCamera({
+      maxBytes: 6_000_000,
+      onChange: ({ hasPhoto }) => {
+        // Fail-closed: “Klar” kräver mission + foto
+        updateCTAState({ hasPhoto });
+      }
+    });
+  }
+
+  camera.mount(cameraMountPoint);
+}
+
+function updateCTAState({ hasPhoto } = {}) {
+  const missionActive = activeIndex >= 0;
+  const photoOk = typeof hasPhoto === 'boolean' ? hasPhoto : (camera?.hasPhoto?.() || false);
+
+  if (elComplete) {
+    // KRAV: “Klar” ska blockas om ingen bild
+    elComplete.disabled = !(missionActive && photoOk);
+  }
+}
+
 function renderActiveMission() {
   const missions = Array.isArray(pack?.missions) ? pack.missions : [];
   const m = missions[activeIndex];
@@ -152,7 +192,8 @@ function renderActiveMission() {
   if (!m) {
     elMissionCard.hidden = true;
     setText(elActiveMissionPill, 'Inget uppdrag valt');
-    elComplete.disabled = true;
+    if (camera) camera.clear();
+    updateCTAState({ hasPhoto: false });
     return;
   }
 
@@ -161,7 +202,11 @@ function renderActiveMission() {
   setText(elMissionInstruction, missionInstructionOf(m));
   setText(elDifficulty, missionDifficultyOf(m));
   setText(elActiveMissionPill, `Aktivt: ${activeIndex + 1}/${missions.length}`);
-  elComplete.disabled = false;
+
+  // Camera UI (AO-7)
+  ensureCameraUI();
+  if (camera) camera.clear(); // ny mission => nytt foto krävs (fail-closed)
+  updateCTAState({ hasPhoto: false });
 
   // Markera list items
   document.querySelectorAll('.missionItem').forEach((n) => {
@@ -200,7 +245,7 @@ function setActiveMission(i) {
 }
 
 function getAwardForMission(m) {
-  // Stub: foto kommer senare. Vi ger poäng/XP ändå.
+  // Foto är nu KRAV (AO-7), men award kan fortfarande vara stub/fallback
   const points = Number.isFinite(Number(m?.points)) ? Number(m.points) : 10;
   const xp = Number.isFinite(Number(m?.xp)) ? Number(m.xp) : 25;
   return { points, xp };
@@ -211,14 +256,23 @@ function completeActiveMission() {
   const m = missions[activeIndex];
   if (!m) return;
 
-  // Stub för foto: här skulle vi normalt kräva foto/validering i senare AO.
-  // HOOK: photo-stub
+  // KRAV: Fail-closed om ingen bild
+  const file = camera?.getFile?.() || null; // HOOK: photo-file
+  if (!file) {
+    toast('Du måste ta/välja en bild innan du kan markera “Klar”.', 'warn', { ttlMs: 2600 });
+    updateCTAState({ hasPhoto: false });
+    return;
+  }
 
   const award = getAwardForMission(m);
 
   const res = store.update((s) => {
     // Engine muterar state-draft och returnerar state (ok)
     const next = awardMissionComplete(s, award);
+
+    // NOTE: Vi sparar INTE bilden i state (ingen ny datamodell/storage key i AO-7)
+    // HOOK: future-photo-persist (FÖRSLAG i senare AO om ni vill)
+
     return next || s;
   });
 
@@ -230,12 +284,16 @@ function completeActiveMission() {
   renderProgress();
   toast(`Klar! +${award.points} poäng • +${award.xp} XP`, 'success');
 
+  // Rensa foto efter completion (fail-closed inför nästa mission)
+  if (camera) camera.clear();
+  updateCTAState({ hasPhoto: false });
+
   // Auto: gå till nästa uppdrag om finns
   if (activeIndex + 1 < missions.length) {
     setActiveMission(activeIndex + 1);
   } else {
-    setActiveMission(activeIndex); // behåll sista
-    toast('Alla uppdrag i paketet är klara (för nu).', 'info', { ttlMs: 2400 });
+    setActiveMission(activeIndex); // behåll sista, kräver nytt foto igen om man vill trycka Klar
+    toast('Alla uppdrag i paketet är klara (för nu).', 'info', { ttlMs: 2200 });
   }
 }
 
@@ -255,9 +313,6 @@ function openSwitchMissionDialog() {
 
     b.addEventListener('click', () => {
       setActiveMission(i);
-      // stäng modal via primary/secondary action? Vi stänger via modal replace trick:
-      // enklast: öppna en ny modal = close existing; men vi har ingen ref här.
-      // Vi lägger i stället en toast och låter användaren trycka X/ESC.
       toast('Uppdrag bytt.', 'info', { ttlMs: 1400 });
     });
 
@@ -278,8 +333,8 @@ function openSwitchMissionDialog() {
   'use strict';
 
   // INIT-GUARD
-  if (window.__AO6_PLAY_INIT__) return; // HOOK: init-guard-play
-  window.__AO6_PLAY_INIT__ = true;
+  if (window.__AO7_PLAY_INIT__) return; // HOOK: init-guard-play
+  window.__AO7_PLAY_INIT__ = true;
 
   // Params
   const mode = qsGet('mode'); // HOOK: qs-mode
@@ -295,7 +350,6 @@ function openSwitchMissionDialog() {
   // Back button
   if (elBack) {
     elBack.addEventListener('click', () => {
-      // Fail-soft: om history finns, gå back, annars index
       if (window.history.length > 1) window.history.back();
       else window.location.assign('/index.html');
     });
@@ -305,6 +359,9 @@ function openSwitchMissionDialog() {
   if (elComplete) elComplete.addEventListener('click', completeActiveMission);
   if (elSwitch) elSwitch.addEventListener('click', openSwitchMissionDialog);
 
+  // Initial CTA state: no mission, no photo
+  if (elComplete) elComplete.disabled = true;
+
   // Load pack
   renderStatusLoading('Laddar paket…');
 
@@ -312,10 +369,10 @@ function openSwitchMissionDialog() {
     try {
       if (mode !== 'zone') {
         // Party-pack kommer senare AO. Fail-closed här.
-        throw { name: 'ModeError', code: 'MODE_NOT_SUPPORTED', message: 'Endast zonpaket stöds i AO-6.' };
+        throw { name: 'ModeError', code: 'MODE_NOT_SUPPORTED', message: 'Endast zonpaket stöds i AO-7.' };
       }
 
-      // id tolkas som zoneId i AO-6
+      // id tolkas som zoneId
       pack = await loadZonePack(id);
 
       // UI
@@ -326,7 +383,8 @@ function openSwitchMissionDialog() {
       // Auto-select första missionen
       setActiveMission(0);
       renderActiveMission();
-      toast('Paket laddat.', 'success', { ttlMs: 1200 });
+
+      toast('Paket laddat. Ta ett foto för att kunna markera “Klar”.', 'info', { ttlMs: 2200 });
     } catch (e) {
       const msg = (e?.message || 'Kunde inte ladda paketet.').toString();
 
