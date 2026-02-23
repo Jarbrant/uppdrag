@@ -1,14 +1,9 @@
 /* ============================================================
    FIL: src/admin-map.js  (HEL FIL)
    AO 1/8 (FAS 1.5) — Admin Leaflet init
-   AO 2/8 (FAS 1.5) — Klick → lägg checkpoint (cp=1..N) + markers
-   Mål:
-   - Visa Leaflet-karta
-   - Klick på karta kan skapa checkpoint (via event till admin.js)
-   KRAV:
-   - Markers med etikett "1,2,3..."
-   - Fail-closed om Leaflet saknas eller karta ej init
-   Policy: UI-only, Leaflet via CDN
+   AO 2/8 (FAS 1.5) — Klick → dispatch admin:map-click
+   PATCH (FAS 2.1) — Default view: Stockholm + invalidateSize + (valfri) geolocation
+   Policy: UI-only, Leaflet via CDN, fail-closed
 ============================================================ */
 
 /* ============================================================
@@ -52,16 +47,11 @@ let isReady = false;            // HOOK: map-ready
    BLOCK 4 — Marker helpers
 ============================================================ */
 function clearMarkers() {
-  try {
-    markers.forEach((m) => {
-      try { m.remove(); } catch (_) {}
-    });
-  } catch (_) {}
+  try { markers.forEach((m) => { try { m.remove(); } catch (_) {} }); } catch (_) {}
   markers = [];
 }
 
 function makeNumberIcon(n) {
-  // Enkel, tydlig label utan extern CSS
   const html = `
     <div style="
       width:28px;height:28px;border-radius:999px;
@@ -74,7 +64,7 @@ function makeNumberIcon(n) {
     ">${String(n)}</div>
   `;
   return window.L.divIcon({
-    className: 'cpMarker', // HOOK: cp-marker-class
+    className: 'cpMarker',
     html,
     iconSize: [28, 28],
     iconAnchor: [14, 14]
@@ -105,12 +95,11 @@ function renderMarkersFromCheckpoints(checkpoints) {
 
 /* ============================================================
    BLOCK 5 — Public API (för admin.js)
-   - admin.js kan fråga "ready?" och be kartan rita markers
 ============================================================ */
 function installMapAPI() {
   window.__ADMIN_MAP_API__ = {
-    isReady: () => !!isReady, // HOOK: map-api-isReady
-    setCheckpoints: (list) => renderMarkersFromCheckpoints(list), // HOOK: map-api-setCheckpoints
+    isReady: () => !!isReady,
+    setCheckpoints: (list) => renderMarkersFromCheckpoints(list),
     setViewIfNeeded: (lat, lng, zoom = 14) => {
       if (!isReady || !map) return;
       const a = Number(lat), b = Number(lng);
@@ -124,13 +113,11 @@ function installMapAPI() {
    BLOCK 6 — Leaflet init
 ============================================================ */
 function initLeaflet() {
-  // Fail-closed: map container måste finnas
   if (!elMap) {
     showStatus('Karta: #map saknas i DOM. (Init avbruten)', 'warn');
     return;
   }
 
-  // Fail-closed: Leaflet måste vara laddat via CDN (window.L)
   const L = window.L;
   if (!L) {
     showMapError('Leaflet saknas (CDN blockerat/offline). Kartan kan inte visas.');
@@ -139,7 +126,7 @@ function initLeaflet() {
   }
 
   try {
-    // Default view: Stockholm-ish (kan ändras senare)
+    // Default view: STOCKHOLM (KRAV)
     const center = [59.3293, 18.0686];
     const zoom = 12;
 
@@ -150,30 +137,49 @@ function initLeaflet() {
 
     map.setView(center, zoom);
 
-    // OSM tile layer
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19,
       attribution: '&copy; OpenStreetMap'
     }).addTo(map);
 
-    // Klick → dispatch event (admin.js äger draft/state)
+    // Fix: om container storlek inte är klar vid init → Leaflet kan hamna konstigt
+    setTimeout(() => {
+      try { map.invalidateSize(); } catch (_) {}
+      try { map.setView(center, zoom); } catch (_) {}
+    }, 120);
+
+    // Valfritt: browser geolocation (utan IP-tjänst)
+    // Fail-closed: om nekad/timeout → stanna i Stockholm
+    if (navigator.geolocation && typeof navigator.geolocation.getCurrentPosition === 'function') {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          const lat = Number(pos?.coords?.latitude);
+          const lng = Number(pos?.coords?.longitude);
+          if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+          try { map.setView([lat, lng], 13); } catch (_) {}
+        },
+        () => { /* ignore */ },
+        { enableHighAccuracy: false, timeout: 1200, maximumAge: 60_000 }
+      );
+    }
+
+    // Klick → dispatch event
     map.on('click', (ev) => {
       if (!isReady) return;
       const lat = ev?.latlng?.lat;
       const lng = ev?.latlng?.lng;
       if (!Number.isFinite(Number(lat)) || !Number.isFinite(Number(lng))) return;
 
-      // HOOK: map-click-event
       window.dispatchEvent(new CustomEvent('admin:map-click', {
         detail: { lat: Number(lat), lng: Number(lng) }
       }));
     });
 
     isReady = true;
-    window.__ADMIN_LEAFLET_MAP__ = map; // HOOK: admin-leaflet-map
+    window.__ADMIN_LEAFLET_MAP__ = map;
     installMapAPI();
     setText(elMapError, '');
-  } catch (e) {
+  } catch (_) {
     isReady = false;
     showMapError('Kunde inte initiera kartan (okänt fel).');
     showStatus('Karta: init-fel. (fail-closed)', 'danger');
@@ -182,7 +188,6 @@ function initLeaflet() {
 
 /* ============================================================
    BLOCK 7 — Listen: draft updates → re-render markers
-   admin.js dispatchar admin:draft-changed { checkpoints }
 ============================================================ */
 function bindDraftEvents() {
   window.addEventListener('admin:draft-changed', (e) => {
@@ -198,7 +203,7 @@ function bindDraftEvents() {
 (function bootAdminMap() {
   'use strict';
 
-  if (window.__AO15_FAS15_ADMIN_MAP_INIT__) return; // HOOK: init-guard-admin-map
+  if (window.__AO15_FAS15_ADMIN_MAP_INIT__) return;
   window.__AO15_FAS15_ADMIN_MAP_INIT__ = true;
 
   initLeaflet();
