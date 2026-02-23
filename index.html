@@ -1,1 +1,272 @@
+<!-- ============================================================
+     FIL: index.html  (HEL FIL)
+     AO 1/15 — NY BASELINE + Landningssida + Auto-start UI-hook
+     Policy: UI-only, mobil-first, inga externa deps
+============================================================ -->
+<!doctype html>
+<html lang="sv">
+<head>
+  <!-- ==========================================================
+       BLOCK 1 — Meta + CSS
+  =========================================================== -->
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Naturjakt / Skattjakt — Start</title>
+  <meta name="description" content="Välj läge och starta spelet." />
+  <link rel="stylesheet" href="styles/main.css" />
+</head>
 
+<body>
+  <!-- ==========================================================
+       BLOCK 2 — App Root
+  =========================================================== -->
+  <div id="app" class="app"> <!-- HOOK: app-root -->
+    <header class="topbar">
+      <div class="topbar__inner">
+        <div class="brand">
+          <div class="brand__mark" aria-hidden="true">◎</div>
+          <div class="brand__text">
+            <div class="brand__name">Jakt-spelet</div>
+            <div class="brand__tag muted">Mobil-first • UI-only baseline</div>
+          </div>
+        </div>
+
+        <div class="topbar__right">
+          <span class="badge badge-success">MVP</span>
+        </div>
+      </div>
+    </header>
+
+    <main class="main">
+      <!-- ========================================================
+           BLOCK 3 — Start View (Mode-val)
+      ========================================================= -->
+      <section id="startView" class="view view--active" aria-label="Start"> <!-- HOOK: view-start -->
+        <div class="container">
+          <div class="hero">
+            <h1 class="h1">Välj läge</h1>
+            <p class="lead muted">Välj ett läge och tryck Starta.</p>
+          </div>
+
+          <div class="grid grid--modes" role="list">
+            <!-- MODE CARD: Naturjakt -->
+            <article class="card card--mode" role="listitem" tabindex="0"
+                     data-mode-card="nature"> <!-- HOOK: select-mode-nature -->
+              <div class="card__top">
+                <div class="card__icon" aria-hidden="true">🌿</div>
+                <div class="card__meta">
+                  <h2 class="card__title">Naturjakt</h2>
+                  <p class="card__desc muted">
+                    Hitta och fota saker i naturen. Samla poäng och XP.
+                  </p>
+                </div>
+              </div>
+              <div class="card__bottom">
+                <span class="badge">Utomhus</span>
+                <span class="badge badge-success">Barnvänligt</span>
+              </div>
+            </article>
+
+            <!-- MODE CARD: Skattjakt -->
+            <article class="card card--mode" role="listitem" tabindex="0"
+                     data-mode-card="treasure"> <!-- HOOK: select-mode-treasure -->
+              <div class="card__top">
+                <div class="card__icon" aria-hidden="true">🗺️</div>
+                <div class="card__meta">
+                  <h2 class="card__title">Skattjakt</h2>
+                  <p class="card__desc muted">
+                    Följ uppdrag och ledtrådar. Perfekt för kalas eller plats-event.
+                  </p>
+                </div>
+              </div>
+              <div class="card__bottom">
+                <span class="badge">Kalas</span>
+                <span class="badge badge-success">Lagspel</span>
+              </div>
+            </article>
+          </div>
+
+          <div class="panel">
+            <div class="panel__row">
+              <div class="panel__left">
+                <div class="label muted">Valt läge</div>
+                <div id="selectedModeLabel" class="value">Inget valt</div> <!-- HOOK: selected-mode-label -->
+              </div>
+
+              <div class="panel__right">
+                <button id="startBtn" class="btn btn-primary" type="button" disabled>
+                  Starta
+                </button>
+                <!-- HOOK: start-button (JS binder senare) -->
+              </div>
+            </div>
+
+            <div id="startHint" class="hint muted" role="status" aria-live="polite">
+              Välj ett läge för att aktivera Starta.
+            </div>
+            <!-- HOOK: hint-area (visar validering/meddelanden) -->
+          </div>
+
+          <footer class="footer muted">
+            <span>Tips: QR-kod kan starta direkt via URL-parametrar.</span>
+          </footer>
+        </div>
+      </section>
+
+      <!-- ========================================================
+           BLOCK 4 — Auto-start View (UI-hook, minimal logik)
+      ========================================================= -->
+      <section id="autostartView" class="view" aria-label="Autostart" hidden> <!-- HOOK: view-autostart -->
+        <div class="container">
+          <div class="hero hero--center">
+            <div class="toast toast--info" role="status" aria-live="polite">
+              <strong id="autostartText">Startar…</strong> <!-- HOOK: autostart-text -->
+              <div id="autostartMeta" class="muted small"></div> <!-- HOOK: autostart-meta -->
+            </div>
+
+            <div class="card card--info">
+              <h2 class="h2">Autostart-läge</h2>
+              <p class="muted">
+                Den här vyn är en UI-hook. Riktig navigation kopplas in i senare AO.
+              </p>
+
+              <a id="autostartLink" class="btn btn-primary" href="#"
+                 aria-label="Gå vidare"> <!-- HOOK: autostart-link (href placeholder) -->
+                Gå vidare
+              </a>
+            </div>
+
+            <button class="btn btn-ghost" type="button" id="backToStartBtn">
+              Tillbaka
+            </button>
+            <!-- HOOK: back-to-start (hjälp för test; JS init-guard) -->
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- ==========================================================
+       BLOCK 5 — Minimal init (endast UI-toggle + hooks)
+       NOTE: Ingen riktig navigation/flow här.
+  =========================================================== -->
+  <script>
+    (function () {
+      'use strict';
+
+      // INIT-GUARD: förhindrar dubbel init om sidan laddas om i SPA-liknande miljö
+      if (window.__AO1_BASELINE_INIT__) return; // HOOK: init-guard
+      window.__AO1_BASELINE_INIT__ = true;
+
+      const qs = new URLSearchParams(window.location.search);
+      const mode = (qs.get('mode') || '').trim();
+      const id = (qs.get('id') || '').trim();
+
+      const startView = document.getElementById('startView');         // HOOK: view-start
+      const autostartView = document.getElementById('autostartView'); // HOOK: view-autostart
+
+      const selectedModeLabel = document.getElementById('selectedModeLabel'); // HOOK: selected-mode-label
+      const startBtn = document.getElementById('startBtn'); // HOOK: start-button
+      const startHint = document.getElementById('startHint'); // HOOK: hint-area
+
+      const autostartText = document.getElementById('autostartText'); // HOOK: autostart-text
+      const autostartMeta = document.getElementById('autostartMeta'); // HOOK: autostart-meta
+      const autostartLink = document.getElementById('autostartLink'); // HOOK: autostart-link
+      const backToStartBtn = document.getElementById('backToStartBtn'); // HOOK: back-to-start
+
+      // Helper: toggle views (fail-soft)
+      function showAutostartUI() {
+        if (startView) startView.hidden = true;
+        if (autostartView) {
+          autostartView.hidden = false;
+          autostartView.classList.add('view--active');
+        }
+      }
+
+      function showStartUI() {
+        if (autostartView) autostartView.hidden = true;
+        if (startView) {
+          startView.hidden = false;
+          startView.classList.add('view--active');
+        }
+      }
+
+      // Autostart: ENDast UI-hook om mode + id finns
+      if (mode && id) {
+        showAutostartUI();
+
+        if (autostartText) autostartText.textContent = 'Startar…';
+        if (autostartMeta) autostartMeta.textContent = `mode=${mode} • id=${id}`;
+
+        // Placeholder-länk (kopplas till riktig route i senare AO)
+        if (autostartLink) {
+          autostartLink.href = '#';
+          autostartLink.setAttribute('data-next', 'game'); // HOOK: future-router-target
+        }
+
+        if (backToStartBtn) {
+          backToStartBtn.addEventListener('click', function () {
+            showStartUI();
+          }, { passive: true });
+        }
+
+        return;
+      }
+
+      // Mode selection hooks (enkelt, UI-only)
+      let selectedMode = '';
+
+      function setSelectedMode(nextMode) {
+        selectedMode = nextMode;
+
+        // update label + enable start
+        if (selectedModeLabel) {
+          selectedModeLabel.textContent =
+            selectedMode === 'nature' ? 'Naturjakt' :
+            selectedMode === 'treasure' ? 'Skattjakt' : 'Inget valt';
+        }
+
+        if (startBtn) startBtn.disabled = !selectedMode;
+        if (startHint) {
+          startHint.textContent = selectedMode
+            ? 'Tryck Starta för att gå vidare (kopplas senare).'
+            : 'Välj ett läge för att aktivera Starta.';
+        }
+
+        // highlight selected card
+        document.querySelectorAll('[data-mode-card]').forEach((el) => {
+          const isActive = el.getAttribute('data-mode-card') === selectedMode;
+          el.classList.toggle('is-selected', isActive);
+          el.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+        });
+      }
+
+      // Bind cards (no inline handlers)
+      document.querySelectorAll('[data-mode-card]').forEach((card) => {
+        card.addEventListener('click', () => {
+          const m = (card.getAttribute('data-mode-card') || '').trim();
+          setSelectedMode(m);
+        });
+
+        // keyboard
+        card.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            const m = (card.getAttribute('data-mode-card') || '').trim();
+            setSelectedMode(m);
+          }
+        });
+      });
+
+      // Start button (UI-hook only)
+      if (startBtn) {
+        startBtn.addEventListener('click', () => {
+          if (!selectedMode) return;
+          // HOOK: future-start-action
+          if (startHint) startHint.textContent = 'Starta är en hook i AO-1. Navigation kopplas i senare AO.';
+        });
+      }
+    })();
+  </script>
+</body>
+</html>
