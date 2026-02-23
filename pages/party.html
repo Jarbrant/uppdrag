@@ -1,9 +1,10 @@
 <!-- ============================================================
      FIL: pages/party.html  (HEL FIL)
      AO 4/8 (FAS 1.5) — Deltagarvy: karta + checkpoint 1 + kod-inmatning
-     AO 6/8 (FAS 2.0) — Fog-of-war “papper/sepia”-look (theme hooks + fog wrapper)
-     Mål: Deltagare ser karta + checkpoint + kodfält, med sepia/paper-tema + fog-känsla
-     Policy: UI-only, mobil-first, Leaflet via CDN (OK)
+     AO 5/8 (FAS 1.5) — Clear + reveal circle + nästa aktiv
+     AO 6/8 (FAS 2.0) — Fog-of-war “papper/sepia”-look
+     AO 7/8 (FAS 2.0) — Grid-läge (alternativ vy): Toggle Karta/Grid + grid container
+     Policy: UI-only, Leaflet via CDN (OK)
 ============================================================ -->
 <!doctype html>
 <html lang="sv">
@@ -67,30 +68,54 @@
 
     <!-- ========================================================
          BLOCK 5 — Main
-         KRAV: karta (#partyMap), panel med “Checkpoint 1”, ledtråd, kod-input, “OK”.
     ========================================================= -->
     <main id="mainContent" class="main" role="main"> <!-- HOOK: main -->
       <div class="container">
         <!-- Status / error slot -->
         <div id="statusSlot" class="slot" aria-live="polite"></div> <!-- HOOK: status-slot -->
 
-        <!-- Karta -->
-        <section class="card paperCard" aria-label="Karta">
+        <!-- ======================================================
+             AO 7/8 — Toggle (Karta / Grid)
+        ======================================================= -->
+        <section class="card paperCard" aria-label="Vyval">
           <div class="card__head">
             <div class="card__meta">
-              <h1 class="h2" style="margin:0">Karta</h1>
+              <h1 class="h2" style="margin:0">Vy</h1>
+              <p class="muted small" style="margin:6px 0 0 0">
+                Välj hur du vill se checkpoints.
+              </p>
+            </div>
+          </div>
+
+          <div class="viewToggle" role="tablist" aria-label="Välj vy">
+            <button id="viewMapBtn" class="btn btn-ghost viewTab is-active" type="button" role="tab" aria-selected="true">
+              Karta
+            </button>
+            <!-- HOOK: view-map-btn -->
+            <button id="viewGridBtn" class="btn btn-ghost viewTab" type="button" role="tab" aria-selected="false">
+              Grid
+            </button>
+            <!-- HOOK: view-grid-btn -->
+          </div>
+        </section>
+
+        <!-- ======================================================
+             AO 7/8 — View: Map
+        ======================================================= -->
+        <section id="mapView" class="card paperCard" aria-label="Karta"> <!-- HOOK: map-view -->
+          <div class="card__head">
+            <div class="card__meta">
+              <h2 class="h2" style="margin:0">Karta</h2>
               <p class="muted small" style="margin:6px 0 0 0">
                 Gå till checkpointen och skriv in koden.
               </p>
             </div>
           </div>
 
-          <!-- AO 6/8: fog wrapper runt kartan -->
           <div class="mapWrap fogWrap">
             <div id="partyMap" class="map partyMap" role="application" aria-label="Karta"></div>
             <!-- HOOK: party-map -->
 
-            <!-- Fog overlay (CSS-only känsla). JS behövs inte. -->
             <div class="fogOverlay" aria-hidden="true"></div>
             <!-- HOOK: fog-overlay -->
 
@@ -99,11 +124,31 @@
           </div>
         </section>
 
-        <!-- Checkpoint 1 panel -->
-        <section class="card paperCard" aria-label="Checkpoint 1">
+        <!-- ======================================================
+             AO 7/8 — View: Grid
+        ======================================================= -->
+        <section id="gridView" class="card paperCard is-hidden" aria-label="Grid"> <!-- HOOK: grid-view -->
           <div class="card__head">
             <div class="card__meta">
-              <h2 class="h2" style="margin:0">Checkpoint 1</h2>
+              <h2 class="h2" style="margin:0">Grid</h2>
+              <p class="muted small" style="margin:6px 0 0 0">
+                Checkpoints som rutor: låst / aktiv / klar.
+              </p>
+            </div>
+          </div>
+
+          <div id="gridWrap" class="gridWrap" role="list" aria-label="Checkpoint grid"></div>
+          <!-- HOOK: grid-wrap -->
+
+          <div id="gridHint" class="muted small" style="margin-top:10px"></div>
+          <!-- HOOK: grid-hint -->
+        </section>
+
+        <!-- Checkpoint panel -->
+        <section class="card paperCard" aria-label="Aktiv checkpoint">
+          <div class="card__head">
+            <div class="card__meta">
+              <h2 class="h2" style="margin:0">Aktiv checkpoint</h2>
               <p id="clueText" class="muted small" style="margin:6px 0 0 0">Laddar…</p>
               <!-- HOOK: clue-text -->
             </div>
@@ -126,22 +171,18 @@
               OK
             </button>
             <!-- HOOK: ok-button -->
-
-            <div class="muted small" style="margin-top:8px">
-              Tips: Om du inte kan kopiera länk, be admin kopiera JSON och dela på annat sätt.
-            </div>
           </div>
         </section>
 
         <div class="muted small footerNote">
-          Deltagarvy (AO 6/8). Sepia/paper-tema + fog-känsla. Fail-closed om data saknas.
+          Deltagarvy (AO 7/8). Toggle Karta/Grid. UI-state i party-map.js.
         </div>
       </div>
     </main>
   </div>
 
   <!-- ==========================================================
-       BLOCK 6 — Page-only inline styles (lämnas minimal; tema ligger i main.css)
+       BLOCK 6 — Page-only inline styles (minimal)
   =========================================================== -->
   <style>
     .row { display:flex; align-items:center; gap: var(--sp-3); }
@@ -188,17 +229,40 @@
 
     .footerNote { margin-top: var(--sp-6); text-align:center; opacity:.85; }
 
-    /* Fog overlay positioning */
     .fogOverlay {
       position: absolute;
       inset: 0;
       pointer-events: none;
       border-radius: 14px;
     }
+
+    /* AO 7/8 toggle + grid (light styles here, main polish can be moved to main.css later) */
+    .viewToggle { margin-top: 12px; display:flex; gap: 10px; flex-wrap: wrap; }
+    .viewTab.is-active { border-color: rgba(110,231,255,.40); background: rgba(110,231,255,.10); }
+    .is-hidden { display:none !important; }
+
+    .gridWrap { margin-top: 12px; display:grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+    @media (min-width: 720px) { .gridWrap { grid-template-columns: repeat(8, 1fr); } }
+    .gridCell {
+      min-height: 44px;
+      border-radius: 14px;
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,.05);
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      font-weight: 900;
+      cursor: pointer;
+      user-select:none;
+    }
+    .gridCell[aria-disabled="true"] { opacity: .50; cursor: not-allowed; }
+    .gridCell.is-active { border-color: rgba(110,231,255,.55); background: rgba(110,231,255,.10); }
+    .gridCell.is-cleared { border-color: rgba(74,222,128,.45); background: rgba(74,222,128,.10); }
+    .gridCell.is-locked { border-style: dashed; }
   </style>
 
   <!-- ==========================================================
-       BLOCK 7 — Leaflet JS (CDN) + participant map logic
+       BLOCK 7 — Leaflet JS (CDN) + participant logic
   =========================================================== -->
   <script
     src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
