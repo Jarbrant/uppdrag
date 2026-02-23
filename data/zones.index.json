@@ -1,1 +1,6 @@
-
+{
+  "version": 1,
+  "zones": [
+    { "id": "skogsrundan", "name": "Skogsrundan", "file": "zone_skogsrundan.json" }
+  ]
+}
