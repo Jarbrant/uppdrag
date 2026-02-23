@@ -1,14 +1,13 @@
 <!-- ============================================================
      FIL: index.html  (HEL FIL)
-     AO 1/15 + AO 11/15 — Landningssida + URL-start + felvisning
-     Policy: UI-only, mobil-first, inga externa deps
+     AO 1/15 + AO 11/15 (PATCH) — Fix: GitHub Pages subpath (/uppdrag/)
 ============================================================ -->
 <!doctype html>
 <html lang="sv">
 <head>
-  <!-- ==========================================================
+  /* ==========================================================
        BLOCK 1 — Meta + CSS
-  =========================================================== -->
+  =========================================================== */
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Naturjakt / Skattjakt — Start</title>
@@ -50,23 +49,17 @@
 
           <!-- ======================================================
                BLOCK 3.1 — Error slot (AO-11)
-               KRAV: Fel: err= visas som Error Card på index
           ======================================================= -->
-          <div id="errorSlot" class="slot"> <!-- HOOK: error-slot -->
-            <!-- JS renderar error card här om err= finns -->
-          </div>
+          <div id="errorSlot" class="slot"> <!-- HOOK: error-slot --></div>
 
           <div class="grid grid--modes" role="list">
-            <!-- MODE CARD: Naturjakt => mode=zone -->
             <article class="card card--mode" role="listitem" tabindex="0"
                      data-mode-card="zone"> <!-- HOOK: select-mode-zone -->
               <div class="card__top">
                 <div class="card__icon" aria-hidden="true">🌿</div>
                 <div class="card__meta">
                   <h2 class="card__title">Naturjakt</h2>
-                  <p class="card__desc muted">
-                    Hitta och fota saker i naturen. Samla poäng och XP.
-                  </p>
+                  <p class="card__desc muted">Hitta och fota saker i naturen. Samla poäng och XP.</p>
                 </div>
               </div>
               <div class="card__bottom">
@@ -75,16 +68,13 @@
               </div>
             </article>
 
-            <!-- MODE CARD: Skattjakt => mode=party -->
             <article class="card card--mode" role="listitem" tabindex="0"
                      data-mode-card="party"> <!-- HOOK: select-mode-party -->
               <div class="card__top">
                 <div class="card__icon" aria-hidden="true">🗺️</div>
                 <div class="card__meta">
                   <h2 class="card__title">Skattjakt</h2>
-                  <p class="card__desc muted">
-                    Följ checkpoints och ledtrådar. Perfekt för kalas.
-                  </p>
+                  <p class="card__desc muted">Följ checkpoints och ledtrådar. Perfekt för kalas.</p>
                 </div>
               </div>
               <div class="card__bottom">
@@ -105,25 +95,24 @@
                 <button id="startBtn" class="btn btn-primary" type="button" disabled>
                   Starta
                 </button>
-                <!-- HOOK: start-button (JS binder senare) -->
+                <!-- HOOK: start-button -->
               </div>
             </div>
 
             <div id="startHint" class="hint muted" role="status" aria-live="polite">
               Välj ett läge för att aktivera Starta.
             </div>
-            <!-- HOOK: hint-area (visar validering/meddelanden) -->
+            <!-- HOOK: hint-area -->
           </div>
 
           <footer class="footer muted">
-            <span>Tips: QR-kod kan starta direkt via URL: <span class="muted small">/?mode=zone&id=skogsrundan</span></span>
+            <span>Tips: QR kan starta direkt via URL (på samma base path).</span>
           </footer>
         </div>
       </section>
 
       <!-- ========================================================
-           BLOCK 4 — Auto-start View (UI-hook, minimal logik)
-           OBS: AO-11 gör att boot.js tar över och routar vidare.
+           BLOCK 4 — Auto-start View (UI-hook)
       ========================================================= -->
       <section id="autostartView" class="view" aria-label="Autostart" hidden> <!-- HOOK: view-autostart -->
         <div class="container">
@@ -135,14 +124,12 @@
 
             <div class="card card--info">
               <h2 class="h2">Autostart-läge</h2>
-              <p class="muted">
-                QR-länk upptäckt. Du skickas vidare automatiskt.
-              </p>
+              <p class="muted">QR-länk upptäckt. Du skickas vidare automatiskt.</p>
 
               <a id="autostartLink" class="btn btn-primary" href="#" aria-label="Gå vidare">
                 Gå vidare
               </a>
-              <!-- HOOK: autostart-link (fallback) -->
+              <!-- HOOK: autostart-link -->
             </div>
 
             <button class="btn btn-ghost" type="button" id="backToStartBtn">
@@ -156,16 +143,13 @@
   </div>
 
   <!-- ==========================================================
-       BLOCK 5 — Boot routing (AO-11)
-       KRAV: QR-länk ska "bara funka"
-       - Inkludera boot.js alltid; den gör inget om inga params finns.
+       BLOCK 5 — Boot routing
   =========================================================== -->
   <script type="module" src="./src/boot.js"></script>
 
   <!-- ==========================================================
-       BLOCK 6 — Index UI controller (mode-select + Start links + err-card)
-       - XSS-safe: textContent/DOM API
-       - Hooks för kommande JS
+       BLOCK 6 — Index controller (mode-select + Start links + err-card)
+       FIX: Navigera alltid till SAMMA base path (t.ex. /uppdrag/)
   =========================================================== -->
   <script type="module">
     import { qsGet } from './src/util.js';
@@ -174,7 +158,6 @@
     (function () {
       'use strict';
 
-      // INIT-GUARD
       if (window.__AO11_INDEX_INIT__) return; // HOOK: init-guard-index
       window.__AO11_INDEX_INIT__ = true;
 
@@ -191,6 +174,16 @@
       const autostartLink = document.getElementById('autostartLink'); // HOOK: autostart-link
       const backToStartBtn = document.getElementById('backToStartBtn'); // HOOK: back-to-start
 
+      function currentBaseUrl() {
+        // Om vi är på /uppdrag/index.html => base blir /uppdrag/
+        const u = new URL(window.location.href);
+        const p = u.pathname;
+        u.pathname = p.endsWith('/') ? p : p.substring(0, p.lastIndexOf('/') + 1);
+        u.search = '';
+        u.hash = '';
+        return u;
+      }
+
       function showAutostartUI(mode, id) {
         if (startView) startView.hidden = true;
         if (autostartView) autostartView.hidden = false;
@@ -198,22 +191,23 @@
         if (autostartText) autostartText.textContent = 'Startar…';
         if (autostartMeta) autostartMeta.textContent = `mode=${mode} • id=${id}`;
 
-        // Fallback-länk (boot.js routar automatiskt; detta är bara en hook)
+        // Fallback-länk som stannar på samma base path
         if (autostartLink) {
-          autostartLink.href = `/?mode=${encodeURIComponent(mode)}&id=${encodeURIComponent(id)}`;
+          const base = currentBaseUrl();
+          base.searchParams.set('mode', mode);
+          base.searchParams.set('id', id);
+          autostartLink.href = base.toString();
           autostartLink.setAttribute('data-next', 'boot'); // HOOK: future-router-target
         }
       }
 
-      // =========================================
       // KRAV: err= visas som Error Card på index
-      // =========================================
       const err = qsGet('err'); // HOOK: qs-err
-      const rid = qsGet('rid'); // HOOK: qs-rid (om boot skickar med)
-
+      const rid = qsGet('rid'); // HOOK: qs-rid
       if (err && errorSlot) {
-        const msg = rid ? `Start kunde inte genomföras. Felkod: ${err} (rid: ${rid})`
-                        : `Start kunde inte genomföras. Felkod: ${err}`;
+        const msg = rid
+          ? `Start kunde inte genomföras. Felkod: ${err} (rid: ${rid})`
+          : `Start kunde inte genomföras. Felkod: ${err}`;
 
         const card = renderErrorCard(msg, [
           {
@@ -233,8 +227,7 @@
         errorSlot.appendChild(card);
       }
 
-      // Om URL redan har mode+id: visa autostart UI-hook.
-      // OBS: boot.js kommer routa vidare direkt, men detta ger “Startar…” om det hinner rendera.
+      // Om URL redan har mode+id: visa autostart UI-hook (boot.js routar vidare)
       const qsMode = qsGet('mode');
       const qsId = qsGet('id');
       if (qsMode && qsId) {
@@ -247,16 +240,10 @@
             window.location.assign(url.toString());
           }, { passive: true });
         }
-        // Låt boot.js sköta routing
         return;
       }
 
-      // =========================================
-      // Mode selection + Start links (AO-11)
-      // Starta bygger en QR-kompatibel URL:
-      //  - zone -> /?mode=zone&id=skogsrundan
-      //  - party -> /?mode=party&id=kalas_demo
-      // =========================================
+      // Mode selection + Start links (FIX: samma base path)
       let selectedMode = '';
 
       function setSelectedMode(nextMode) {
@@ -304,11 +291,14 @@
           const id = selectedMode === 'zone' ? 'skogsrundan'
                    : selectedMode === 'party' ? 'kalas_demo'
                    : '';
-
           if (!id) return;
 
-          // KRAV: QR-länk ska “bara funka” -> gå till /?mode=...&id=...
-          window.location.assign(`/?mode=${encodeURIComponent(selectedMode)}&id=${encodeURIComponent(id)}`);
+          const base = currentBaseUrl();
+          base.searchParams.set('mode', selectedMode);
+          base.searchParams.set('id', id);
+
+          // FIX: navigera till /uppdrag/?mode=...&id=...
+          window.location.assign(base.toString());
         });
       }
     })();
