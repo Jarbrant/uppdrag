@@ -3,6 +3,7 @@
    PATCH (FAS 2.1) — FIX: skrivbar editor (ingen re-render per bokstav)
                     + tydliga labels (Poäng/Kod/Radius)
                     + tydligare Final-toggle
+   PATCH (FAS 2.1) — Publicera som spelkort (PARTY_LIBRARY_V1) + load via ?load=
    Policy: UI-only, XSS-safe, fail-closed
 ============================================================ */
 
@@ -11,7 +12,8 @@ import { copyToClipboard } from './util.js';
 /* ============================================================
    BLOCK 1 — Storage key + draft shape (state/draft)
 ============================================================ */
-const DRAFT_KEY = 'PARTY_DRAFT_V1'; // HOOK: draft-storage-key (stabil)
+const DRAFT_KEY = 'PARTY_DRAFT_V1';      // HOOK: draft-storage-key (stabil)
+const LIB_KEY = 'PARTY_LIBRARY_V1';      // HOOK: library-storage-key (stabil)
 
 /* ============================================================
    BLOCK 2 — DOM hooks (UI)
@@ -76,6 +78,17 @@ function safeText(x) {
   return (x ?? '').toString();
 }
 
+function safeJSONParse(str, fallback = null) {
+  try { return JSON.parse(str); } catch (_) { return fallback; }
+}
+
+function uid(prefix = 'lib') {
+  const p = (prefix || 'lib').toString().replace(/[^a-z0-9_-]/gi, '').slice(0, 16) || 'lib';
+  const t = Date.now().toString(36);
+  const r = Math.floor(Math.random() * 1e9).toString(36);
+  return `${p}_${t}_${r}`;
+}
+
 function defaultDraft() {
   return {
     version: 1,
@@ -98,7 +111,7 @@ function defaultDraft() {
 /* ============================================================
    BLOCK 5 — Draft load/save
 ============================================================ */
-function safeJSONParse(str) {
+function safeJSONParseWrap(str) {
   try { return { ok: true, value: JSON.parse(str) }; }
   catch (_) { return { ok: false, value: null }; }
 }
@@ -107,7 +120,7 @@ function readDraft() {
   try {
     const raw = localStorage.getItem(DRAFT_KEY);
     if (!raw) return defaultDraft();
-    const parsed = safeJSONParse(raw);
+    const parsed = safeJSONParseWrap(raw);
     if (!parsed.ok || !parsed.value || typeof parsed.value !== 'object') return defaultDraft();
     return migrateDraft(parsed.value);
   } catch (_) {
@@ -127,6 +140,48 @@ function writeDraft(d) {
     showStatus('Kunde inte spara utkast (localStorage write fail).', 'warn');
     return false;
   }
+}
+
+/* ============================================================
+   BLOCK 5.5 — Library (publicerade spelkort)
+   Shape: [{ id, name, checkpointCount, updatedAt, payloadJSON }]
+============================================================ */
+function readLibrary() {
+  try {
+    const raw = localStorage.getItem(LIB_KEY);
+    if (!raw) return [];
+    const v = safeJSONParse(raw, []);
+    if (!Array.isArray(v)) return [];
+    return v.filter((x) => x && typeof x === 'object' && typeof x.id === 'string');
+  } catch (_) {
+    return [];
+  }
+}
+
+function writeLibrary(list) {
+  if (!storageWritable) return false;
+  try {
+    localStorage.setItem(LIB_KEY, JSON.stringify(Array.isArray(list) ? list : []));
+    return true;
+  } catch (_) {
+    storageWritable = false;
+    showStatus('Kunde inte publicera (localStorage write fail).', 'warn');
+    return false;
+  }
+}
+
+function upsertLibraryEntry(entry) {
+  const list = readLibrary();
+  const next = Array.isArray(list) ? list.slice(0, 200) : [];
+  const idx = next.findIndex((x) => x && x.id === entry.id);
+  if (idx >= 0) next[idx] = entry;
+  else next.unshift(entry);
+  return writeLibrary(next);
+}
+
+function findLibraryEntry(id) {
+  const list = readLibrary();
+  return list.find((x) => x && x.id === id) || null;
 }
 
 /* ============================================================
@@ -202,6 +257,75 @@ function syncDerivedFields() {
     const c = safeText(cp.clue || draft.clues[i] || '').trim();
     draft.clues[i] = c || `Checkpoint ${i + 1}: Ledtråd...`;
   }
+}
+
+/* ============================================================
+   BLOCK 6.5 — Load from library (?load=)
+============================================================ */
+function qsGet(key) {
+  try {
+    const usp = new URLSearchParams(window.location.search || '');
+    return (usp.get(String(key)) ?? '').toString().trim();
+  } catch (_) {
+    return '';
+  }
+}
+
+function payloadToDraft(payload) {
+  const def = defaultDraft();
+  const p = (payload && typeof payload === 'object') ? payload : {};
+
+  const name = safeText(p.name).trim();
+  const count = clampInt(p.checkpointCount ?? p.count ?? p.cpCount ?? def.checkpointCount, 1, 20);
+  const points = clampInt(p.pointsPerCheckpoint ?? def.pointsPerCheckpoint, 0, 1000);
+
+  const out = { ...def };
+  out.name = name || def.name;
+  out.checkpointCount = count;
+  out.pointsPerCheckpoint = points;
+
+  const clues = Array.isArray(p.clues) ? p.clues.map((x) => safeText(x).trim()).slice(0, 20) : [];
+  const geo = Array.isArray(p.geo) ? p.geo.slice(0, 20) : [];
+
+  out.clues = Array.from({ length: count }, (_, i) => clues[i] || `Checkpoint ${i + 1}: Ledtråd...`);
+  out.checkpoints = Array.from({ length: count }, (_, i) => {
+    const g = (geo[i] && typeof geo[i] === 'object') ? geo[i] : {};
+    return {
+      lat: Number.isFinite(Number(g.lat)) ? Number(g.lat) : null,
+      lng: Number.isFinite(Number(g.lng)) ? Number(g.lng) : null,
+      radius: clampInt(g.radius ?? 25, 5, 5000),
+      code: safeText(g.code || '').trim(),
+      clue: out.clues[i] || '',
+      points: (g.points === null || g.points === undefined) ? null : clampInt(g.points, 0, 1000),
+      isFinal: (i === count - 1) ? (g.isFinal === true) : false
+    };
+  });
+
+  enforceFinalOnlyOnLast(out);
+  return out;
+}
+
+function tryLoadFromLibraryOnBoot() {
+  const id = qsGet('load'); // HOOK: qs-load-library
+  if (!id) return false;
+
+  const entry = findLibraryEntry(id);
+  if (!entry || typeof entry.payloadJSON !== 'string') {
+    showStatus('Kunde inte hitta den sparade kartan (load-id).', 'warn');
+    return false;
+  }
+
+  const payload = safeJSONParse(entry.payloadJSON, null);
+  if (!payload || typeof payload !== 'object') {
+    showStatus('Sparad karta är korrupt (payload parse-fel).', 'warn');
+    return false;
+  }
+
+  draft = migrateDraft(payloadToDraft(payload));
+  dirty = true;
+  writeDraft(draft); // försök sätta draft direkt
+  showStatus(`Laddade: ${entry.name}`, 'info');
+  return true;
 }
 
 /* ============================================================
@@ -346,8 +470,6 @@ function setActiveCp(index, { centerMap = true } = {}) {
 
 /* ============================================================
    BLOCK 10 — Render (FULL vs LIGHT)
-   FULL: bygger om editorn (används vid count/add/remove/map coords)
-   LIGHT: uppdaterar preview+fel+pill utan att röra editor DOM (fixar skriv-problemet)
 ============================================================ */
 let draft = readDraft(); // HOOK: draft-state
 let dirty = false;       // HOOK: dirty-state
@@ -360,11 +482,7 @@ function setPill(text, ok = true) {
   elSavePill.style.opacity = ok ? '1' : '0.8';
 }
 
-/* ============================================================
-   NEW: local “Spara” helper (för CP-spara)
-============================================================ */
 function saveNowOrWarn() {
-  // Fail-closed: spara ändå draft, men visa om storage är låst
   if (!storageWritable) {
     showStatus('LocalStorage är låst. Kan inte spara här.', 'warn');
     return false;
@@ -446,7 +564,6 @@ function renderCheckpointEditorFULL() {
     row.setAttribute('role', 'button');
     row.setAttribute('aria-label', `Välj checkpoint ${i + 1}`);
 
-    // FIX: låt inputs få Space/Enter normalt (annars går mellanslag inte)
     function isEditableTarget(evt) {
       const t = evt?.target;
       const tag = (t?.tagName || '').toUpperCase();
@@ -504,7 +621,6 @@ function renderCheckpointEditorFULL() {
       markDirtyLIGHT(true, { rerenderQR: false });
     });
 
-    // Labels + inputs: Poäng / Kod / Radius
     const grid = document.createElement('div');
     grid.style.display = 'grid';
     grid.style.gridTemplateColumns = '1fr 1fr 1fr';
@@ -575,7 +691,6 @@ function renderCheckpointEditorFULL() {
     grid.appendChild(labeled('Kod', code));
     grid.appendChild(labeled('Radie (m)', radius));
 
-    // Random code + Spara CP
     const codeRow = document.createElement('div');
     codeRow.style.display = 'flex';
     codeRow.style.alignItems = 'center';
@@ -618,7 +733,6 @@ function renderCheckpointEditorFULL() {
       showStatus(`Kod skapad för CP ${k + 1}.`, 'info');
     });
 
-    // NY: Spara-knapp (sparar hela utkastet, men sitter där man jobbar)
     const btnSaveCp = document.createElement('button');
     btnSaveCp.type = 'button';
     btnSaveCp.className = 'btn btn-primary miniBtn';
@@ -636,7 +750,6 @@ function renderCheckpointEditorFULL() {
     codeRow.appendChild(codeHint);
     codeRow.appendChild(actionsWrap);
 
-    // Final toggle (endast sista cp)
     const finalRow = document.createElement('div');
     finalRow.style.display = 'flex';
     finalRow.style.alignItems = 'center';
@@ -705,11 +818,11 @@ function renderAllFULL({ broadcastMap = true, rerenderQR = true } = {}) {
 }
 
 function renderAllLIGHT({ rerenderQR = false } = {}) {
-  // viktig: rör inte editor DOM här -> fixar “1 bokstav”
   renderPreview();
   renderErrorsAndPill();
   if (rerenderQR) renderQRPanelDebounced();
 }
+
 /* ============================================================
    BLOCK 11 — Autosave (debounced)
 ============================================================ */
@@ -877,6 +990,7 @@ function bindEvents() {
 
 /* ============================================================
    BLOCK 14 — Export (KOPIERA JSON + KOPIERA LÄNK) + Fill random codes
+   + PATCH: Publicera som spelkort
 ============================================================ */
 const MAX_INLINE_QS_CHARS = 1400; // HOOK: max-inline-payload-policy
 
@@ -887,6 +1001,7 @@ let elExportJSON = null;
 let elBtnCopyJSON = null;
 let elBtnCopyLink = null;
 let elBtnFillCodes = null;
+let elBtnPublish = null; // HOOK: publish-button
 
 function hasBlockingErrors() {
   const errors = validateDraft(draft);
@@ -959,7 +1074,7 @@ function ensureExportPanel() {
   const p = document.createElement('p');
   p.className = 'muted small';
   p.style.margin = '6px 0 0 0';
-  p.textContent = 'Kopiera JSON eller kopiera en länk som startar deltagarvyn.';
+  p.textContent = 'Kopiera JSON eller kopiera en länk som startar deltagarvyn. Du kan också publicera som spelkort på startsidan.';
 
   meta.appendChild(h);
   meta.appendChild(p);
@@ -993,9 +1108,17 @@ function ensureExportPanel() {
   btnFill.textContent = 'FYLL SLUMPKODER (tomma)';
   elBtnFillCodes = btnFill;
 
+  // NY: Publicera
+  const btnPub = document.createElement('button');
+  btnPub.type = 'button';
+  btnPub.className = 'btn btn-primary miniBtn';
+  btnPub.textContent = 'PUBLICERA SOM SPELKORT';
+  elBtnPublish = btnPub;
+
   row.appendChild(btnJson);
   row.appendChild(btnLink);
   row.appendChild(btnFill);
+  row.appendChild(btnPub);
 
   const msg = document.createElement('div');
   msg.className = 'muted small';
@@ -1057,6 +1180,7 @@ function ensureExportPanel() {
   if (elBtnCopyJSON) elBtnCopyJSON.addEventListener('click', async () => { await onCopyJSON(); });
   if (elBtnCopyLink) elBtnCopyLink.addEventListener('click', async () => { await onCopyLink(); });
   if (elBtnFillCodes) elBtnFillCodes.addEventListener('click', () => { onFillRandomCodes(); });
+  if (elBtnPublish) elBtnPublish.addEventListener('click', () => { onPublishToLibrary(); });
 }
 
 function renderExportUI() {
@@ -1078,6 +1202,48 @@ function buildParticipantLinkOrFail() {
   url.searchParams.set('payload', encoded);
 
   return { ok: true, url: url.toString(), encodedLength: encoded.length, payloadEncoded: encoded };
+}
+
+function onPublishToLibrary() {
+  ensureExportPanel();
+
+  if (!storageWritable) {
+    setExportMessage('LocalStorage är låst. Kan inte publicera på denna enhet.', 'warn');
+    return;
+  }
+
+  if (hasBlockingErrors()) {
+    setExportMessage('Rätta felen i formuläret innan du publicerar.', 'warn');
+    return;
+  }
+
+  const payloadJSON = getDraftJSON({ pretty: false });
+  const name = safeText(draft.name).trim() || 'Skattjakt';
+  const entryId = uid('party');
+
+  const entry = {
+    id: entryId,
+    name,
+    checkpointCount: clampInt(draft.checkpointCount, 1, 20),
+    updatedAt: Date.now(),
+    payloadJSON
+  };
+
+  const ok = upsertLibraryEntry(entry);
+  if (!ok) {
+    setExportMessage('Kunde inte publicera (storage write fail).', 'danger');
+    return;
+  }
+
+  setExportMessage('Publicerad! Du hittar den som spelkort på startsidan.', 'info');
+  showStatus('Publicerad som spelkort.', 'info');
+
+  // Tips: visa admin-load-länk i linkfältet (så man kan öppna direkt)
+  try {
+    const u = new URL(window.location.href);
+    u.searchParams.set('load', entryId);
+    if (elExportLink) elExportLink.value = u.toString();
+  } catch (_) {}
 }
 
 function onFillRandomCodes() {
@@ -1255,11 +1421,13 @@ function renderQRPanel() {
   if (window.__FAS12_AO5_ADMIN_INIT__) return; // HOOK: init-guard-admin
   window.__FAS12_AO5_ADMIN_INIT__ = true;
 
+  // Ladda från library om ?load= finns
+  tryLoadFromLibraryOnBoot();
+
   ensureExportPanel();
   bindMapEvents();
   bindEvents();
 
-  // init hints
   if (elActiveCpLabel) elActiveCpLabel.textContent = 'CP 1';
   if (elMapHint) elMapHint.textContent = 'Aktiv CP 1 — klicka på kartan för att sätta plats.';
 
