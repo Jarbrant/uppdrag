@@ -1,8 +1,10 @@
 /* ============================================================
    FIL: src/engine.js  (HEL FIL)
-   AO 3/15 + AO 10/15 — Engine: poäng/XP/level + streak per dag
+   AO 3/15 + AO 10/15 + AO 12/15 — Engine: progression + unlock
    - Behåller befintliga exports/API
-   - Lägger till: awardCheckpointComplete() (separat från mission)
+   - Lägger till (AO-12):
+       completedCount(state)
+       isNormalUnlocked(state, threshold=15)
    Policy: deterministiskt, robust, fail-closed i inputs
 ============================================================ */
 
@@ -13,8 +15,6 @@ import { clamp, nowISO } from './util.js';
 
 /* ============================================================
    BLOCK 2 — Level rules
-   KRAV: calcLevel(xp)
-   - Enkel, stabil modell: 0–99 => lvl 1, 100–199 => lvl 2, osv.
 ============================================================ */
 export function calcLevel(xp) {
   const x = Number(xp);
@@ -36,8 +36,6 @@ export function localDayKey(date = new Date()) {
 }
 
 function dayDiff(a, b) {
-  // a,b = YYYY-MM-DD (local). Beräkna diff i dagar genom att tolka som local midnatt.
-  // Fail-soft: om fel format => stor diff => streak reset
   if (!/^\d{4}-\d{2}-\d{2}$/.test(a) || !/^\d{4}-\d{2}-\d{2}$/.test(b)) return 999;
 
   const [ay, am, ad] = a.split('-').map(Number);
@@ -52,10 +50,6 @@ function dayDiff(a, b) {
 
 /* ============================================================
    BLOCK 4 — Streak logic
-   - Om första logg => streak = 1
-   - Om samma dag => ingen ändring
-   - Om igår => +1
-   - Annars => reset till 1
 ============================================================ */
 export function applyStreak(state, dayKey) {
   const s = state;
@@ -74,9 +68,7 @@ export function applyStreak(state, dayKey) {
     return s;
   }
 
-  if (last === today) {
-    return s;
-  }
+  if (last === today) return s;
 
   const diff = dayDiff(last, today);
   if (diff === 1) {
@@ -95,7 +87,6 @@ export function applyStreak(state, dayKey) {
    KRAV: awardMissionComplete({points,xp})
 ============================================================ */
 export function awardMissionComplete(state, payload) {
-  // Fail-closed input guards
   const s = state;
   if (!s || typeof s !== 'object') {
     console.error('[ENGINE] awardMissionComplete FAIL', { code: 'STATE_BAD' });
@@ -106,18 +97,15 @@ export function awardMissionComplete(state, payload) {
   const addPoints = clamp(Math.floor(Number(p.points || 0)), 0, 1_000_000);
   const addXp = clamp(Math.floor(Number(p.xp || 0)), 0, 1_000_000);
 
-  // Säkerställ shape (minimalt, store validerar ändå)
   s.points = clamp(Math.floor(Number(s.points || 0)), 0, 1_000_000_000) + addPoints;
   s.xp = clamp(Math.floor(Number(s.xp || 0)), 0, 1_000_000_000) + addXp;
 
   const nextLevel = calcLevel(s.xp);
   s.level = clamp(nextLevel, 1, 9999);
 
-  // Streak
   const dayKey = localDayKey(new Date());
   applyStreak(s, dayKey);
 
-  // History
   if (!Array.isArray(s.history)) s.history = [];
   const entry = {
     ts: nowISO(),
@@ -129,22 +117,13 @@ export function awardMissionComplete(state, payload) {
   };
 
   s.history.push(entry);
-
-  // Keep last 200 entries
-  if (s.history.length > 200) {
-    s.history = s.history.slice(s.history.length - 200);
-  }
+  if (s.history.length > 200) s.history = s.history.slice(s.history.length - 200);
 
   return s;
 }
 
 /* ============================================================
    BLOCK 6 — awardCheckpointComplete (AO-10)
-   KRAV: Engine: awardCheckpointComplete() separat från mission.
-   - Uppdaterar points/xp/level
-   - Uppdaterar streak per dag (checkpoint räknas som aktivitet)
-   - Lägger history-entry med partyId + checkpointIndex
-   - Ingen ny store shape krävs: progress kan härledas från history
 ============================================================ */
 export function awardCheckpointComplete(state, payload) {
   const s = state;
@@ -157,7 +136,6 @@ export function awardCheckpointComplete(state, payload) {
   const partyId = (p.partyId ?? '').toString().trim();
   const checkpointIndex = Math.floor(Number(p.checkpointIndex));
 
-  // Fail-closed payload basics
   if (!partyId) {
     console.error('[ENGINE] awardCheckpointComplete FAIL', { code: 'PARTY_ID_MISSING' });
     return null;
@@ -192,10 +170,34 @@ export function awardCheckpointComplete(state, payload) {
   };
 
   s.history.push(entry);
-
-  if (s.history.length > 200) {
-    s.history = s.history.slice(s.history.length - 200);
-  }
+  if (s.history.length > 200) s.history = s.history.slice(s.history.length - 200);
 
   return s;
+}
+
+/* ============================================================
+   BLOCK 7 — Difficulty unlock (AO-12)
+   KRAV:
+   - Engine håller completedCount och isNormalUnlocked()
+   NOTE: Vi håller detta utan ny store-shape genom att räkna history.
+============================================================ */
+export const NORMAL_UNLOCK_AFTER = 15; // HOOK: normal-unlock-after
+
+export function completedCount(state) {
+  const s = state;
+  const hist = Array.isArray(s?.history) ? s.history : [];
+  let count = 0;
+
+  for (const h of hist) {
+    if (!h || typeof h !== 'object') continue;
+    if (h.type === 'mission_complete') count += 1;
+  }
+
+  return count;
+}
+
+export function isNormalUnlocked(state, threshold = NORMAL_UNLOCK_AFTER) {
+  const t = Math.floor(Number(threshold));
+  const need = Number.isFinite(t) && t > 0 ? t : NORMAL_UNLOCK_AFTER;
+  return completedCount(state) >= need;
 }
