@@ -1,8 +1,8 @@
 <!-- ============================================================
      FIL: pages/party.html  (HEL FIL)
-     AO 9/15 + AO 10/15 (PATCH) — Party page UI + koppling till src/party.js
-     Mål: Demo-skattejakt kan starta och visa checkpoints (1..5) + poäng/XP
-     Policy: UI-only, mobil-first, inga externa deps
+     AO 4/8 (FAS 1.5) — Deltagarvy: karta + checkpoint 1 + kod-inmatning
+     Mål: Deltagare ser karta och första checkpoint + kodfält.
+     Policy: UI-only, mobil-first, Leaflet via CDN (OK)
 ============================================================ -->
 <!doctype html>
 <html lang="sv">
@@ -12,9 +12,19 @@
   =========================================================== -->
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Skattjakt — Demo</title>
-  <meta name="description" content="Demo-skattejakt med checkpoints." />
+  <title>Skattjakt — Deltagare</title>
+  <meta name="description" content="Skattjakt med karta och kod." />
   <link rel="stylesheet" href="../styles/main.css" />
+
+  <!-- ==========================================================
+       BLOCK 1.1 — Leaflet CSS (CDN)  (AO 4/8)
+  =========================================================== -->
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+    crossorigin=""
+  />
 </head>
 
 <body>
@@ -45,7 +55,7 @@
           </div>
 
           <div class="headerRight">
-            <span id="stepPill" class="pill pill--level">Steg —/—</span>
+            <span id="stepPill" class="pill pill--level">Checkpoint 1</span>
             <!-- HOOK: step-pill -->
           </div>
         </div>
@@ -54,66 +64,75 @@
 
     <!-- ========================================================
          BLOCK 5 — Main
-         KRAV: stepper + ledtråd + “Nästa”
+         KRAV: karta (#partyMap), panel med “Checkpoint 1”, ledtråd, kod-input, “OK”.
     ========================================================= -->
     <main id="mainContent" class="main" role="main"> <!-- HOOK: main -->
       <div class="container">
-        <!-- Stepper -->
-        <section class="card card--list" aria-label="Checkpoints">
-          <div class="listHead">
-            <h1 class="h2">Checkpoints</h1>
-            <p class="muted small">Följ ledtråden och gå vidare steg för steg.</p>
+        <!-- Status / error slot -->
+        <div id="statusSlot" class="slot" aria-live="polite"></div> <!-- HOOK: status-slot -->
+
+        <!-- Karta -->
+        <section class="card" aria-label="Karta">
+          <div class="card__head">
+            <div class="card__meta">
+              <h1 class="h2" style="margin:0">Karta</h1>
+              <p class="muted small" style="margin:6px 0 0 0">
+                Gå till checkpointen och skriv in koden.
+              </p>
+            </div>
           </div>
 
-          <div id="stepper" class="stepper" aria-label="Stegindikator">
-            <!-- HOOK: stepper -->
-            <!-- NOTE: party.js uppdaterar active/done, och kan köra även om pack har fler/färre -->
-            <button class="stepDot is-active" type="button" data-step="1" aria-label="Steg 1">1</button>
-            <button class="stepDot" type="button" data-step="2" aria-label="Steg 2">2</button>
-            <button class="stepDot" type="button" data-step="3" aria-label="Steg 3">3</button>
-            <button class="stepDot" type="button" data-step="4" aria-label="Steg 4">4</button>
-            <button class="stepDot" type="button" data-step="5" aria-label="Steg 5">5</button>
+          <div class="mapWrap">
+            <div id="partyMap" class="map" role="application" aria-label="Karta"></div>
+            <!-- HOOK: party-map -->
+            <div id="mapError" class="errorText" role="alert"></div>
+            <!-- HOOK: map-error -->
           </div>
         </section>
 
-        <!-- Clue card -->
-        <section class="card card--mission" aria-label="Ledtråd">
+        <!-- Checkpoint 1 panel -->
+        <section class="card" aria-label="Checkpoint 1">
           <div class="card__head">
             <div class="card__meta">
-              <h2 class="card__title">Ledtråd</h2>
-              <p id="clueText" class="card__desc muted">Laddar…</p>
+              <h2 class="h2" style="margin:0">Checkpoint 1</h2>
+              <p id="clueText" class="muted small" style="margin:6px 0 0 0">Laddar…</p>
               <!-- HOOK: clue-text -->
             </div>
             <div class="card__side">
-              <span class="pill pill--difficulty" id="cluePill">checkpoint</span>
+              <span class="pill pill--difficulty" id="cluePill">kod</span>
               <!-- HOOK: clue-pill -->
+            </div>
+          </div>
+
+          <div class="form" style="margin-top:12px">
+            <div class="field">
+              <label class="label2" for="codeInput">Kod</label>
+              <input id="codeInput" class="input" type="text" autocomplete="off" placeholder="Skriv koden här…" />
+              <!-- HOOK: code-input -->
+              <div id="errCode" class="errorText" role="alert"></div>
+              <!-- HOOK: err-code -->
+            </div>
+
+            <button id="okBtn" class="btn btn-primary" type="button">
+              OK
+            </button>
+            <!-- HOOK: ok-button -->
+
+            <div class="muted small" style="margin-top:8px">
+              Tips: Om du inte kan kopiera länk, be admin kopiera JSON och dela på annat sätt.
             </div>
           </div>
         </section>
 
         <div class="muted small footerNote">
-          Skattjakt-demo. Progress sparas lokalt (poäng/XP/historik).
+          Deltagarvy (AO 4/8). Startar från payload/partyId. Fail-closed om data saknas.
         </div>
       </div>
     </main>
-
-    <!-- ========================================================
-         BLOCK 6 — Sticky CTA
-         KRAV: “Nästa”
-         NOTE: Prev skapas av party.js om den saknas.
-    ========================================================= -->
-    <div class="ctaBar" role="region" aria-label="Åtgärder">
-      <div class="ctaBar__inner">
-        <button id="nextBtn" class="btn btn-primary" type="button">
-          Nästa
-        </button>
-        <!-- HOOK: next-button -->
-      </div>
-    </div>
   </div>
 
   <!-- ==========================================================
-       BLOCK 7 — Page-only inline styles
+       BLOCK 6 — Page-only inline styles
   =========================================================== -->
   <style>
     .row { display:flex; align-items:center; gap: var(--sp-3); }
@@ -127,56 +146,49 @@
     .pill--level { border-color: rgba(110,231,255,.30); background: rgba(110,231,255,.10); color: rgba(255,255,255,.92); }
     .pill--difficulty { border-color: rgba(255,255,255,.14); }
 
-    .stepper {
-      display:flex;
-      gap: 10px;
-      flex-wrap: wrap;
-      align-items:center;
-      justify-content: space-between;
-      padding-top: var(--sp-2);
-    }
+    .slot { margin-top: var(--sp-4); }
 
-    .stepDot {
-      width: 44px;
-      height: 44px;
-      border-radius: 999px;
+    .form { display:grid; gap: 14px; }
+    .field { display:grid; gap: 6px; }
+    .label2 { font-weight: 800; font-size: var(--fs-2); }
+    .input {
+      min-height: 44px;
+      padding: 12px 12px;
+      border-radius: 14px;
       border: 1px solid var(--border);
-      background: rgba(255,255,255,.04);
+      background: rgba(255,255,255,.05);
       color: var(--text);
-      font-weight: 900;
-      cursor: pointer;
-      transition: transform .08s ease, border-color .12s ease, background .12s ease;
+      outline: none;
     }
-    .stepDot:active { transform: translateY(1px); }
-    .stepDot:hover { border-color: rgba(110,231,255,.25); background: rgba(255,255,255,.06); }
-    .stepDot.is-active {
-      border-color: rgba(110,231,255,.55);
-      background: rgba(110,231,255,.10);
-      box-shadow: var(--sh-1);
+    .input::placeholder { color: rgba(255,255,255,.45); }
+    .input:focus-visible { box-shadow: var(--focus); }
+    .errorText { min-height: 18px; font-size: var(--fs-2); color: rgba(251,113,133,.95); }
+
+    .mapWrap { margin-top: 10px; display:grid; gap: 8px; }
+    .map {
+      width: 100%;
+      min-height: 340px;
+      border-radius: 14px;
+      border: 1px solid var(--border);
+      overflow: hidden;
+      background: rgba(255,255,255,.03);
     }
-    .stepDot.is-done {
-      border-color: rgba(74,222,128,.35);
-      background: rgba(74,222,128,.10);
+    @media (min-width: 900px) {
+      .map { min-height: 460px; }
     }
 
-    .footerNote { margin-top: var(--sp-5); text-align:center; opacity:.85; }
-    .ctaBar {
-      position: sticky;
-      bottom: 0; left:0; right:0;
-      z-index: 20;
-      padding: var(--sp-3) var(--sp-4);
-      padding-bottom: calc(var(--sp-3) + env(safe-area-inset-bottom, 0px));
-      background: rgba(5,10,20,.75);
-      border-top: 1px solid var(--border);
-      backdrop-filter: blur(10px);
-    }
-    .ctaBar__inner { max-width: var(--container); margin: 0 auto; display:flex; gap: var(--sp-2); }
-    .ctaBar__inner .btn { flex: 1; }
+    .footerNote { margin-top: var(--sp-6); text-align:center; opacity:.85; }
   </style>
 
   <!-- ==========================================================
-       BLOCK 8 — Script (KRAV: koppla riktig logic)
+       BLOCK 7 — Leaflet JS (CDN) + participant map logic
   =========================================================== -->
-  <script type="module" src="../src/party.js"></script>
+  <script
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+    crossorigin=""
+  ></script>
+
+  <script type="module" src="../src/party-map.js"></script>
 </body>
 </html>
