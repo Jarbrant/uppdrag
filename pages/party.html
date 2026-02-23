@@ -1,7 +1,8 @@
 <!-- ============================================================
      FIL: pages/party.html  (HEL FIL)
      AO 4/8 (FAS 1.5) — Deltagarvy: karta + checkpoint 1 + kod-inmatning
-     Mål: Deltagare ser karta och första checkpoint + kodfält.
+     AO 6/8 (FAS 2.0) — Fog-of-war “papper/sepia”-look (theme hooks + fog wrapper)
+     Mål: Deltagare ser karta + checkpoint + kodfält, med sepia/paper-tema + fog-känsla
      Policy: UI-only, mobil-first, Leaflet via CDN (OK)
 ============================================================ -->
 <!doctype html>
@@ -17,7 +18,7 @@
   <link rel="stylesheet" href="../styles/main.css" />
 
   <!-- ==========================================================
-       BLOCK 1.1 — Leaflet CSS (CDN)  (AO 4/8)
+       BLOCK 1.1 — Leaflet CSS (CDN)
   =========================================================== -->
   <link
     rel="stylesheet"
@@ -27,7 +28,8 @@
   />
 </head>
 
-<body>
+<!-- AO 6/8: theme hook -->
+<body class="theme-party">
   <!-- ==========================================================
        BLOCK 2 — Skip link (A11y light)
   =========================================================== -->
@@ -36,11 +38,12 @@
   <!-- ==========================================================
        BLOCK 3 — App Root
   =========================================================== -->
-  <div id="app" class="app"> <!-- HOOK: app-root -->
+  <div id="app" class="app partyApp"> <!-- HOOK: app-root -->
+
     <!-- ========================================================
          BLOCK 4 — Header
     ========================================================= -->
-    <header class="topbar">
+    <header class="topbar partyTopbar">
       <div class="topbar__inner">
         <div class="row row--header">
           <button id="backBtn" class="btn btn-ghost btn--icon" type="button" aria-label="Tillbaka">
@@ -72,7 +75,7 @@
         <div id="statusSlot" class="slot" aria-live="polite"></div> <!-- HOOK: status-slot -->
 
         <!-- Karta -->
-        <section class="card" aria-label="Karta">
+        <section class="card paperCard" aria-label="Karta">
           <div class="card__head">
             <div class="card__meta">
               <h1 class="h2" style="margin:0">Karta</h1>
@@ -82,16 +85,22 @@
             </div>
           </div>
 
-          <div class="mapWrap">
-            <div id="partyMap" class="map" role="application" aria-label="Karta"></div>
+          <!-- AO 6/8: fog wrapper runt kartan -->
+          <div class="mapWrap fogWrap">
+            <div id="partyMap" class="map partyMap" role="application" aria-label="Karta"></div>
             <!-- HOOK: party-map -->
+
+            <!-- Fog overlay (CSS-only känsla). JS behövs inte. -->
+            <div class="fogOverlay" aria-hidden="true"></div>
+            <!-- HOOK: fog-overlay -->
+
             <div id="mapError" class="errorText" role="alert"></div>
             <!-- HOOK: map-error -->
           </div>
         </section>
 
         <!-- Checkpoint 1 panel -->
-        <section class="card" aria-label="Checkpoint 1">
+        <section class="card paperCard" aria-label="Checkpoint 1">
           <div class="card__head">
             <div class="card__meta">
               <h2 class="h2" style="margin:0">Checkpoint 1</h2>
@@ -125,14 +134,14 @@
         </section>
 
         <div class="muted small footerNote">
-          Deltagarvy (AO 4/8). Startar från payload/partyId. Fail-closed om data saknas.
+          Deltagarvy (AO 6/8). Sepia/paper-tema + fog-känsla. Fail-closed om data saknas.
         </div>
       </div>
     </main>
   </div>
 
   <!-- ==========================================================
-       BLOCK 6 — Page-only inline styles
+       BLOCK 6 — Page-only inline styles (lämnas minimal; tema ligger i main.css)
   =========================================================== -->
   <style>
     .row { display:flex; align-items:center; gap: var(--sp-3); }
@@ -164,7 +173,7 @@
     .input:focus-visible { box-shadow: var(--focus); }
     .errorText { min-height: 18px; font-size: var(--fs-2); color: rgba(251,113,133,.95); }
 
-    .mapWrap { margin-top: 10px; display:grid; gap: 8px; }
+    .mapWrap { margin-top: 10px; display:grid; gap: 8px; position: relative; }
     .map {
       width: 100%;
       min-height: 340px;
@@ -178,6 +187,14 @@
     }
 
     .footerNote { margin-top: var(--sp-6); text-align:center; opacity:.85; }
+
+    /* Fog overlay positioning */
+    .fogOverlay {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      border-radius: 14px;
+    }
   </style>
 
   <!-- ==========================================================
