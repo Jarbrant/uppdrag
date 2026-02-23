@@ -2,8 +2,61 @@
   "id": "skogsrundan",
   "name": "Skogsrundan (Demo)",
   "missions": [
-    { "id": "m1", "title": "Hitta en vitsippa", "instruction": "Ta ett foto på en vitsippa.", "difficulty": "easy", "points": 10, "xp": 20 },
-    { "id": "m2", "title": "Hitta en tall", "instruction": "Ta ett foto på en tall.", "difficulty": "easy", "points": 10, "xp": 20 },
-    { "id": "m3", "title": "Hitta en kotte", "instruction": "Ta ett foto på en kotte.", "difficulty": "easy", "points": 10, "xp": 20 }
+    {
+      "id": "m1_vitsippa",
+      "title": "Hitta en vitsippa",
+      "instruction": "Ta ett foto på en vitsippa.",
+      "difficulty": "easy",
+      "points": 10,
+      "xp": 20
+    },
+    {
+      "id": "m2_tall",
+      "title": "Hitta en tall",
+      "instruction": "Ta ett foto på en tall.",
+      "difficulty": "easy",
+      "points": 10,
+      "xp": 20
+    },
+    {
+      "id": "m3_kotte",
+      "title": "Hitta en kotte",
+      "instruction": "Ta ett foto på en kotte.",
+      "difficulty": "easy",
+      "points": 10,
+      "xp": 20
+    },
+    {
+      "id": "m4_mossa",
+      "title": "Hitta mossa",
+      "instruction": "Ta ett foto på mossa (på mark, sten eller träd).",
+      "difficulty": "easy",
+      "points": 10,
+      "xp": 20
+    },
+    {
+      "id": "m5_stig",
+      "title": "Hitta en stigskylt",
+      "instruction": "Ta ett foto på en skylt/markering som visar en stig eller led.",
+      "difficulty": "easy",
+      "points": 15,
+      "xp": 25
+    },
+    {
+      "id": "m6_spår",
+      "title": "Normal: Hitta djurspår",
+      "instruction": "Ta ett foto på spår i marken (t.ex. tassavtryck) eller tydliga tecken på djur.",
+      "difficulty": "normal",
+      "points": 25,
+      "xp": 35
+    },
+    {
+      "id": "m7_bark",
+      "title": "Normal: Hitta en bark-textur",
+      "instruction": "Ta ett foto på bark med tydlig struktur (sprickor/mönster).",
+      "difficulty": "normal",
+      "points": 25,
+      "xp": 35
+    }
   ]
 }
