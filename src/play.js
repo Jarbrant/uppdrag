@@ -1,13 +1,15 @@
 /* ============================================================
    FIL: src/play.js  (HEL FIL)
-   AO 1/6 + AO 2/6 + AO 3/6 (FAS 1.1) — Difficulty toggle + unlock overlay
+   AO 1/6 + AO 2/6 + AO 3/6 + AO 4/6 (FAS 1.1) — Boss-uppdrag (valfritt)
    Mål:
-   - Spelaren kan välja Easy/Normal
-   - Normal är låst tills engine.isNormalUnlocked(state) == true
-   KRAV:
-   - Normal-knapp disabled + "Lås upp efter 15 klarade" info när låst
-   - När Normal låses upp: UI uppdateras utan reload
-   - Fail-closed: om store saknas -> felruta + tillbaka
+   - Pack kan ha missions med isBoss:true (0..N)
+   - Boss ska bara kunna göras en gång per "runda"
+   - UI: “Boss (valfritt)” visas när spelaren klarat 5 uppdrag i rundan
+         (eller när missionpoolen tar slut) — enkel stabil regel
+   Fail-closed:
+   - inga boss-missions => ingen boss-UI visas
+   Kodkrav:
+   - Inlinekommentar: definition av “runda” (lokalt i play-state, ej ny storage-key)
 ============================================================ */
 
 /* ============================================================
@@ -24,14 +26,10 @@ import { createCamera } from './camera.js';
    BLOCK 2 — Fail-closed: store must exist
 ============================================================ */
 let store;
-try {
-  store = createStore(); // HOOK: store
-} catch (_) {
-  store = null;
-}
+try { store = createStore(); } catch (_) { store = null; }
 
 /* ============================================================
-   BLOCK 3 — DOM hooks (KRAV)
+   BLOCK 3 — DOM hooks
 ============================================================ */
 const $ = (sel) => document.querySelector(sel);
 
@@ -53,7 +51,6 @@ const elMissionsList = $('#missionsList');    // HOOK: missions-list
 const elComplete = $('#completeBtn');         // HOOK: complete-button
 const elSwitch = $('#switchBtn');             // HOOK: switch-mission-button
 
-// Difficulty toggle hooks
 const elDiffEasy = $('#diffEasyBtn');         // HOOK: diff-easy
 const elDiffNormal = $('#diffNormalBtn');     // HOOK: diff-normal
 const elDifficultyInfo = $('#difficultyInfo'); // HOOK: difficulty-info
@@ -79,7 +76,19 @@ let cameraMountPoint = null; // HOOK: camera-mount-point
 const warnedDifficulty = new Set();
 
 /* ============================================================
-   BLOCK 5 — Helpers
+   BLOCK 5 — Boss-round state (KRAV)
+   Definition “runda” (KRAV inline):
+   - En runda = en session i denna play-view (minnesstate i play.js).
+   - Den startar när sidan laddas och nollas vid reload/navigation.
+   - Ingen ny storage-key i FAS 1.1.
+============================================================ */
+const ROUND_TARGET = 5;      // enkel stabil regel (5 uppdrag i rundan)
+let roundCompleted = 0;      // antal klarade (icke-boss) i denna runda
+let bossDoneThisRound = false; // boss får bara göras 1 gång per runda
+let bossOfferVisible = false;  // UI-state i minne
+
+/* ============================================================
+   BLOCK 6 — Helpers
 ============================================================ */
 function safeText(x) { return (x ?? '').toString(); }
 
@@ -108,7 +117,9 @@ function showFatal(message) {
 }
 
 /* ============================================================
-   BLOCK 6 — Mission shape + difficulty normalize (KRAV)
+   BLOCK 7 — Mission shape + difficulty + boss (KRAV)
+   mission shape:
+   { id?, title|name, instruction|text|hint, difficulty?, points?, xp?, isBoss?: boolean }
 ============================================================ */
 function missionTitleOf(m, i) {
   const t = safeText(m?.title ?? m?.name).trim();
@@ -122,7 +133,6 @@ function missionInstructionOf(m) {
 
 function normalizeDifficulty(m) {
   const raw = safeText(m?.difficulty).trim().toLowerCase();
-
   if (!raw) return 'easy';
   if (raw === 'easy' || raw === 'normal') return raw;
 
@@ -134,17 +144,35 @@ function normalizeDifficulty(m) {
   return 'easy';
 }
 
+function isBossMission(m) {
+  return m?.isBoss === true;
+}
+
 function filteredMissionIndexes() {
   const missions = Array.isArray(pack?.missions) ? pack.missions : [];
   const idxs = [];
   for (let i = 0; i < missions.length; i++) {
-    if (normalizeDifficulty(missions[i]) === activeDifficulty) idxs.push(i);
+    const m = missions[i];
+    // Boss ska inte ligga i vanliga listan (visas via “Boss (valfritt)”)
+    if (isBossMission(m)) continue;
+    if (normalizeDifficulty(m) === activeDifficulty) idxs.push(i);
+  }
+  return idxs;
+}
+
+function bossMissionIndexesForDifficulty() {
+  const missions = Array.isArray(pack?.missions) ? pack.missions : [];
+  const idxs = [];
+  for (let i = 0; i < missions.length; i++) {
+    const m = missions[i];
+    if (!isBossMission(m)) continue;
+    if (normalizeDifficulty(m) === activeDifficulty) idxs.push(i);
   }
   return idxs;
 }
 
 /* ============================================================
-   BLOCK 7 — Unlock UI state (KRAV)
+   BLOCK 8 — Unlock UI state (AO 3/6)
 ============================================================ */
 function updateUnlockUI() {
   if (!store) return;
@@ -154,13 +182,11 @@ function updateUnlockUI() {
   const done = getCompletedCount(s);
   const left = Math.max(0, NORMAL_UNLOCK_AFTER - done);
 
-  // Normal button disabled/aria
   if (elDiffNormal) {
     elDiffNormal.disabled = !unlocked;
     elDiffNormal.setAttribute('aria-disabled', unlocked ? 'false' : 'true');
   }
 
-  // Lock hint row + text
   if (elUnlockHintRow) elUnlockHintRow.hidden = unlocked;
   if (elUnlockHintText) {
     elUnlockHintText.textContent = unlocked
@@ -168,14 +194,12 @@ function updateUnlockUI() {
       : `Lås upp efter ${NORMAL_UNLOCK_AFTER} klarade (${left} kvar)`;
   }
 
-  // Info text
   if (elDifficultyInfo) {
     elDifficultyInfo.textContent = unlocked
       ? 'Välj nivå för att filtrera uppdrag.'
       : `Normal är låst. Klara ${left} till för att låsa upp.`;
   }
 
-  // Om vi står på normal men den är låst (fail-closed) -> tvinga easy
   if (!unlocked && activeDifficulty === 'normal') {
     activeDifficulty = 'easy';
     setDifficultyUI();
@@ -186,7 +210,6 @@ function updateUnlockUI() {
 }
 
 function setDifficultyUI() {
-  // Active classes + aria-selected
   if (elDiffEasy) {
     const a = activeDifficulty === 'easy';
     elDiffEasy.classList.toggle('is-active', a);
@@ -200,7 +223,104 @@ function setDifficultyUI() {
 }
 
 /* ============================================================
-   BLOCK 8 — Render: progress
+   BLOCK 9 — Boss offer UI (AO 4/6)
+   Regel:
+   - Visa boss-offer när roundCompleted >= 5
+     ELLER när missionpoolen (i filtret) är slut.
+   - Boss kan göras 1 gång per runda.
+   - Fail-closed: inga boss-missions => visa inte.
+============================================================ */
+function shouldOfferBoss() {
+  if (bossDoneThisRound) return false;
+
+  const bossIdxs = bossMissionIndexesForDifficulty();
+  if (!bossIdxs.length) return false; // Fail-closed
+
+  // Regel A: efter 5 klarade i rundan
+  if (roundCompleted >= ROUND_TARGET) return true;
+
+  // Regel B: när poolen tar slut i filtret
+  const idxs = filteredMissionIndexes();
+  if (!idxs.length) return true;
+
+  return false;
+}
+
+function maybeShowBossOfferToast() {
+  const offer = shouldOfferBoss();
+  if (offer && !bossOfferVisible) {
+    bossOfferVisible = true;
+    toast('Boss (valfritt) är nu tillgänglig!', 'info', { ttlMs: 2200 });
+  }
+  if (!offer) bossOfferVisible = false;
+}
+
+function openBossDialog() {
+  const bossIdxs = bossMissionIndexesForDifficulty();
+  if (!bossIdxs.length) {
+    toast('Ingen boss finns i detta paket.', 'info', { ttlMs: 1600 });
+    return;
+  }
+  if (bossDoneThisRound) {
+    toast('Boss är redan gjord i denna runda.', 'warn', { ttlMs: 1600 });
+    return;
+  }
+  if (!shouldOfferBoss()) {
+    toast(`Boss låses upp efter ${ROUND_TARGET} klarade i rundan.`, 'info', { ttlMs: 1800 });
+    return;
+  }
+
+  const missions = pack.missions;
+
+  const body = document.createElement('div');
+  body.style.display = 'grid';
+  body.style.gap = '8px';
+
+  const info = document.createElement('div');
+  info.className = 'muted small';
+  info.textContent = 'Boss är valfri och kan göras en gång per runda.';
+  body.appendChild(info);
+
+  bossIdxs.forEach((origIndex, i) => {
+    const m = missions[origIndex];
+    const b = document.createElement('button');
+    b.className = 'btn btn-primary';
+    b.type = 'button';
+    b.textContent = `${i + 1}. ${missionTitleOf(m, origIndex)}`;
+
+    b.addEventListener('click', () => {
+      setActiveBossMission(origIndex);
+      toast('Boss vald.', 'success', { ttlMs: 1200 });
+    });
+
+    body.appendChild(b);
+  });
+
+  modal({
+    title: 'Boss (valfritt)',
+    body,
+    secondary: { label: 'Stäng', variant: 'ghost' }
+  });
+}
+
+function setActiveBossMission(origIndex) {
+  const missions = Array.isArray(pack?.missions) ? pack.missions : [];
+  const idx = Number(origIndex);
+  if (!Number.isFinite(idx) || idx < 0 || idx >= missions.length) return;
+
+  const m = missions[idx];
+  if (!isBossMission(m)) return;
+
+  // Boss måste matcha difficulty-filter (stabilt)
+  if (normalizeDifficulty(m) !== activeDifficulty) return;
+
+  activeIndex = idx;
+  renderMissionList();
+  renderActiveMission();
+}
+
+/* ============================================================
+   BLOCK 10 — Render: progress
 ============================================================ */
 function renderProgress() {
   if (!store) return;
@@ -217,7 +337,7 @@ function renderPackHeader() {
 }
 
 /* ============================================================
-   BLOCK 9 — Camera UI
+   BLOCK 11 — Camera UI
 ============================================================ */
 function ensureCameraUI() {
   if (!elMissionCard) return;
@@ -239,7 +359,7 @@ function ensureCameraUI() {
 }
 
 /* ============================================================
-   BLOCK 10 — CTA state (mission + foto)
+   BLOCK 12 — CTA state
 ============================================================ */
 function updateCTAState({ hasPhoto } = {}) {
   const missions = Array.isArray(pack?.missions) ? pack.missions : [];
@@ -252,7 +372,7 @@ function updateCTAState({ hasPhoto } = {}) {
 }
 
 /* ============================================================
-   BLOCK 11 — Render list + active mission
+   BLOCK 13 — Render list + active mission
 ============================================================ */
 function renderMissionList() {
   clear(elMissionsList);
@@ -267,11 +387,52 @@ function renderMissionList() {
 
   const idxs = filteredMissionIndexes();
   if (!idxs.length) {
+    // Pool slut => boss kan triggas
+    maybeShowBossOfferToast();
+
     elMissionsList.appendChild(renderErrorCard(
-      `Inga uppdrag på "${activeDifficulty}" i detta paket.`,
-      [{ label: 'Byt till Easy', variant: 'primary', onClick: () => setDifficulty('easy') }]
+      `Inga fler uppdrag på "${activeDifficulty}" i denna runda.`,
+      [
+        { label: 'Boss (valfritt)', variant: 'primary', onClick: () => openBossDialog() },
+        { label: 'Byt till Easy', variant: 'ghost', onClick: () => setDifficulty('easy') }
+      ]
     ));
     return;
+  }
+
+  // Boss CTA-rad (valfritt) – bara om offer är aktivt
+  maybeShowBossOfferToast();
+  if (shouldOfferBoss()) {
+    const bossRow = document.createElement('div');
+    bossRow.className = 'card card--info';
+    bossRow.style.marginBottom = '10px';
+
+    const title = document.createElement('div');
+    title.style.fontWeight = '900';
+    title.textContent = 'Boss (valfritt)';
+
+    const desc = document.createElement('div');
+    desc.className = 'muted small';
+    desc.textContent = bossDoneThisRound
+      ? 'Boss är redan gjord i denna runda.'
+      : `Tillgänglig nu. (1 gång per runda)`;
+
+    const actions = document.createElement('div');
+    actions.className = 'card__actions';
+
+    const btn = document.createElement('button');
+    btn.className = 'btn btn-primary';
+    btn.type = 'button';
+    btn.textContent = bossDoneThisRound ? 'Boss klar' : 'Välj Boss';
+    btn.disabled = bossDoneThisRound;
+    btn.addEventListener('click', () => openBossDialog());
+
+    actions.appendChild(btn);
+    bossRow.appendChild(title);
+    bossRow.appendChild(desc);
+    bossRow.appendChild(actions);
+
+    elMissionsList.appendChild(bossRow);
   }
 
   idxs.forEach((origIndex) => {
@@ -331,9 +492,12 @@ function renderActiveMission() {
 
   if (elMissionCard) elMissionCard.hidden = false;
 
+  const d = normalizeDifficulty(m);
+  const bossTag = isBossMission(m) ? ' • Boss' : '';
+
   setText(elMissionTitle, missionTitleOf(m, activeIndex));
   setText(elMissionInstruction, missionInstructionOf(m));
-  setText(elDifficultyPill, normalizeDifficulty(m)); // KRAV: pill på missionkort
+  setText(elDifficultyPill, `${d}${bossTag}`); // UI: visar att det är boss
   setText(elActiveMissionPill, `Aktivt: ${activeIndex + 1}/${missions.length}`);
 
   ensureCameraUI();
@@ -347,7 +511,7 @@ function renderActiveMission() {
 }
 
 /* ============================================================
-   BLOCK 12 — Controller actions
+   BLOCK 14 — Controller actions
 ============================================================ */
 function setActiveMission(origIndex) {
   const missions = Array.isArray(pack?.missions) ? pack.missions : [];
@@ -356,8 +520,10 @@ function setActiveMission(origIndex) {
   const idx = Number(origIndex);
   if (!Number.isFinite(idx) || idx < 0 || idx >= missions.length) return;
 
-  // Guard: mission måste matcha filter
-  if (normalizeDifficulty(missions[idx]) !== activeDifficulty) return;
+  // Guard: mission måste matcha filter och inte vara boss (boss hanteras separat)
+  const m = missions[idx];
+  if (isBossMission(m)) return;
+  if (normalizeDifficulty(m) !== activeDifficulty) return;
 
   activeIndex = idx;
   renderMissionList();
@@ -373,7 +539,6 @@ function autoSelectFirstInFilter() {
 function setDifficulty(next) {
   const n = safeText(next).toLowerCase() === 'normal' ? 'normal' : 'easy';
 
-  // Fail-closed: normal får inte väljas om låst
   if (n === 'normal' && store && !isNormalUnlocked(store.getState())) {
     toast(`Normal är låst. ${elUnlockHintText?.textContent || ''}`, 'warn', { ttlMs: 2200 });
     return;
@@ -381,6 +546,8 @@ function setDifficulty(next) {
 
   activeDifficulty = n;
   setDifficultyUI();
+
+  // Ny difficulty => "runda" fortsätter (vi nollställer inte runda här)
   renderMissionList();
   autoSelectFirstInFilter();
 }
@@ -396,7 +563,7 @@ function completeActiveMission() {
   const m = missions[activeIndex];
   if (!m) return;
 
-  const file = camera?.getFile?.() || null; // HOOK: photo-file
+  const file = camera?.getFile?.() || null;
   if (!file) {
     toast('Du måste ta/välja en bild innan du kan markera “Klar”.', 'warn', { ttlMs: 2200 });
     updateCTAState({ hasPhoto: false });
@@ -411,7 +578,7 @@ function completeActiveMission() {
   const award = getAwardForMission(m);
 
   const res = store.update((s) => {
-    const nextState = awardMissionComplete(s, award); // AO 2/6: increments completedCount
+    const nextState = awardMissionComplete(s, award);
     return nextState || s;
   });
 
@@ -420,9 +587,16 @@ function completeActiveMission() {
     return;
   }
 
-  renderProgress();
+  // Runda-logik (KRAV):
+  // - Endast “vanliga” missions räknas mot ROUND_TARGET
+  // - Boss får bara 1 gång per runda
+  if (isBossMission(m)) {
+    bossDoneThisRound = true;
+  } else {
+    roundCompleted += 1;
+  }
 
-  // KRAV: när Normal låses upp -> UI uppdateras utan reload
+  renderProgress();
   updateUnlockUI();
 
   toast(`Klar! +${award.points}p • +${award.xp}xp`, 'success');
@@ -430,7 +604,23 @@ function completeActiveMission() {
   if (camera) camera.clear();
   updateCTAState({ hasPhoto: false });
 
-  // auto-advance inom filter
+  // Boss-offer kan triggas efter completion
+  maybeShowBossOfferToast();
+
+  // Auto-advance:
+  // - Om boss just gjord -> återgå till vanliga poolen (om finns)
+  // - Annars -> nästa i filtret
+  if (isBossMission(m)) {
+    const idxs = filteredMissionIndexes();
+    if (idxs.length) setActiveMission(idxs[0]);
+    else {
+      renderMissionList();
+      renderActiveMission();
+      toast('Rundan klar (inga fler uppdrag).', 'info', { ttlMs: 1800 });
+    }
+    return;
+  }
+
   const idxs = filteredMissionIndexes();
   const pos = idxs.indexOf(activeIndex);
   const nextOrig = pos >= 0 && pos + 1 < idxs.length ? idxs[pos + 1] : null;
@@ -439,7 +629,7 @@ function completeActiveMission() {
   else {
     renderMissionList();
     renderActiveMission();
-    toast(`Alla "${activeDifficulty}"-uppdrag klara (för nu).`, 'info', { ttlMs: 1800 });
+    toast(`Uppdragspoolen är slut.`, 'info', { ttlMs: 1600 });
   }
 }
 
@@ -451,6 +641,16 @@ function openSwitchMissionDialog() {
   const body = document.createElement('div');
   body.style.display = 'grid';
   body.style.gap = '8px';
+
+  // Boss CTA som första val (om tillgänglig)
+  if (shouldOfferBoss() && !bossDoneThisRound && bossMissionIndexesForDifficulty().length) {
+    const bossBtn = document.createElement('button');
+    bossBtn.className = 'btn btn-primary';
+    bossBtn.type = 'button';
+    bossBtn.textContent = 'Boss (valfritt)';
+    bossBtn.addEventListener('click', () => openBossDialog());
+    body.appendChild(bossBtn);
+  }
 
   idxs.forEach((origIndex, i) => {
     const m = missions[origIndex];
@@ -471,13 +671,13 @@ function openSwitchMissionDialog() {
 }
 
 /* ============================================================
-   BLOCK 13 — Boot
+   BLOCK 15 — Boot
 ============================================================ */
 (function bootPlay() {
   'use strict';
 
-  if (window.__FAS11_AO3_PLAY_INIT__) return; // HOOK: init-guard-play
-  window.__FAS11_AO3_PLAY_INIT__ = true;
+  if (window.__FAS11_AO4_PLAY_INIT__) return;
+  window.__FAS11_AO4_PLAY_INIT__ = true;
 
   if (!store) {
     showFatal('Store saknas. Kan inte starta säkert.');
@@ -503,13 +703,11 @@ function openSwitchMissionDialog() {
   if (elComplete) elComplete.addEventListener('click', completeActiveMission);
   if (elSwitch) elSwitch.addEventListener('click', openSwitchMissionDialog);
 
-  // Difficulty button binds
   if (elDiffEasy) elDiffEasy.addEventListener('click', () => setDifficulty('easy'));
   if (elDiffNormal) elDiffNormal.addEventListener('click', () => setDifficulty('normal'));
 
   safeDisable(elComplete, true);
 
-  // Loading
   clear(elStatusSlot);
   const loading = document.createElement('div');
   loading.className = 'toast toast--info';
@@ -529,20 +727,24 @@ function openSwitchMissionDialog() {
       clear(elStatusSlot);
       renderPackHeader();
 
-      // initial easy
+      // Initial filter: easy
       activeDifficulty = 'easy';
       setDifficultyUI();
-
-      // unlock UI state based on store.completedCount
       updateUnlockUI();
+
+      // Round resets on page load (KRAV: in-memory)
+      roundCompleted = 0;
+      bossDoneThisRound = false;
+      bossOfferVisible = false;
 
       renderMissionList();
       autoSelectFirstInFilter();
 
-      // Live updates: unlock can flip when completedCount changes in this tab
       store.subscribe(() => {
         renderProgress();
-        updateUnlockUI(); // KRAV: uppdateras utan reload
+        updateUnlockUI();
+        // Boss-offer kan ändras pga user action i samma tab (men round state är lokalt)
+        renderMissionList();
       });
     } catch (e) {
       const code = safeText(e?.code || 'UNKNOWN');
