@@ -1,9 +1,12 @@
 /* ============================================================
    FIL: src/party.js  (HEL FIL)
    AO 10/15 (PATCH) — Party logic (checkpoint progression + poäng)
+   AO 6/6 (FAS 1.2) — Starta party via payload (admin-export)
    FIX:
    - Subpath-safe data URLs via import.meta.url (GitHub Pages /uppdrag/)
    - Fail-closed redirect till ../index.html (inte /index.html)
+   - Payload-stöd: mode=party&payload=... (id optional)
+   - Stepper byggs dynamiskt efter pack-längd (1..20)
    Mål: Party-läge ger poäng per checkpoint, sparar lokalt.
 ============================================================ */
 
@@ -167,6 +170,111 @@ async function loadPartyPack(partyId) {
 }
 
 /* ============================================================
+   BLOCK 6.1 — AO 6/6: payload → pack (fail-closed)
+   - Admin-export skickar draft shape:
+     { version:1, name, checkpointCount, pointsPerCheckpoint, clues[] }
+   - Vi bygger ett "partyPack" i samma shape som loadPartyPack() levererar.
+============================================================ */
+function safeDecodePayload(raw) {
+  const s = (raw ?? '').toString().trim();
+  if (!s) return { ok: false, value: '' };
+
+  // decode 1 gång
+  try {
+    const once = decodeURIComponent(s);
+    // prova decode 2 ggr om det ser dubbelkodat ut
+    try {
+      const twice = decodeURIComponent(once);
+      const best = looksLikeJSON(twice) ? twice : once;
+      return { ok: true, value: best };
+    } catch (_) {
+      return { ok: true, value: once };
+    }
+  } catch (_) {
+    // kanske redan plain
+    return { ok: true, value: s };
+  }
+}
+
+function looksLikeJSON(str) {
+  const t = (str ?? '').toString().trim();
+  return (t.startsWith('{') && t.endsWith('}')) || (t.startsWith('[') && t.endsWith(']'));
+}
+
+function safeJSONParseLocal(str) {
+  try {
+    return { ok: true, value: JSON.parse(str) };
+  } catch (_) {
+    return { ok: false, value: null };
+  }
+}
+
+function clampInt(n, min, max) {
+  const x = Math.floor(Number(n));
+  if (!Number.isFinite(x)) return min;
+  return Math.max(min, Math.min(max, x));
+}
+
+function isValidDraftPayload(obj) {
+  if (!isPlainObject(obj)) return false;
+
+  const v = Number(obj.version);
+  if (!Number.isFinite(v) || v !== 1) return false;
+
+  const name = asTextSafe(obj.name);
+  if (name.length < 2 || name.length > 60) return false;
+
+  const cc = Number(obj.checkpointCount);
+  if (!Number.isFinite(cc) || cc < 1 || cc > 20) return false;
+
+  const pp = Number(obj.pointsPerCheckpoint);
+  if (!Number.isFinite(pp) || pp < 0 || pp > 1000) return false;
+
+  if (!Array.isArray(obj.clues) || obj.clues.length !== cc) return false;
+
+  for (let i = 0; i < obj.clues.length; i++) {
+    const t = asTextSafe(obj.clues[i]);
+    if (t.length < 3 || t.length > 140) return false;
+  }
+
+  return true;
+}
+
+// Stabil "id" för payload utan att lagra något: enkel deterministisk hash av payload-JSON.
+function hashStringDJB2(input) {
+  const s = (input ?? '').toString();
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) {
+    h = ((h << 5) + h) + s.charCodeAt(i);
+    h = h >>> 0;
+  }
+  return h.toString(36);
+}
+
+function buildPartyPackFromDraftPayload(payloadRaw, payloadObj) {
+  const name = asTextSafe(payloadObj.name);
+  const cc = clampInt(payloadObj.checkpointCount, 1, 20);
+  const pp = clampInt(payloadObj.pointsPerCheckpoint, 0, 1000);
+
+  const clues = payloadObj.clues.map((c) => asTextSafe(c));
+
+  const id = `payload_${hashStringDJB2(payloadRaw)}`; // stabilt mellan reload så länge payload är samma
+  const checkpoints = clues.slice(0, cc).map((clue, i) => ({
+    index: i,
+    clue,
+    points: pp,
+    xp: pp // enkel baseline: xp = points (kan justeras senare utan att bryta)
+  }));
+
+  return {
+    id,
+    name,
+    displayName: name,
+    checkpoints
+  };
+}
+
+/* ============================================================
    BLOCK 7 — Progress model (utan ny store-shape)
 ============================================================ */
 function getCompletedSet(state, partyId) {
@@ -213,6 +321,26 @@ function ensurePrevButton() {
   else bar.appendChild(prev);
 
   return prev;
+}
+
+// AO 6/6: stepper kan vara 1..20, så vi bygger den dynamiskt
+function ensureStepperDots(total) {
+  if (!elStepper) return;
+
+  const t = clampInt(total, 1, 20);
+
+  // Rebuild alltid när pack laddas (enkel, stabilt)
+  elStepper.innerHTML = '';
+
+  for (let i = 1; i <= t; i++) {
+    const btn = document.createElement('button');
+    btn.className = 'stepDot' + (i === 1 ? ' is-active' : '');
+    btn.type = 'button';
+    btn.setAttribute('data-step', String(i));
+    btn.setAttribute('aria-label', `Steg ${i}`);
+    btn.textContent = String(i);
+    elStepper.appendChild(btn);
+  }
 }
 
 function setActiveDot(stepIndex) {
@@ -341,13 +469,12 @@ function goPrev() {
   if (window.__AO10_PARTY_INIT__) return; // HOOK: init-guard-party
   window.__AO10_PARTY_INIT__ = true;
 
-  const mode = qsGet('mode'); // HOOK: qs-mode
-  const id = qsGet('id');     // HOOK: qs-id (partyId)
+  const mode = qsGet('mode');      // HOOK: qs-mode
+  const id = qsGet('id');          // HOOK: qs-id (partyId)
+  const payload = qsGet('payload'); // HOOK: qs-payload (AO 6/6)
 
-  if (!mode || !id) return redirectToIndex('PARTY_MISSING_PARAMS');
+  if (!mode) return redirectToIndex('PARTY_MISSING_PARAMS');
   if (mode !== 'party') return redirectToIndex('PARTY_MODE_REQUIRED');
-
-  partyId = id;
 
   store.init();
 
@@ -363,20 +490,58 @@ function goPrev() {
 
   if (elNextBtn) elNextBtn.addEventListener('click', (e) => { e.preventDefault(); awardIfNeededAndAdvance(); });
 
-  const dots = Array.from(elStepper?.querySelectorAll?.('.stepDot') || []);
-  dots.forEach((d) => {
-    d.addEventListener('click', () => {
-      const s = Number(d.getAttribute('data-step'));
-      const idx = s - 1;
-      if (!Number.isFinite(idx) || idx < 0) return;
-      stepIndex = idx;
-      renderStep();
+  // Klick på dots: (binds efter vi byggt steppern)
+  function bindDotClicks() {
+    const dots = Array.from(elStepper?.querySelectorAll?.('.stepDot') || []);
+    dots.forEach((d) => {
+      d.addEventListener('click', () => {
+        const s = Number(d.getAttribute('data-step'));
+        const idx = s - 1;
+        if (!Number.isFinite(idx) || idx < 0) return;
+        stepIndex = idx;
+        renderStep();
+      });
     });
-  });
+  }
 
   (async () => {
     try {
+      // =======================================================
+      // AO 6/6: payload prioriteras om den finns
+      // =======================================================
+      if (payload) {
+        const dec = safeDecodePayload(payload);
+        if (!dec.ok) return redirectToIndex('INVALID_PAYLOAD');
+
+        const parsed = safeJSONParseLocal(dec.value);
+        if (!parsed.ok) return redirectToIndex('INVALID_PAYLOAD');
+
+        if (!isValidDraftPayload(parsed.value)) return redirectToIndex('INVALID_PAYLOAD');
+
+        const pack = buildPartyPackFromDraftPayload(dec.value, parsed.value);
+        partyId = pack.id;
+        partyPack = pack;
+
+        ensureStepperDots(partyPack.checkpoints.length); // dynamiskt 1..20
+        bindDotClicks();
+
+        renderStep();
+        store.subscribe(() => renderStep());
+        return;
+      }
+
+      // =======================================================
+      // Legacy/demo: id krävs (oförändrat beteende)
+      // =======================================================
+      if (!id) return redirectToIndex('PARTY_MISSING_PARAMS');
+
+      partyId = id;
+
       partyPack = await loadPartyPack(partyId);
+
+      ensureStepperDots(partyPack.checkpoints.length); // dynamiskt även för demo
+      bindDotClicks();
+
       renderStep();
       store.subscribe(() => renderStep());
     } catch (e) {
