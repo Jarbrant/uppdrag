@@ -3,7 +3,9 @@
      AO 5/6 (FAS 1.2) — Admin UI: skapa skattjakt (lokalt, utan konto)
      AO 1/8 (FAS 1.5) — Admin: Leaflet-bas + kartcontainer + init
      NICE-TO-HAVE (FAS 2.1) — QR per checkpoint (UI hooks + container)
-     Mål: En vuxen kan skapa en jakt på plats + se karta + (valfritt) dela QR per checkpoint
+     PATCH (FAS 2.1) — ENKLARE FLOW: karta nära checkpoints + “Välj CP → klicka karta”
+     Städning: JA
+     Live preview: JA (kvar, men flyttad för bättre flow)
      Policy: UI-only, Leaflet via CDN (OK), fail-closed (inline errors), mobil-first
 ============================================================ -->
 <!doctype html>
@@ -69,19 +71,23 @@
     ========================================================= -->
     <main id="mainContent" class="main" role="main"> <!-- HOOK: main -->
       <div class="container">
-        <!-- Status / error slot (t.ex. storage read-only) -->
+        <!-- Status / error slot -->
         <div id="statusSlot" class="slot" aria-live="polite"></div> <!-- HOOK: status-slot -->
 
-        <div class="grid2">
-          <!-- ====================================================
-               BLOCK 6 — Form
-          ===================================================== -->
-          <section class="card" aria-label="Formulär">
+        <!-- ======================================================
+             BLOCK 6 — Arbetsyta (NY LAYOUT)
+             Mål: Kartan nära checkpoints (desktop: sticky höger, mobil: direkt efter editor)
+        ======================================================= -->
+        <div class="adminGrid">
+          <!-- =========================
+               BLOCK 6.1 — Vänster: Form + Checkpoints editor
+          ========================== -->
+          <section class="card" aria-label="Skapa jakt">
             <div class="card__head">
               <div class="card__meta">
                 <h1 class="h2" style="margin:0">Skapa jakt</h1>
                 <p class="muted small" style="margin:6px 0 0 0">
-                  Fyll i namn, antal checkpoints och ledtrådar. Utkast sparas lokalt.
+                  Rekommenderat flöde: <b>Välj checkpoint → klicka på karta</b> → skriv ledtråd/kod/radius.
                 </p>
               </div>
             </div>
@@ -119,10 +125,10 @@
                 <!-- HOOK: err-points-per -->
               </div>
 
-              <!-- Ledtrådar -->
+              <!-- Ledtrådar / Checkpoints -->
               <div class="field">
                 <div class="rowBetween">
-                  <label class="label2" for="cluesWrap">Ledtrådar (en per checkpoint)</label>
+                  <label class="label2" for="cluesWrap">Checkpoints (klicka en CP för att välja)</label>
                   <div class="miniRow">
                     <button id="addCpBtn" class="btn btn-ghost miniBtn" type="button">+ checkpoint</button>
                     <!-- HOOK: add-cp -->
@@ -131,8 +137,14 @@
                   </div>
                 </div>
 
-                <div id="cluesWrap" class="cluesWrap" aria-label="Ledtrådar">
-                  <!-- HOOK: clues-wrap (JS renderar inputs) -->
+                <!-- Aktiv CP hint (JS sätter) -->
+                <div class="activeHint muted small" aria-live="polite">
+                  Aktiv: <span id="activeCpLabel">—</span>
+                  <!-- HOOK: active-cp-label -->
+                </div>
+
+                <div id="cluesWrap" class="cluesWrap" aria-label="Checkpoints editor">
+                  <!-- HOOK: clues-wrap (JS renderar cp-rader) -->
                 </div>
 
                 <div id="errClues" class="errorText" role="alert"></div>
@@ -152,77 +164,83 @@
               </div>
 
               <p class="muted small" style="margin-top:10px">
-                Tips: När du är klar kan du exportera länk/JSON nedanför. QR per checkpoint finns som valfritt läge.
+                Export (länk/JSON) + QR per checkpoint ligger längre ned.
               </p>
             </form>
           </section>
 
-          <!-- ====================================================
-               BLOCK 7 — Live preview
-          ===================================================== -->
-          <section class="card" aria-label="Live preview">
+          <!-- =========================
+               BLOCK 6.2 — Höger: Karta (sticky)
+          ========================== -->
+          <section class="card stickyCard" aria-label="Karta">
             <div class="card__head">
               <div class="card__meta">
-                <h2 class="h2" style="margin:0">Live preview</h2>
+                <h2 class="h2" style="margin:0">Karta</h2>
                 <p class="muted small" style="margin:6px 0 0 0">
-                  Så här ser checkpoints ut (uppdateras direkt).
+                  <b>Välj checkpoint</b> i listan → <b>klicka på kartan</b> för att sätta plats.
                 </p>
               </div>
             </div>
 
-            <div class="preview">
-              <div class="previewTop">
-                <div class="label muted">Jakt</div>
-                <div id="previewName" class="value">—</div>
-                <!-- HOOK: preview-name -->
-              </div>
+            <div class="mapHintRow">
+              <span class="badge">Tips</span>
+              <span id="mapHint" class="muted small">
+                Välj en checkpoint för att aktivera kart-klick.
+              </span>
+              <!-- HOOK: map-hint -->
+            </div>
 
-              <div class="previewTop" style="margin-top:10px">
-                <div class="label muted">Poäng/checkpoint</div>
-                <div id="previewPoints" class="value">—</div>
-                <!-- HOOK: preview-points -->
-              </div>
-
-              <div class="previewListHead">
-                <div class="label muted">Checkpoints</div>
-                <div id="previewCount" class="muted small">0</div>
-                <!-- HOOK: preview-count -->
-              </div>
-
-              <ol id="previewList" class="previewList">
-                <!-- HOOK: preview-list -->
-              </ol>
+            <div id="mapWrap" class="mapWrap">
+              <div id="map" class="map" role="application" aria-label="Karta"></div>
+              <!-- HOOK: map-container -->
+              <div id="mapError" class="errorText" role="alert"></div>
+              <!-- HOOK: map-error -->
             </div>
           </section>
         </div>
 
         <!-- ======================================================
-             BLOCK 7.5 — Karta (AO 1/8)
+             BLOCK 7 — Live preview (kvar, flyttad under arbetsytan)
         ======================================================= -->
-        <section class="card" aria-label="Karta">
+        <section class="card" aria-label="Live preview" style="margin-top: var(--sp-4);">
           <div class="card__head">
             <div class="card__meta">
-              <h2 class="h2" style="margin:0">Karta</h2>
+              <h2 class="h2" style="margin:0">Live preview</h2>
               <p class="muted small" style="margin:6px 0 0 0">
-                Bas-karta för admin. Klick på karta kan lägga checkpoints (om aktiverat i admin-map.js).
+                Så här ser checkpoints ut (uppdateras direkt).
               </p>
             </div>
           </div>
 
-          <div id="mapWrap" class="mapWrap">
-            <div id="map" class="map" role="application" aria-label="Karta"></div>
-            <!-- HOOK: map-container -->
-            <div id="mapError" class="errorText" role="alert"></div>
-            <!-- HOOK: map-error -->
+          <div class="preview">
+            <div class="previewTop">
+              <div class="label muted">Jakt</div>
+              <div id="previewName" class="value">—</div>
+              <!-- HOOK: preview-name -->
+            </div>
+
+            <div class="previewTop" style="margin-top:10px">
+              <div class="label muted">Poäng/checkpoint</div>
+              <div id="previewPoints" class="value">—</div>
+              <!-- HOOK: preview-points -->
+            </div>
+
+            <div class="previewListHead">
+              <div class="label muted">Checkpoints</div>
+              <div id="previewCount" class="muted small">0</div>
+              <!-- HOOK: preview-count -->
+            </div>
+
+            <ol id="previewList" class="previewList">
+              <!-- HOOK: preview-list -->
+            </ol>
           </div>
         </section>
 
         <!-- ======================================================
              BLOCK 7.6 — QR per checkpoint (NICE)
-             NOTE: Renderas av src/admin.js när exportpanel finns.
-             Fail-closed: om offline/QR-service blockad => visa bara länkar + copy.
         ======================================================= -->
-        <section class="card" aria-label="QR per checkpoint">
+        <section class="card" aria-label="QR per checkpoint" style="margin-top: var(--sp-4);">
           <div class="card__head">
             <div class="card__meta">
               <h2 class="h2" style="margin:0">QR per checkpoint</h2>
@@ -249,6 +267,7 @@
 
   <!-- ==========================================================
        BLOCK 8 — Page-only styles (inline ok)
+       Städning: JA (rensar gamla grid2/map-sektioner och samlar layout här)
   =========================================================== -->
   <style>
     .row { display:flex; align-items:center; gap: var(--sp-3); }
@@ -266,8 +285,19 @@
 
     .slot { margin-top: var(--sp-4); }
 
-    .grid2 { display:grid; gap: var(--sp-4); margin-top: var(--sp-4); }
-    @media (min-width: 900px) { .grid2 { grid-template-columns: 1fr 1fr; } }
+    /* Ny layout: form/editor + karta nära */
+    .adminGrid { display:grid; gap: var(--sp-4); margin-top: var(--sp-4); }
+    @media (min-width: 980px) {
+      .adminGrid { grid-template-columns: 1.15fr .85fr; align-items:start; }
+    }
+
+    .stickyCard { position: relative; }
+    @media (min-width: 980px) {
+      .stickyCard { position: sticky; top: 84px; } /* under topbar */
+    }
+
+    .mapHintRow { margin-top: 10px; display:flex; align-items:center; gap: 10px; flex-wrap: wrap; }
+    .activeHint { margin-top: 8px; }
 
     .form { margin-top: 12px; display:grid; gap: 14px; }
     .field { display:grid; gap: 6px; }
@@ -309,7 +339,7 @@
       background: rgba(255,255,255,.04);
     }
 
-    /* AO 1/8 — Map container needs height */
+    /* Map container needs height */
     .mapWrap { margin-top: 10px; display:grid; gap: 8px; }
     .map {
       width: 100%;
@@ -319,11 +349,11 @@
       overflow: hidden;
       background: rgba(255,255,255,.03);
     }
-    @media (min-width: 900px) {
-      .map { min-height: 420px; }
+    @media (min-width: 980px) {
+      .map { min-height: 520px; }
     }
 
-    /* NICE — QR slot container (JS fyller cp-rader) */
+    /* NICE — QR slot container */
     .qrSlot { margin-top: 12px; display:grid; gap: 10px; }
     .qrRow {
       display:grid;
@@ -342,7 +372,7 @@
       border-radius: 14px;
       border: 1px solid var(--border);
       background: rgba(0,0,0,.15);
-      display:none; /* JS togglar */
+      display:none;
     }
 
     .footerNote { margin-top: var(--sp-6); text-align:center; opacity:.85; }
