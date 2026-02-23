@@ -1,9 +1,10 @@
 /* ============================================================
    FIL: src/party.js  (HEL FIL)
-   AO 10/15 — Party logic (checkpoint progression + poäng)
+   AO 10/15 (PATCH) — Party logic (checkpoint progression + poäng)
+   FIX:
+   - Subpath-safe data URLs via import.meta.url (GitHub Pages /uppdrag/)
+   - Fail-closed redirect till ../index.html (inte /index.html)
    Mål: Party-läge ger poäng per checkpoint, sparar lokalt.
-   Policy: UI-only, fail-closed, XSS-safe (DOM API + textContent),
-           inga nya storage keys/datamodell.
 ============================================================ */
 
 /* ============================================================
@@ -15,22 +16,26 @@ import { awardCheckpointComplete } from './engine.js';
 import { toast, renderErrorCard } from './ui.js';
 
 /* ============================================================
-   BLOCK 2 — Constants (paths)
+   BLOCK 2 — Subpath-safe URLs
 ============================================================ */
-const PARTIES_INDEX_PATH = '/data/parties.index.json'; // HOOK: parties-index-path
-const PACKS_BASE_PATH = '/data/packs/';                // HOOK: packs-base-path
+function dataUrl(pathFromSrc) {
+  return new URL(pathFromSrc, import.meta.url).toString();
+}
+
+const PARTIES_INDEX_URL = dataUrl('../data/parties.index.json'); // HOOK: parties-index-url
+const PACKS_BASE_URL = dataUrl('../data/packs/');                // HOOK: packs-base-url
 
 /* ============================================================
-   BLOCK 3 — DOM hooks (party.html)
+   BLOCK 3 — DOM hooks
 ============================================================ */
 const $ = (sel) => document.querySelector(sel);
 
-const elBack = $('#backBtn');      // HOOK: back-button
-const elPartyName = $('#partyName'); // HOOK: party-name
-const elStepPill = $('#stepPill'); // HOOK: step-pill
-const elClueText = $('#clueText'); // HOOK: clue-text
-const elNextBtn = $('#nextBtn');   // HOOK: next-button
-const elStepper = $('#stepper');   // HOOK: stepper
+const elBack = $('#backBtn');         // HOOK: back-button
+const elPartyName = $('#partyName');  // HOOK: party-name
+const elStepPill = $('#stepPill');    // HOOK: step-pill
+const elClueText = $('#clueText');    // HOOK: clue-text
+const elNextBtn = $('#nextBtn');      // HOOK: next-button
+const elStepper = $('#stepper');      // HOOK: stepper
 
 /* ============================================================
    BLOCK 4 — Store
@@ -38,11 +43,11 @@ const elStepper = $('#stepper');   // HOOK: stepper
 const store = createStore(); // HOOK: store
 
 /* ============================================================
-   BLOCK 5 — Fail-closed redirect helper
+   BLOCK 5 — Fail-closed redirect helper (subpath-safe)
 ============================================================ */
 function redirectToIndex(err) {
   const code = (err || 'PARTY_BAD_PARAMS').toString().trim() || 'PARTY_BAD_PARAMS';
-  const url = new URL('/index.html', window.location.origin);
+  const url = new URL('../index.html', window.location.href); // /uppdrag/index.html
   url.searchParams.set('err', code);
   window.location.assign(url.toString());
 }
@@ -61,45 +66,46 @@ function asTextSafe(x) {
 async function fetchJson(url) {
   const rid = uid('party_fetch');
   let res;
+
   try {
-    res = await fetch(url, {
-      method: 'GET',
-      credentials: 'include',
-      cache: 'no-store'
-    });
+    res = await fetch(url, { method: 'GET', credentials: 'include', cache: 'no-store' });
   } catch (_) {
-    throw { code: 'FETCH_NETWORK', message: 'Nätverksfel vid hämtning.', rid, url };
+    throw { code: 'P_PARTY_FETCH_NETWORK', message: 'Nätverksfel vid hämtning.', rid, url };
   }
 
   if (!res || !res.ok) {
-    throw { code: 'FETCH_HTTP', message: 'HTTP-fel vid hämtning.', rid, url, status: res?.status };
+    throw { code: 'P_PARTY_FETCH_HTTP', message: 'HTTP-fel vid hämtning.', rid, url, status: res?.status };
   }
 
   try {
     return await res.json();
   } catch (_) {
-    throw { code: 'FETCH_JSON', message: 'JSON-parsefel.', rid, url };
+    throw { code: 'P_PARTY_FETCH_JSON', message: 'Kunde inte tolka JSON (parse-fel).', rid, url };
   }
 }
 
 function validatePartiesIndex(idx) {
-  if (!isPlainObject(idx)) throw { code: 'INDEX_BAD', message: 'parties.index.json har fel format.' };
+  if (!isPlainObject(idx)) throw { code: 'P_PARTY_INDEX_BAD', message: 'parties.index.json har fel format.' };
+
   const parties = idx.parties;
-  if (!Array.isArray(parties) || parties.length < 1) throw { code: 'INDEX_EMPTY', message: 'parties.index.json saknar parties[] eller är tom.' };
+  if (!Array.isArray(parties) || parties.length < 1) {
+    throw { code: 'P_PARTY_INDEX_EMPTY', message: 'parties.index.json saknar parties[] eller är tom.' };
+  }
 
   const map = new Map();
   for (const p of parties) {
-    if (!isPlainObject(p)) throw { code: 'INDEX_ITEM_BAD', message: 'parties[] innehåller fel typ.' };
+    if (!isPlainObject(p)) throw { code: 'P_PARTY_INDEX_ITEM_BAD', message: 'parties[] innehåller fel typ.' };
+
     const id = asTextSafe(p.id);
     const name = asTextSafe(p.name);
     const file = asTextSafe(p.file);
 
-    if (!id) throw { code: 'INDEX_ID_MISSING', message: 'Party saknar id.' };
-    if (!name) throw { code: 'INDEX_NAME_MISSING', message: 'Party saknar name.', partyId: id };
-    if (!file) throw { code: 'INDEX_FILE_MISSING', message: 'Party saknar file.', partyId: id };
-    if (!/^[a-zA-Z0-9._-]+\.json$/.test(file)) throw { code: 'INDEX_FILE_INVALID', message: 'Party file har ogiltigt filnamn.', partyId: id, file };
+    if (!id) throw { code: 'P_PARTY_INDEX_ID_MISSING', message: 'Party saknar id.' };
+    if (!name) throw { code: 'P_PARTY_INDEX_NAME_MISSING', message: 'Party saknar name.', partyId: id };
+    if (!file) throw { code: 'P_PARTY_INDEX_FILE_MISSING', message: 'Party saknar file.', partyId: id };
+    if (!/^[a-zA-Z0-9._-]+\.json$/.test(file)) throw { code: 'P_PARTY_INDEX_FILE_INVALID', message: 'Party file har ogiltigt filnamn.', partyId: id, file };
 
-    if (map.has(id)) throw { code: 'INDEX_DUPLICATE', message: 'Dubbel party id i index.', partyId: id };
+    if (map.has(id)) throw { code: 'P_PARTY_INDEX_DUPLICATE', message: 'Dubbel party id i index.', partyId: id };
     map.set(id, { id, name, file });
   }
 
@@ -121,43 +127,40 @@ function normalizeCheckpoint(cp, index) {
 }
 
 function validateAndNormalizePartyPack(pack) {
-  if (!isPlainObject(pack)) throw { code: 'PACK_BAD', message: 'Party pack har fel format.' };
+  if (!isPlainObject(pack)) throw { code: 'P_PARTY_PACK_BAD', message: 'Party pack har fel format.' };
 
   const id = asTextSafe(pack.id);
   const name = asTextSafe(pack.name);
 
-  // Tillåt flera namn för arrayen för robusthet
   const rawList =
     Array.isArray(pack.checkpoints) ? pack.checkpoints :
     Array.isArray(pack.steps) ? pack.steps :
     Array.isArray(pack.missions) ? pack.missions :
     null;
 
-  if (!id) throw { code: 'PACK_ID_MISSING', message: 'Party pack saknar id.' };
-  if (!name) throw { code: 'PACK_NAME_MISSING', message: 'Party pack saknar name.' };
-  if (!Array.isArray(rawList)) throw { code: 'PACK_CHECKPOINTS_BAD', message: 'Party pack saknar checkpoints[] (eller steps[]).' };
+  if (!id) throw { code: 'P_PARTY_PACK_ID_MISSING', message: 'Party pack saknar id.' };
+  if (!name) throw { code: 'P_PARTY_PACK_NAME_MISSING', message: 'Party pack saknar name.' };
+  if (!Array.isArray(rawList)) throw { code: 'P_PARTY_PACK_CHECKPOINTS_BAD', message: 'Party pack saknar checkpoints[] (eller steps[]).' };
 
   const checkpoints = rawList.map((cp, i) => normalizeCheckpoint(cp, i));
-  if (checkpoints.length < 1) throw { code: 'PACK_CHECKPOINTS_EMPTY', message: 'Party pack har inga checkpoints.' };
+  if (checkpoints.length < 1) throw { code: 'P_PARTY_PACK_CHECKPOINTS_EMPTY', message: 'Party pack har inga checkpoints.' };
 
   return { id, name, checkpoints };
 }
 
 async function loadPartyPack(partyId) {
-  const idx = await fetchJson(PARTIES_INDEX_PATH);
+  const idx = await fetchJson(PARTIES_INDEX_URL);
   const map = validatePartiesIndex(idx);
   const entry = map.get(partyId);
 
-  if (!entry) throw { code: 'PARTY_NOT_FOUND', message: 'Party finns inte i index.', partyId };
+  if (!entry) throw { code: 'P_PARTY_NOT_FOUND', message: 'Party finns inte i index.', partyId };
 
-  const url = `${PACKS_BASE_PATH}${entry.file}`;
-  const pack = await fetchJson(url);
+  const packUrl = new URL(entry.file, PACKS_BASE_URL).toString();
+  const pack = await fetchJson(packUrl);
   const norm = validateAndNormalizePartyPack(pack);
 
-  // Fail-closed: partyId i URL måste matcha pack.id om pack.id finns
   if (norm.id && norm.id !== partyId) {
-    // tillåt om pack.id är annan men logiskt? här fail-closed
-    throw { code: 'PACK_ID_MISMATCH', message: 'Party pack id matchar inte URL id.', partyId, packId: norm.id };
+    throw { code: 'P_PARTY_PACK_ID_MISMATCH', message: 'Party pack id matchar inte URL id.', partyId, packId: norm.id };
   }
 
   return { ...norm, displayName: entry.name };
@@ -165,8 +168,6 @@ async function loadPartyPack(partyId) {
 
 /* ============================================================
    BLOCK 7 — Progress model (utan ny store-shape)
-   - Vi härleder "completed checkpoints" från history entries:
-     type=checkpoint_complete, partyId, checkpointIndex
 ============================================================ */
 function getCompletedSet(state, partyId) {
   const set = new Set();
@@ -182,8 +183,7 @@ function getCompletedSet(state, partyId) {
 }
 
 function isCheckpointCompleted(state, partyId, index) {
-  const set = getCompletedSet(state, partyId);
-  return set.has(index);
+  return getCompletedSet(state, partyId).has(index);
 }
 
 /* ============================================================
@@ -195,7 +195,6 @@ function setText(node, text) {
 }
 
 function ensurePrevButton() {
-  // KRAV: next/prev — om page saknar prev skapar vi en minimal (utan att ändra layout mycket)
   const bar = document.querySelector('.ctaBar__inner');
   if (!bar) return null;
 
@@ -209,22 +208,17 @@ function ensurePrevButton() {
   prev.textContent = 'Föregående';
   // HOOK: prev-button (created)
 
-  // Lägg före nästa-knappen
   const next = elNextBtn;
-  if (next && next.parentElement === bar) {
-    bar.insertBefore(prev, next);
-  } else {
-    bar.appendChild(prev);
-  }
+  if (next && next.parentElement === bar) bar.insertBefore(prev, next);
+  else bar.appendChild(prev);
 
   return prev;
 }
 
 function setActiveDot(stepIndex) {
-  // stepIndex: 0-based
   const dots = Array.from(elStepper?.querySelectorAll?.('.stepDot') || []);
   dots.forEach((d) => {
-    const s = Number(d.getAttribute('data-step')); // 1..N
+    const s = Number(d.getAttribute('data-step'));
     const isActive = (s - 1) === stepIndex;
     d.classList.toggle('is-active', isActive);
     d.setAttribute('aria-current', isActive ? 'step' : 'false');
@@ -236,23 +230,22 @@ function markCompletedDots(completedSet) {
   dots.forEach((d) => {
     const s = Number(d.getAttribute('data-step'));
     const idx = s - 1;
-    const done = completedSet.has(idx);
-    d.classList.toggle('is-done', done); // HOOK: done-class (CSS kan läggas senare)
+    d.classList.toggle('is-done', completedSet.has(idx)); // HOOK: done-class
   });
 }
 
-function renderError(message) {
-  // Sätt clueText om finns, annars injicera error card i main
-  if (elClueText) {
-    setText(elClueText, message);
-    return;
-  }
+function renderErrorCardInMain(message, code, rid) {
   const main = document.querySelector('.container');
   if (!main) return;
-  const card = renderErrorCard(message, [
-    { label: 'Tillbaka', variant: 'ghost', onClick: () => window.location.assign('/index.html') },
+
+  const suffix = rid ? ` (rid: ${rid})` : '';
+  const msg = code ? `${message} Felkod: ${code}${suffix}` : `${message}${suffix}`;
+
+  const card = renderErrorCard(msg, [
+    { label: 'Tillbaka', variant: 'ghost', onClick: () => window.location.assign('../index.html') },
     { label: 'Försök igen', variant: 'primary', onClick: () => window.location.reload() }
   ]);
+
   main.prepend(card);
 }
 
@@ -261,7 +254,7 @@ function renderError(message) {
 ============================================================ */
 let partyId = '';
 let partyPack = null;
-let stepIndex = 0; // 0-based
+let stepIndex = 0;
 let prevBtn = null;
 
 function renderStep() {
@@ -271,22 +264,17 @@ function renderStep() {
   const s = store.getState();
   const completed = getCompletedSet(s, partyId);
 
-  // Header
   setText(elPartyName, partyPack.displayName || partyPack.name || 'Skattjakt');
   setText(elStepPill, `Steg ${stepIndex + 1}/${total}`);
 
-  // Clue
   const cp = partyPack.checkpoints[stepIndex];
   setText(elClueText, cp?.clue || '—');
 
-  // Stepper active + completed
   setActiveDot(stepIndex);
   markCompletedDots(completed);
 
-  // Buttons
   if (prevBtn) prevBtn.disabled = stepIndex <= 0;
 
-  // Nästa: om sista steg och redan klar => lås knapp
   const isLast = stepIndex >= total - 1;
   const done = completed.has(stepIndex);
   if (elNextBtn) {
@@ -309,7 +297,6 @@ function awardIfNeededAndAdvance() {
 
   const alreadyDone = isCheckpointCompleted(s, partyId, stepIndex);
 
-  // Award endast första gången per checkpoint
   if (!alreadyDone) {
     const res = store.update((draft) => {
       const next = awardCheckpointComplete(draft, {
@@ -329,12 +316,10 @@ function awardIfNeededAndAdvance() {
     toast(`Checkpoint klar! +${cp?.points ?? 10}p • +${cp?.xp ?? 10}xp`, 'success', { ttlMs: 1800 });
   }
 
-  // Advance
   if (stepIndex < total - 1) {
     stepIndex += 1;
     renderStep();
   } else {
-    // Sista steget: render visar "Klar!" om done
     renderStep();
     toast('Skattjakten är klar (demo).', 'info', { ttlMs: 2200 });
   }
@@ -353,11 +338,9 @@ function goPrev() {
 (function bootParty() {
   'use strict';
 
-  // INIT-GUARD
   if (window.__AO10_PARTY_INIT__) return; // HOOK: init-guard-party
   window.__AO10_PARTY_INIT__ = true;
 
-  // Params
   const mode = qsGet('mode'); // HOOK: qs-mode
   const id = qsGet('id');     // HOOK: qs-id (partyId)
 
@@ -366,25 +349,20 @@ function goPrev() {
 
   partyId = id;
 
-  // Store init
   store.init();
 
-  // Back
   if (elBack) {
     elBack.addEventListener('click', () => {
       if (window.history.length > 1) window.history.back();
-      else window.location.assign('/index.html');
+      else window.location.assign('../index.html');
     });
   }
 
-  // Prev button (created if missing)
   prevBtn = ensurePrevButton();
   if (prevBtn) prevBtn.addEventListener('click', (e) => { e.preventDefault(); goPrev(); });
 
-  // Next
   if (elNextBtn) elNextBtn.addEventListener('click', (e) => { e.preventDefault(); awardIfNeededAndAdvance(); });
 
-  // Stepper click to navigate (prev/next support via direct)
   const dots = Array.from(elStepper?.querySelectorAll?.('.stepDot') || []);
   dots.forEach((d) => {
     d.addEventListener('click', () => {
@@ -396,20 +374,14 @@ function goPrev() {
     });
   });
 
-  // Load pack
   (async () => {
     try {
       partyPack = await loadPartyPack(partyId);
-
-      // Fail-closed: stepper måste matcha antal checkpoints (demo page har 1..5)
-      // Om pack inte har 5 checkpoints, kör ändå men låt pill visa total.
       renderStep();
-
-      // Live updates if another tab/page changes state
       store.subscribe(() => renderStep());
     } catch (e) {
       const msg = (e?.message || 'Kunde inte ladda party-pack.').toString();
-      renderError(msg);
+      renderErrorCardInMain(msg, e?.code, e?.rid);
       if (elNextBtn) elNextBtn.disabled = true;
       if (prevBtn) prevBtn.disabled = true;
     }
