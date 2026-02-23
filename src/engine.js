@@ -1,6 +1,8 @@
 /* ============================================================
    FIL: src/engine.js  (HEL FIL)
-   AO 3/15 — Engine: poäng/XP/level + streak per dag
+   AO 3/15 + AO 10/15 — Engine: poäng/XP/level + streak per dag
+   - Behåller befintliga exports/API
+   - Lägger till: awardCheckpointComplete() (separat från mission)
    Policy: deterministiskt, robust, fail-closed i inputs
 ============================================================ */
 
@@ -13,7 +15,6 @@ import { clamp, nowISO } from './util.js';
    BLOCK 2 — Level rules
    KRAV: calcLevel(xp)
    - Enkel, stabil modell: 0–99 => lvl 1, 100–199 => lvl 2, osv.
-   - HOOK: kan bytas till kurva senare utan att bryta store shape
 ============================================================ */
 export function calcLevel(xp) {
   const x = Number(xp);
@@ -51,7 +52,6 @@ function dayDiff(a, b) {
 
 /* ============================================================
    BLOCK 4 — Streak logic
-   KRAV: streaklogik per dag
    - Om första logg => streak = 1
    - Om samma dag => ingen ändring
    - Om igår => +1
@@ -75,7 +75,6 @@ export function applyStreak(state, dayKey) {
   }
 
   if (last === today) {
-    // Samma dag => ingen ändring
     return s;
   }
 
@@ -86,7 +85,6 @@ export function applyStreak(state, dayKey) {
     return s;
   }
 
-  // Gap eller bakåt i tid => reset
   s.streak.count = 1;
   s.streak.lastDay = today;
   return s;
@@ -95,9 +93,6 @@ export function applyStreak(state, dayKey) {
 /* ============================================================
    BLOCK 5 — awardMissionComplete
    KRAV: awardMissionComplete({points,xp})
-   - Uppdaterar points/xp/level
-   - Lägger history-entry
-   - Uppdaterar streak per dag (mission räknas som "aktivitet")
 ============================================================ */
 export function awardMissionComplete(state, payload) {
   // Fail-closed input guards
@@ -122,7 +117,7 @@ export function awardMissionComplete(state, payload) {
   const dayKey = localDayKey(new Date());
   applyStreak(s, dayKey);
 
-  // History (begränsa storlek för robusthet)
+  // History
   if (!Array.isArray(s.history)) s.history = [];
   const entry = {
     ts: nowISO(),
@@ -135,7 +130,69 @@ export function awardMissionComplete(state, payload) {
 
   s.history.push(entry);
 
-  // Keep last 200 entries (robusthet)
+  // Keep last 200 entries
+  if (s.history.length > 200) {
+    s.history = s.history.slice(s.history.length - 200);
+  }
+
+  return s;
+}
+
+/* ============================================================
+   BLOCK 6 — awardCheckpointComplete (AO-10)
+   KRAV: Engine: awardCheckpointComplete() separat från mission.
+   - Uppdaterar points/xp/level
+   - Uppdaterar streak per dag (checkpoint räknas som aktivitet)
+   - Lägger history-entry med partyId + checkpointIndex
+   - Ingen ny store shape krävs: progress kan härledas från history
+============================================================ */
+export function awardCheckpointComplete(state, payload) {
+  const s = state;
+  if (!s || typeof s !== 'object') {
+    console.error('[ENGINE] awardCheckpointComplete FAIL', { code: 'STATE_BAD' });
+    return null;
+  }
+
+  const p = payload && typeof payload === 'object' ? payload : {};
+  const partyId = (p.partyId ?? '').toString().trim();
+  const checkpointIndex = Math.floor(Number(p.checkpointIndex));
+
+  // Fail-closed payload basics
+  if (!partyId) {
+    console.error('[ENGINE] awardCheckpointComplete FAIL', { code: 'PARTY_ID_MISSING' });
+    return null;
+  }
+  if (!Number.isFinite(checkpointIndex) || checkpointIndex < 0 || checkpointIndex > 9999) {
+    console.error('[ENGINE] awardCheckpointComplete FAIL', { code: 'CHECKPOINT_INDEX_BAD' });
+    return null;
+  }
+
+  const addPoints = clamp(Math.floor(Number(p.points || 0)), 0, 1_000_000);
+  const addXp = clamp(Math.floor(Number(p.xp || 0)), 0, 1_000_000);
+
+  s.points = clamp(Math.floor(Number(s.points || 0)), 0, 1_000_000_000) + addPoints;
+  s.xp = clamp(Math.floor(Number(s.xp || 0)), 0, 1_000_000_000) + addXp;
+
+  const nextLevel = calcLevel(s.xp);
+  s.level = clamp(nextLevel, 1, 9999);
+
+  const dayKey = localDayKey(new Date());
+  applyStreak(s, dayKey);
+
+  if (!Array.isArray(s.history)) s.history = [];
+  const entry = {
+    ts: nowISO(),
+    day: dayKey,
+    type: 'checkpoint_complete',
+    partyId,
+    checkpointIndex,
+    points: addPoints,
+    xp: addXp,
+    levelAfter: s.level
+  };
+
+  s.history.push(entry);
+
   if (s.history.length > 200) {
     s.history = s.history.slice(s.history.length - 200);
   }
