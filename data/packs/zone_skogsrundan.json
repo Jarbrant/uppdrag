@@ -42,6 +42,17 @@
       "points": 15,
       "xp": 25
     },
+
+    {
+      "id": "b1_kombo",
+      "title": "Boss (valfritt): 3-i-rad",
+      "instruction": "Ta ett foto som innehåller TRE saker: en pinne, en sten och ett löv (i samma bild).",
+      "difficulty": "easy",
+      "isBoss": true,
+      "points": 40,
+      "xp": 50
+    },
+
     {
       "id": "m6_spår",
       "title": "Normal: Hitta djurspår",
@@ -57,6 +68,16 @@
       "difficulty": "normal",
       "points": 25,
       "xp": 35
+    },
+
+    {
+      "id": "b2_skylt",
+      "title": "Boss (valfritt): Hitta en unik markering",
+      "instruction": "Ta ett foto på en tydlig markering/skylt och skriv i huvudet vad den betyder. (Ingen textinmatning än.)",
+      "difficulty": "normal",
+      "isBoss": true,
+      "points": 60,
+      "xp": 70
     }
   ]
 }
