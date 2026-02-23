@@ -2,7 +2,8 @@
      FIL: pages/admin.html  (HEL FIL)
      AO 5/6 (FAS 1.2) — Admin UI: skapa skattjakt (lokalt, utan konto)
      AO 1/8 (FAS 1.5) — Admin: Leaflet-bas + kartcontainer + init
-     Mål: En vuxen kan skapa en jakt på plats (draft i localStorage) + se karta (utan checkpoints än)
+     NICE-TO-HAVE (FAS 2.1) — QR per checkpoint (UI hooks + container)
+     Mål: En vuxen kan skapa en jakt på plats + se karta + (valfritt) dela QR per checkpoint
      Policy: UI-only, Leaflet via CDN (OK), fail-closed (inline errors), mobil-first
 ============================================================ -->
 <!doctype html>
@@ -19,7 +20,6 @@
 
   <!-- ==========================================================
        BLOCK 1.1 — Leaflet CSS (CDN)  (AO 1/8)
-       NOTE: lätt dependency OK för karta
   =========================================================== -->
   <link
     rel="stylesheet"
@@ -152,7 +152,7 @@
               </div>
 
               <p class="muted small" style="margin-top:10px">
-                Tips: När du är klar kan du starta jakten via party-läget (koppling kommer i nästa AO).
+                Tips: När du är klar kan du exportera länk/JSON nedanför. QR per checkpoint finns som valfritt läge.
               </p>
             </form>
           </section>
@@ -198,14 +198,13 @@
 
         <!-- ======================================================
              BLOCK 7.5 — Karta (AO 1/8)
-             KRAV: kartcontainer #map, layout: form ovan/kvar, karta under
         ======================================================= -->
         <section class="card" aria-label="Karta">
           <div class="card__head">
             <div class="card__meta">
               <h2 class="h2" style="margin:0">Karta</h2>
               <p class="muted small" style="margin:6px 0 0 0">
-                Bas-karta för admin (checkpoints kommer senare).
+                Bas-karta för admin. Klick på karta kan lägga checkpoints (om aktiverat i admin-map.js).
               </p>
             </div>
           </div>
@@ -216,6 +215,29 @@
             <div id="mapError" class="errorText" role="alert"></div>
             <!-- HOOK: map-error -->
           </div>
+        </section>
+
+        <!-- ======================================================
+             BLOCK 7.6 — QR per checkpoint (NICE)
+             NOTE: Renderas av src/admin.js när exportpanel finns.
+             Fail-closed: om offline/QR-service blockad => visa bara länkar + copy.
+        ======================================================= -->
+        <section class="card" aria-label="QR per checkpoint">
+          <div class="card__head">
+            <div class="card__meta">
+              <h2 class="h2" style="margin:0">QR per checkpoint</h2>
+              <p class="muted small" style="margin:6px 0 0 0">
+                Valfritt: visa en QR för varje checkpoint (scanna → öppna jakt + ev. förifyll cp/kod).
+              </p>
+            </div>
+          </div>
+
+          <div id="qrSlot" class="qrSlot">
+            <!-- HOOK: qr-slot (JS renderar cp-rader med QR + copy) -->
+          </div>
+
+          <div id="qrError" class="errorText" role="alert"></div>
+          <!-- HOOK: qr-error -->
         </section>
 
         <div class="muted small footerNote">
@@ -301,12 +323,33 @@
       .map { min-height: 420px; }
     }
 
+    /* NICE — QR slot container (JS fyller cp-rader) */
+    .qrSlot { margin-top: 12px; display:grid; gap: 10px; }
+    .qrRow {
+      display:grid;
+      gap: 8px;
+      padding: 12px;
+      border-radius: 14px;
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,.04);
+    }
+    .qrRowTop { display:flex; align-items:center; justify-content:space-between; gap: 10px; }
+    .qrTitle { font-weight: 900; }
+    .qrActions { display:flex; gap: 8px; flex-wrap: wrap; }
+    .qrImg {
+      width: 180px;
+      height: 180px;
+      border-radius: 14px;
+      border: 1px solid var(--border);
+      background: rgba(0,0,0,.15);
+      display:none; /* JS togglar */
+    }
+
     .footerNote { margin-top: var(--sp-6); text-align:center; opacity:.85; }
   </style>
 
   <!-- ==========================================================
        BLOCK 9 — Scripts
-       AO 1/8: Leaflet JS CDN måste laddas före admin-map init
   =========================================================== -->
   <script
     src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
@@ -314,10 +357,7 @@
     crossorigin=""
   ></script>
 
-  <!-- AO 1/8 — Map init -->
   <script type="module" src="../src/admin-map.js"></script>
-
-  <!-- AO 5/6 + AO 6/6 — Admin form/draft/export -->
   <script type="module" src="../src/admin.js"></script>
 </body>
 </html>
