@@ -1,7 +1,8 @@
 /* ============================================================
    FIL: src/util.js  (HEL FIL)
    AO 2/15 — Util: safe parse + query helpers + misc
-   AO 6/6 (FAS 1.2) — Export: copyToClipboard(text) med robust fallback
+   AO 6/6 (FAS 1.2) — Export helper: copyToClipboard(text) med robust fallback
+   AO 3/8 (FAS 1.5) — Export: används av Admin (KOPIERA JSON / KOPIERA LÄNK)
    Policy: UI-only, fail-closed helpers, inga nya storage keys
 ============================================================ */
 
@@ -75,7 +76,7 @@ export function uid(prefix = 'id') {
 }
 
 /* ============================================================
-   BLOCK 6 — copyToClipboard (AO 6/6)
+   BLOCK 6 — copyToClipboard
    - Robust: navigator.clipboard (secure context) → fallback via textarea + execCommand
    - Fail-closed: returnerar { ok:false, reason } vid nekad/blocked
    - OBS: Ingen storage, UI-only helper
@@ -97,7 +98,7 @@ export async function copyToClipboard(text) {
   try {
     const ta = document.createElement('textarea');
     ta.value = value;
-    ta.setAttribute('readonly', ''); // minimerar mobil-keyboard-flimmer
+    ta.setAttribute('readonly', '');
     ta.style.position = 'fixed';
     ta.style.left = '-9999px';
     ta.style.top = '0';
