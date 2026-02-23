@@ -1,1 +1,9 @@
-
+{
+  "id": "skogsrundan",
+  "name": "Skogsrundan (Demo)",
+  "missions": [
+    { "id": "m1", "title": "Hitta en vitsippa", "instruction": "Ta ett foto på en vitsippa.", "difficulty": "easy", "points": 10, "xp": 20 },
+    { "id": "m2", "title": "Hitta en tall", "instruction": "Ta ett foto på en tall.", "difficulty": "easy", "points": 10, "xp": 20 },
+    { "id": "m3", "title": "Hitta en kotte", "instruction": "Ta ett foto på en kotte.", "difficulty": "easy", "points": 10, "xp": 20 }
+  ]
+}
