@@ -1,225 +1,197 @@
 /* ============================================================
    FIL: src/store.js  (HEL FIL)
-   AO 3/15 — Store (localStorage state) — fail-closed
-   Policy: UI-only, XSS-safe (ingen rendering här), robusthet först
+   AO 3/15 + AO 2/6 (FAS 1.1) — Store (localStorage state) + migration
+   Mål:
+   - Spara completedCount (antal klarade missions totalt)
+   - Fail-closed: om state trasigt -> reset default + console.warn
+   - Migration: om gamla state saknar fält -> fyll med defaults
+   Policy: UI-only, localStorage-first, XSS-safe (ingen rendering här)
 ============================================================ */
 
 /* ============================================================
    BLOCK 1 — Imports
 ============================================================ */
-import { safeJSONParse, nowISO } from './util.js';
+import { safeJSONParse } from './util.js';
 
 /* ============================================================
-   BLOCK 2 — Storage config
-   HOOK: STORAGE_KEY (används av UI/engine)
+   BLOCK 2 — Storage key
 ============================================================ */
-export const STORAGE_KEY = 'GAME_STATE_V1'; // HOOK: storage-key (localStorage state)
+const STORAGE_KEY = 'GAME_STATE_V1'; // HOOK: storage-key
 
 /* ============================================================
-   BLOCK 3 — Default state model (KRAV: profil, xp, level, streak, historik)
+   BLOCK 3 — Default state-shape (KRAV)
+   State shape:
+   {
+     profile: { id, createdAt },
+     points: number,
+     xp: number,
+     level: number,
+     streak: { count, lastDay },
+     history: [ { ts, day, type, points, xp, ... } ],
+     completedCount: number   <-- AO 2/6 (FAS 1.1)
+   }
 ============================================================ */
-export function defaultState() {
-  const createdAt = nowISO();
+function defaultState() {
   return {
-    version: 1,
     profile: {
-      displayName: '',       // HOOK: profile-displayName (UI binder senare)
-      createdAt
+      id: 'demo',
+      createdAt: new Date().toISOString()
     },
+    points: 0,
     xp: 0,
     level: 1,
-    points: 0,
-    streak: {
-      count: 0,
-      lastDay: ''            // YYYY-MM-DD (local day) // HOOK: streak-lastDay
-    },
-    history: []              // senaste händelser (missions etc) // HOOK: history-array
+    streak: { count: 0, lastDay: '' },
+    history: [],
+    completedCount: 0 // KRAV: spara antal klarade missions totalt
   };
 }
 
 /* ============================================================
-   BLOCK 4 — Validators (fail-closed)
+   BLOCK 4 — Guard helpers
 ============================================================ */
+function clampInt(n, min, max) {
+  const x = Math.floor(Number(n));
+  if (!Number.isFinite(x)) return min;
+  return Math.max(min, Math.min(max, x));
+}
+
 function isPlainObject(v) {
   return !!v && typeof v === 'object' && !Array.isArray(v);
 }
 
-function isNonNegInt(n) {
-  return Number.isFinite(n) && n >= 0 && Math.floor(n) === n;
-}
-
-function isValidDayString(s) {
-  if (typeof s !== 'string') return false;
-  if (!s) return true; // tillåter tom default
-  return /^\d{4}-\d{2}-\d{2}$/.test(s);
-}
-
-function validateStateShape(s) {
-  if (!isPlainObject(s)) return { ok: false, code: 'STATE_NOT_OBJECT' };
-
-  if (!isPlainObject(s.profile)) return { ok: false, code: 'PROFILE_BAD' };
-  if (typeof s.profile.displayName !== 'string') return { ok: false, code: 'PROFILE_NAME_BAD' };
-  if (typeof s.profile.createdAt !== 'string') return { ok: false, code: 'PROFILE_CREATED_BAD' };
-
-  if (!isNonNegInt(s.xp)) return { ok: false, code: 'XP_BAD' };
-  if (!isNonNegInt(s.level) || s.level < 1) return { ok: false, code: 'LEVEL_BAD' };
-  if (!isNonNegInt(s.points)) return { ok: false, code: 'POINTS_BAD' };
-
-  if (!isPlainObject(s.streak)) return { ok: false, code: 'STREAK_BAD' };
-  if (!isNonNegInt(s.streak.count)) return { ok: false, code: 'STREAK_COUNT_BAD' };
-  if (!isValidDayString(s.streak.lastDay)) return { ok: false, code: 'STREAK_DAY_BAD' };
-
-  if (!Array.isArray(s.history)) return { ok: false, code: 'HISTORY_BAD' };
-
-  return { ok: true, code: 'OK' };
-}
-
 /* ============================================================
-   BLOCK 5 — Safe load/save (fail-closed)
+   BLOCK 5 — Migration logic (KRAV)
+   - Om gamla state saknar completedCount => sätt 0
+   - Om andra fält saknas => fyll defaults (utan att krascha)
 ============================================================ */
-function safeReadLocalStorage(key) {
-  try {
-    return window.localStorage.getItem(key);
-  } catch (_) {
-    return null;
-  }
-}
+function migrateState(raw) {
+  const def = defaultState();
 
-function safeWriteLocalStorage(key, value) {
-  try {
-    window.localStorage.setItem(key, value);
-    return true;
-  } catch (_) {
-    return false;
-  }
-}
+  // Fail-closed: fel typ => default
+  if (!isPlainObject(raw)) return def;
 
-function safeRemoveLocalStorage(key) {
-  try {
-    window.localStorage.removeItem(key);
-    return true;
-  } catch (_) {
-    return false;
-  }
-}
+  const next = { ...def, ...raw };
 
-function resetToDefault(reasonCode) {
-  const s = defaultState();
+  // profile
+  if (!isPlainObject(next.profile)) next.profile = def.profile;
+  if (typeof next.profile.id !== 'string') next.profile.id = def.profile.id;
+  if (typeof next.profile.createdAt !== 'string') next.profile.createdAt = def.profile.createdAt;
 
-  // Fail-closed: tydlig logg (ingen känslig data)
-  console.error('[STORE] RESET_DEFAULT', { reason: reasonCode || 'UNKNOWN' });
+  // numbers
+  next.points = clampInt(next.points, 0, 1_000_000_000);
+  next.xp = clampInt(next.xp, 0, 1_000_000_000);
+  next.level = clampInt(next.level, 1, 9999);
 
-  // Försök spara default (men fortsätt även om storage är trasigt)
-  safeWriteLocalStorage(STORAGE_KEY, JSON.stringify(s));
-  return s;
+  // streak
+  if (!isPlainObject(next.streak)) next.streak = { ...def.streak };
+  next.streak.count = clampInt(next.streak.count, 0, 9999);
+  if (typeof next.streak.lastDay !== 'string') next.streak.lastDay = '';
+
+  // history
+  if (!Array.isArray(next.history)) next.history = [];
+  // keep it bounded
+  if (next.history.length > 200) next.history = next.history.slice(next.history.length - 200);
+
+  // AO 2/6: completedCount
+  // Fail-closed: saknas => 0
+  next.completedCount = clampInt(next.completedCount, 0, 1_000_000_000);
+
+  return next;
 }
 
 /* ============================================================
-   BLOCK 6 — Store implementation
-   - Fail-closed: trasigt state => reset default + return
-   - update(fn): muterar via kopia och validerar innan commit
+   BLOCK 6 — Storage read/write (fail-closed)
+============================================================ */
+function readStateFromStorage() {
+  try {
+    const rawStr = localStorage.getItem(STORAGE_KEY);
+    if (!rawStr) return defaultState();
+
+    const parsed = safeJSONParse(rawStr);
+    if (!parsed.ok) {
+      console.warn('[STORE] State parse failed -> reset', { code: 'STATE_PARSE_FAIL' });
+      return defaultState();
+    }
+
+    return migrateState(parsed.value);
+  } catch (e) {
+    console.warn('[STORE] Storage read failed -> reset', { code: 'STORAGE_READ_FAIL' });
+    return defaultState();
+  }
+}
+
+function writeStateToStorage(state) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    return true;
+  } catch (_) {
+    console.warn('[STORE] Storage write failed -> read-only mode', { code: 'STORAGE_WRITE_FAIL' });
+    return false;
+  }
+}
+
+/* ============================================================
+   BLOCK 7 — Store implementation
 ============================================================ */
 export function createStore() {
-  let state = null;
-  const listeners = new Set();
+  let _state = defaultState();
+  let _subs = [];
 
   function notify() {
-    listeners.forEach((fn) => {
-      try { fn(getState()); } catch (_) { /* fail-soft */ }
-    });
-  }
-
-  function getState() {
-    if (!state) {
-      // Lazy init om init() inte anropats
-      init();
+    for (const fn of _subs) {
+      try { fn(_state); } catch (_) {}
     }
-    // Returnera en “safe-ish” copy för att minska oavsiktliga mutationer
-    return structuredClone ? structuredClone(state) : JSON.parse(JSON.stringify(state));
   }
 
   function init() {
-    const raw = safeReadLocalStorage(STORAGE_KEY);
-    const parsed = safeJSONParse(raw, null);
-
-    if (!parsed) {
-      state = resetToDefault('STATE_MISSING_OR_UNPARSABLE');
-      notify();
-      return state;
-    }
-
-    const v = validateStateShape(parsed);
-    if (!v.ok) {
-      state = resetToDefault(v.code);
-      notify();
-      return state;
-    }
-
-    state = parsed;
+    _state = readStateFromStorage();
     notify();
-    return state;
   }
 
-  function save(nextState) {
-    // Fail-closed: validera innan commit
-    const v = validateStateShape(nextState);
-    if (!v.ok) {
-      state = resetToDefault('SAVE_REJECTED_' + v.code);
-      notify();
-      return { ok: false, code: v.code, state: getState() };
-    }
-
-    state = nextState;
-
-    const ok = safeWriteLocalStorage(STORAGE_KEY, JSON.stringify(state));
-    if (!ok) {
-      // Storage trasig => fail-closed: behåll state i minne men logga
-      console.error('[STORE] SAVE_FAILED_STORAGE', { code: 'LS_WRITE_FAIL' });
-      // OBS: vi crashar inte — UI kan fortsätta i sessionen
-    }
-
-    notify();
-    return { ok: true, code: 'OK', state: getState() };
-  }
-
-  function update(mutatorFn) {
-    if (typeof mutatorFn !== 'function') {
-      return { ok: false, code: 'MUTATOR_NOT_FUNCTION', state: getState() };
-    }
-
-    const current = getState();
-    let draft = current;
-
-    try {
-      const result = mutatorFn(draft);
-      // Tillåt mutator att returnera ett helt nytt state
-      if (result && typeof result === 'object') draft = result;
-    } catch (e) {
-      console.error('[STORE] UPDATE_FAILED', { code: 'MUTATOR_THROW' });
-      return { ok: false, code: 'MUTATOR_THROW', state: getState() };
-    }
-
-    return save(draft);
-  }
-
-  function reset() {
-    safeRemoveLocalStorage(STORAGE_KEY);
-    state = resetToDefault('MANUAL_RESET');
-    notify();
-    return getState();
+  function getState() {
+    return _state;
   }
 
   function subscribe(fn) {
     if (typeof fn !== 'function') return () => {};
-    listeners.add(fn);
-    return () => listeners.delete(fn);
+    _subs.push(fn);
+    return () => {
+      _subs = _subs.filter((x) => x !== fn);
+    };
   }
 
-  return {
-    init,        // HOOK: store-init
-    getState,    // HOOK: store-get
-    update,      // HOOK: store-update
-    reset,       // HOOK: store-reset
-    subscribe    // HOOK: store-subscribe
-  };
+  function update(mutatorFn) {
+    // Fail-closed: om mutator inte är funktion => avbryt
+    if (typeof mutatorFn !== 'function') return { ok: false, code: 'MUTATOR_BAD' };
+
+    // Kör mutation på en shallow copy (räcker för vår state)
+    let next;
+    try {
+      next = mutatorFn({ ..._state });
+      if (!next || typeof next !== 'object') next = { ..._state };
+    } catch (e) {
+      console.warn('[STORE] update failed', { code: 'UPDATE_THROW' });
+      return { ok: false, code: 'UPDATE_THROW' };
+    }
+
+    // Migrate/validate igen (fail-closed)
+    const migrated = migrateState(next);
+
+    // Persist
+    const ok = writeStateToStorage(migrated);
+    _state = migrated;
+
+    notify();
+
+    return { ok, code: ok ? 'OK' : 'STORAGE_WRITE_FAIL' };
+  }
+
+  function reset() {
+    const s = defaultState();
+    writeStateToStorage(s);
+    _state = s;
+    notify();
+  }
+
+  return { init, getState, subscribe, update, reset };
 }
