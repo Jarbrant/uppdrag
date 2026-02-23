@@ -360,6 +360,27 @@ function setPill(text, ok = true) {
   elSavePill.style.opacity = ok ? '1' : '0.8';
 }
 
+/* ============================================================
+   NEW: local “Spara” helper (för CP-spara)
+============================================================ */
+function saveNowOrWarn() {
+  // Fail-closed: spara ändå draft, men visa om storage är låst
+  if (!storageWritable) {
+    showStatus('LocalStorage är låst. Kan inte spara här.', 'warn');
+    return false;
+  }
+  const ok = writeDraft(draft);
+  if (ok) {
+    dirty = false;
+    setPill('Utkast sparat', true);
+    showStatus('Utkast sparat lokalt.', 'info');
+    setTimeout(() => { if (!dirty) setPill('Utkast', true); }, 1200);
+    return true;
+  }
+  showStatus('Kunde inte spara utkast.', 'warn');
+  return false;
+}
+
 function renderPreview() {
   syncDerivedFields();
 
@@ -425,10 +446,7 @@ function renderCheckpointEditorFULL() {
     row.setAttribute('role', 'button');
     row.setAttribute('aria-label', `Välj checkpoint ${i + 1}`);
 
-    // ==============================
-    // FIX: Space/Enter ska INTE sabotera input-fält
-    // - Om fokus är i ett input/textarea/select/contentEditable -> ignorera
-    // ==============================
+    // FIX: låt inputs få Space/Enter normalt (annars går mellanslag inte)
     function isEditableTarget(evt) {
       const t = evt?.target;
       const tag = (t?.tagName || '').toUpperCase();
@@ -441,12 +459,12 @@ function renderCheckpointEditorFULL() {
     }
 
     row.addEventListener('click', (e) => {
-      if (isEditableTarget(e)) return; // klick i input ska inte “välja rad”
+      if (isEditableTarget(e)) return;
       setActiveCp(i, { centerMap: true });
     });
 
     row.addEventListener('keydown', (e) => {
-      if (isEditableTarget(e)) return; // FIX: mellanslag funkar i input
+      if (isEditableTarget(e)) return;
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
         setActiveCp(i, { centerMap: true });
@@ -557,7 +575,7 @@ function renderCheckpointEditorFULL() {
     grid.appendChild(labeled('Kod', code));
     grid.appendChild(labeled('Radie (m)', radius));
 
-    // Random code (endast om tom)
+    // Random code + Spara CP
     const codeRow = document.createElement('div');
     codeRow.style.display = 'flex';
     codeRow.style.alignItems = 'center';
@@ -568,6 +586,12 @@ function renderCheckpointEditorFULL() {
     const codeHint = document.createElement('div');
     codeHint.className = 'muted small';
     codeHint.textContent = 'Kod är valfri (kan genereras).';
+
+    const actionsWrap = document.createElement('div');
+    actionsWrap.style.display = 'flex';
+    actionsWrap.style.gap = '8px';
+    actionsWrap.style.flexWrap = 'wrap';
+    actionsWrap.style.justifyContent = 'flex-end';
 
     const btnRnd = document.createElement('button');
     btnRnd.type = 'button';
@@ -594,8 +618,23 @@ function renderCheckpointEditorFULL() {
       showStatus(`Kod skapad för CP ${k + 1}.`, 'info');
     });
 
+    // NY: Spara-knapp (sparar hela utkastet, men sitter där man jobbar)
+    const btnSaveCp = document.createElement('button');
+    btnSaveCp.type = 'button';
+    btnSaveCp.className = 'btn btn-primary miniBtn';
+    btnSaveCp.textContent = 'Spara';
+    btnSaveCp.setAttribute('data-cp-save', String(i)); // HOOK: cp-save
+    btnSaveCp.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      saveNowOrWarn();
+    });
+
+    actionsWrap.appendChild(btnRnd);
+    actionsWrap.appendChild(btnSaveCp);
+
     codeRow.appendChild(codeHint);
-    codeRow.appendChild(btnRnd);
+    codeRow.appendChild(actionsWrap);
 
     // Final toggle (endast sista cp)
     const finalRow = document.createElement('div');
