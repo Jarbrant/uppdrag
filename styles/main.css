@@ -4,6 +4,7 @@
    AO 5/8 (FAS 1.5) — Leaflet overlays + “cleared” visuals helpers
    AO 6/8 (FAS 2.0) — Party theme: sepia/paper + fog-of-war look (CSS)
    NICE-TO-HAVE (FAS 2.1) — Snygg “stamp”-look (utan inline) + bättre grid states
+   PATCH (FAS 2.1) — Admin: tydlig “aktiv checkpoint” highlight
 ============================================================ */
 
 /* ============================================================
@@ -185,7 +186,7 @@ a { color: inherit; text-decoration: none; }
 .hint { margin-top: var(--sp-2); font-size: var(--fs-2); }
 
 /* ============================================================
-   BLOCK 7 — Card component (utökad i AO-5)
+   BLOCK 7 — Card component
 ============================================================ */
 .card {
   border-radius: var(--r-3);
@@ -252,7 +253,6 @@ a { color: inherit; text-decoration: none; }
   text-align: left;
 }
 
-/* AO-5: Error card variant */
 .card--error {
   border-color: rgba(251, 113, 133, .35);
   background: rgba(251, 113, 133, .08);
@@ -272,7 +272,7 @@ a { color: inherit; text-decoration: none; }
 }
 
 /* ============================================================
-   BLOCK 8 — Button component (utökad i AO-5, A11y i AO-14)
+   BLOCK 8 — Button component
 ============================================================ */
 .btn {
   appearance: none;
@@ -287,7 +287,7 @@ a { color: inherit; text-decoration: none; }
   align-items: center;
   justify-content: center;
   gap: var(--sp-2);
-  min-height: 44px; /* KRAV: min 44px */
+  min-height: 44px;
   transition: transform .08s ease, filter .12s ease, border-color .12s ease, background .12s ease, opacity .12s ease;
   text-decoration: none;
 }
@@ -313,7 +313,6 @@ a { color: inherit; text-decoration: none; }
   border-color: rgba(255,255,255,.14);
 }
 
-/* AO-5: Danger button */
 .btn-danger {
   color: #14050a;
   background: linear-gradient(180deg, var(--danger), #ff93a7);
@@ -352,7 +351,7 @@ a { color: inherit; text-decoration: none; }
 }
 
 /* ============================================================
-   BLOCK 10 — Toast component (utökad i AO-5, safe areas i AO-14)
+   BLOCK 10 — Toast component
 ============================================================ */
 .toast {
   width: 100%;
@@ -409,13 +408,12 @@ a { color: inherit; text-decoration: none; }
   transition: opacity .14s ease, transform .14s ease;
 }
 
-/* Toast stack placement */
 .toastStack {
   position: fixed;
   z-index: 1000;
   right: var(--sp-4);
   left: var(--sp-4);
-  bottom: calc(var(--sp-4) + env(safe-area-inset-bottom, 0px)); /* AO-14: safe area */
+  bottom: calc(var(--sp-4) + env(safe-area-inset-bottom, 0px));
   display: grid;
   gap: var(--sp-2);
   pointer-events: none;
@@ -433,12 +431,9 @@ a { color: inherit; text-decoration: none; }
 }
 
 /* ============================================================
-   BLOCK 11 — Modal component (AO-5) + A11y support (AO-14)
+   BLOCK 11 — Modal component + A11y
 ============================================================ */
-.modalPortal {
-  position: relative;
-  z-index: 1100;
-}
+.modalPortal { position: relative; z-index: 1100; }
 
 .modalOverlay {
   position: fixed;
@@ -455,10 +450,7 @@ a { color: inherit; text-decoration: none; }
   to { opacity: 1; }
 }
 
-.modalOverlay--hide {
-  opacity: 0;
-  transition: opacity .14s ease;
-}
+.modalOverlay--hide { opacity: 0; transition: opacity .14s ease; }
 
 .modal {
   width: 100%;
@@ -468,7 +460,7 @@ a { color: inherit; text-decoration: none; }
   background: rgba(16, 26, 47, .92);
   box-shadow: var(--sh-2);
   overflow: hidden;
-  outline: none; /* focus ring hanteras på fokusbara element */
+  outline: none;
 }
 
 .modal__header {
@@ -492,9 +484,7 @@ a { color: inherit; text-decoration: none; }
   border-radius: 12px;
 }
 
-.modal__body {
-  padding: var(--sp-4);
-}
+.modal__body { padding: var(--sp-4); }
 
 .modal__footer {
   display: flex;
@@ -522,23 +512,10 @@ a { color: inherit; text-decoration: none; }
    BLOCK 13 — Responsive (desktop-first enhancements)
 ============================================================ */
 @media (min-width: 720px) {
-  .grid--modes {
-    grid-template-columns: 1fr 1fr;
-  }
-
-  .panel__row {
-    align-items: flex-end;
-  }
-
-  .topbar__inner {
-    padding-left: var(--sp-6);
-    padding-right: var(--sp-6);
-  }
-
-  .container {
-    padding-left: var(--sp-6);
-    padding-right: var(--sp-6);
-  }
+  .grid--modes { grid-template-columns: 1fr 1fr; }
+  .panel__row { align-items: flex-end; }
+  .topbar__inner { padding-left: var(--sp-6); padding-right: var(--sp-6); }
+  .container { padding-left: var(--sp-6); padding-right: var(--sp-6); }
 }
 
 /* ============================================================
@@ -564,18 +541,12 @@ a { color: inherit; text-decoration: none; }
 }
 
 .stepDot,
-.missionItem {
-  min-height: 44px; /* KRAV: minst 44px */
-}
+.missionItem { min-height: 44px; }
 
 :where(button, .btn)[disabled],
-:where(button, .btn)[aria-disabled="true"] {
-  pointer-events: none;
-}
+:where(button, .btn)[aria-disabled="true"] { pointer-events: none; }
 
-.safeBottomPad {
-  padding-bottom: calc(var(--sp-4) + env(safe-area-inset-bottom, 0px));
-}
+.safeBottomPad { padding-bottom: calc(var(--sp-4) + env(safe-area-inset-bottom, 0px)); }
 
 .skipLink {
   position: absolute;
@@ -588,10 +559,7 @@ a { color: inherit; text-decoration: none; }
   border: 1px solid var(--border);
 }
 
-.skipLink:focus-visible {
-  left: var(--sp-3);
-  box-shadow: var(--focus);
-}
+.skipLink:focus-visible { left: var(--sp-3); box-shadow: var(--focus); }
 
 @media (prefers-reduced-motion: reduce) {
   * {
@@ -605,24 +573,14 @@ a { color: inherit; text-decoration: none; }
 /* ============================================================
    BLOCK 15 — AO 5/8 (FAS 1.5) Leaflet helpers
 ============================================================ */
-.leaflet-container {
-  font-family: var(--font);
-  color: var(--text);
-}
+.leaflet-container { font-family: var(--font); color: var(--text); }
 
 .cpMarker,
-.partyCpMarker {
-  background: transparent !important;
-  border: none !important;
-}
+.partyCpMarker { background: transparent !important; border: none !important; }
 
-.is-cleared {
-  color: rgba(74,222,128,.95);
-}
+.is-cleared { color: rgba(74,222,128,.95); }
 
-.leaflet-interactive {
-  filter: drop-shadow(0 6px 14px rgba(0,0,0,.20));
-}
+.leaflet-interactive { filter: drop-shadow(0 6px 14px rgba(0,0,0,.20)); }
 
 /* ============================================================
    BLOCK 16 — AO 6/8 (FAS 2.0) Party “paper/sepia” theme + fog look
@@ -657,9 +615,7 @@ body.theme-party .partyMap .leaflet-tile-pane {
   filter: sepia(.55) saturate(.80) contrast(1.06) brightness(.90);
 }
 
-body.theme-party .fogWrap {
-  position: relative;
-}
+body.theme-party .fogWrap { position: relative; }
 
 body.theme-party .fogOverlay {
   background:
@@ -676,19 +632,11 @@ body.theme-party .leaflet-overlay-pane svg path {
   filter: drop-shadow(0 10px 18px rgba(0,0,0,.25));
 }
 
-body.theme-party .leaflet-overlay-pane svg path[fill] {
-  opacity: .45;
-}
+body.theme-party .leaflet-overlay-pane svg path[fill] { opacity: .45; }
 
 /* ============================================================
    BLOCK 17 — NICE (FAS 2.1) Stamp-look + bättre grid states
-   Mål:
-   - “finalStamp” (utan inline) ser ut som papper/sepia-stämpel
-   - Grid får tydligare status: locked/active/cleared + final “gift”
-   - Tillgänglighet: tydliga fokus/kontrast
 ============================================================ */
-
-/* ---------- Stamp: används av party-map.js (id="finalStamp") ---------- */
 #finalStamp {
   position: fixed;
   left: 50%;
@@ -699,7 +647,6 @@ body.theme-party .leaflet-overlay-pane svg path[fill] {
   padding: 14px 18px;
   border-radius: 18px;
 
-  /* “paper stamp” look */
   border: 1px solid rgba(255, 214, 150, .30);
   background:
     radial-gradient(240px 120px at 30% 30%, rgba(255, 214, 150, .12), transparent 60%),
@@ -715,7 +662,6 @@ body.theme-party .leaflet-overlay-pane svg path[fill] {
   user-select: none;
   white-space: nowrap;
 
-  /* En liten “ink” accent */
   color: rgba(255, 246, 230, .96);
 }
 
@@ -734,16 +680,8 @@ body.theme-party .leaflet-overlay-pane svg path[fill] {
   to { opacity: 1; transform: translateX(-50%) translateY(0) rotate(-6deg) scale(1); }
 }
 
-@keyframes stampOut {
-  from { opacity: 1; }
-  to { opacity: 0; }
-}
+#finalStamp { animation: stampIn .18s ease-out; }
 
-#finalStamp {
-  animation: stampIn .18s ease-out;
-}
-
-/* ---------- View toggle polish (Karta/Grid) ---------- */
 body.theme-party .viewToggle {
   display: flex;
   gap: 10px;
@@ -761,7 +699,6 @@ body.theme-party .viewTab.is-active {
   background: rgba(110,231,255,.12);
 }
 
-/* ---------- Grid polish ---------- */
 body.theme-party .gridWrap {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -770,9 +707,7 @@ body.theme-party .gridWrap {
 }
 
 @media (min-width: 720px) {
-  body.theme-party .gridWrap {
-    grid-template-columns: repeat(8, 1fr);
-  }
+  body.theme-party .gridWrap { grid-template-columns: repeat(8, 1fr); }
 }
 
 body.theme-party .gridCell {
@@ -796,9 +731,7 @@ body.theme-party .gridCell {
   transition: transform .08s ease, border-color .12s ease, background .12s ease, opacity .12s ease;
 }
 
-body.theme-party .gridCell:active {
-  transform: translateY(1px);
-}
+body.theme-party .gridCell:active { transform: translateY(1px); }
 
 body.theme-party .gridCell.is-active {
   border-color: rgba(110,231,255,.55);
@@ -821,17 +754,66 @@ body.theme-party .gridCell.is-locked {
   cursor: not-allowed;
 }
 
-body.theme-party .gridCell[aria-disabled="true"] {
-  pointer-events: none;
-}
+body.theme-party .gridCell[aria-disabled="true"] { pointer-events: none; }
 
-/* Fokus på grid celler (A11y) */
 body.theme-party .gridCell:focus-visible {
   outline: none;
   box-shadow: var(--focus);
 }
 
-/* “🎁” (final) ska kännas mer som “skattkista” */
 body.theme-party .gridCell.is-active:not(.is-cleared) {
   text-shadow: 0 10px 18px rgba(0,0,0,.35);
+}
+
+/* ============================================================
+   BLOCK 18 — PATCH (FAS 2.1) Admin: tydlig aktiv CP + “klickbar rad”
+   NOTE: .clueRow kommer från admin-sidan (renderad i admin.js)
+============================================================ */
+.clueRow {
+  border-radius: 16px;
+  padding: 12px;
+  border: 1px solid rgba(255,255,255,.08);
+  background: rgba(255,255,255,.03);
+  transition: transform .08s ease, border-color .12s ease, background .12s ease, box-shadow .12s ease;
+}
+
+.clueRow:hover {
+  border-color: rgba(110,231,255,.22);
+  background: rgba(110,231,255,.05);
+}
+
+.clueRow:active {
+  transform: translateY(1px);
+}
+
+.clueRow.is-active {
+  border-color: rgba(110,231,255,.55);
+  background:
+    radial-gradient(520px 120px at 30% 0%, rgba(110,231,255,.10), transparent 60%),
+    rgba(110,231,255,.08);
+  box-shadow: 0 14px 30px rgba(0,0,0,.22);
+}
+
+.clueRow.is-active .clueIdx {
+  color: rgba(255,255,255,.98);
+}
+
+/* “Aktiv: CP X” pill-känsla */
+#activeCpLabel {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(110,231,255,.35);
+  background: rgba(110,231,255,.10);
+  font-weight: 900;
+}
+
+/* Lite tydligare “miniRow”-knappar när de står bredvid varandra */
+.miniRow .miniBtn {
+  border-color: rgba(255,255,255,.12);
+}
+.miniRow .miniBtn:hover {
+  border-color: rgba(110,231,255,.22);
 }
