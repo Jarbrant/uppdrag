@@ -1,8 +1,9 @@
 <!-- ============================================================
      FIL: pages/admin.html  (HEL FIL)
      AO 5/6 (FAS 1.2) — Admin UI: skapa skattjakt (lokalt, utan konto)
-     Mål: En vuxen kan skapa en jakt på plats (draft i localStorage)
-     Policy: UI-only, inga externa libs, fail-closed validering (inline errors)
+     AO 1/8 (FAS 1.5) — Admin: Leaflet-bas + kartcontainer + init
+     Mål: En vuxen kan skapa en jakt på plats (draft i localStorage) + se karta (utan checkpoints än)
+     Policy: UI-only, Leaflet via CDN (OK), fail-closed (inline errors), mobil-first
 ============================================================ -->
 <!doctype html>
 <html lang="sv">
@@ -15,6 +16,17 @@
   <title>Admin — Skapa skattjakt</title>
   <meta name="description" content="Skapa en skattjakt lokalt utan konto." />
   <link rel="stylesheet" href="../styles/main.css" />
+
+  <!-- ==========================================================
+       BLOCK 1.1 — Leaflet CSS (CDN)  (AO 1/8)
+       NOTE: lätt dependency OK för karta
+  =========================================================== -->
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+    crossorigin=""
+  />
 </head>
 
 <body>
@@ -184,6 +196,28 @@
           </section>
         </div>
 
+        <!-- ======================================================
+             BLOCK 7.5 — Karta (AO 1/8)
+             KRAV: kartcontainer #map, layout: form ovan/kvar, karta under
+        ======================================================= -->
+        <section class="card" aria-label="Karta">
+          <div class="card__head">
+            <div class="card__meta">
+              <h2 class="h2" style="margin:0">Karta</h2>
+              <p class="muted small" style="margin:6px 0 0 0">
+                Bas-karta för admin (checkpoints kommer senare).
+              </p>
+            </div>
+          </div>
+
+          <div id="mapWrap" class="mapWrap">
+            <div id="map" class="map" role="application" aria-label="Karta"></div>
+            <!-- HOOK: map-container -->
+            <div id="mapError" class="errorText" role="alert"></div>
+            <!-- HOOK: map-error -->
+          </div>
+        </section>
+
         <div class="muted small footerNote">
           Admin kör lokalt (ingen inloggning). Utkast sparas på en stabil localStorage-key.
         </div>
@@ -253,12 +287,37 @@
       background: rgba(255,255,255,.04);
     }
 
+    /* AO 1/8 — Map container needs height */
+    .mapWrap { margin-top: 10px; display:grid; gap: 8px; }
+    .map {
+      width: 100%;
+      min-height: 320px; /* mobil */
+      border-radius: 14px;
+      border: 1px solid var(--border);
+      overflow: hidden;
+      background: rgba(255,255,255,.03);
+    }
+    @media (min-width: 900px) {
+      .map { min-height: 420px; }
+    }
+
     .footerNote { margin-top: var(--sp-6); text-align:center; opacity:.85; }
   </style>
 
   <!-- ==========================================================
-       BLOCK 9 — Script
+       BLOCK 9 — Scripts
+       AO 1/8: Leaflet JS CDN måste laddas före admin-map init
   =========================================================== -->
+  <script
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+    crossorigin=""
+  ></script>
+
+  <!-- AO 1/8 — Map init -->
+  <script type="module" src="../src/admin-map.js"></script>
+
+  <!-- AO 5/6 + AO 6/6 — Admin form/draft/export -->
   <script type="module" src="../src/admin.js"></script>
 </body>
 </html>
