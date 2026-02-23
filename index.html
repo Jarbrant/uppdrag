@@ -2,8 +2,8 @@
      FIL: index.html  (HEL FIL)
      AO 1/15 + AO 11/15 (PATCH) + UI-polish (autostart cleanup)
      AO 5/6 (FAS 1.2) — Admin entry link (topbar)
-     Mål: Ingen “dubbel-ui” — Starta ska routa direkt (QR-länk ska bara funka)
-     Patch: Lägg till tydlig länk till pages/admin.html i topbar (utan nav-system)
+     PATCH (FAS 2.1) — Mina skattjakter (spelkort) från PARTY_LIBRARY_V1
+     Mål: Visa statiska lägen + egen rad under Skattjakt med publicerade jakter
 ============================================================ -->
 <!doctype html>
 <html lang="sv">
@@ -36,9 +36,8 @@
         <div class="topbar__right">
           <!-- ======================================================
                AO 5/6 (FAS 1.2) — Admin link
-               - Ingen nav-motor i MVP: direkt länk
+               - Direkt länk (ingen nav-motor i MVP)
                - Relativ path från /uppdrag/index.html → /uppdrag/pages/admin.html
-               - XSS-safe: statisk href
           ======================================================= -->
           <a id="adminLink"
              class="badge"
@@ -102,6 +101,14 @@
             </article>
           </div>
 
+          <!-- ======================================================
+               PATCH (FAS 2.1) — Mina skattjakter (egen rad under Skattjakt)
+               Renderas av JS om PARTY_LIBRARY_V1 har poster.
+          ======================================================= -->
+          <div id="partyLibraryWrap" class="slot" style="margin-top: var(--sp-5);">
+            <!-- HOOK: party-library-wrap -->
+          </div>
+
           <div class="panel">
             <div class="panel__row">
               <div class="panel__left">
@@ -128,12 +135,6 @@
           </footer>
         </div>
       </section>
-
-      <!-- ========================================================
-           BLOCK 4 — Autostart UI borttagen
-           Orsak: “dubbel UI” (Startar… + Autostart-läge) gav ingen nytta.
-           Boot (src/boot.js) sköter routing direkt.
-      ========================================================= -->
     </main>
   </div>
 
@@ -144,10 +145,7 @@
   <script type="module" src="./src/boot.js"></script>
 
   <!-- ==========================================================
-       BLOCK 6 — Index controller (mode-select + Start links + err-card)
-       - XSS-safe: DOM API + textContent
-       - Starta: direkt navigation till /uppdrag/?mode=...&id=...
-       - Ingen autostart container (endast lätt feedback)
+       BLOCK 6 — Index controller (mode-select + Start links + err-card + library)
   =========================================================== -->
   <script type="module">
     import { qsGet } from './src/util.js';
@@ -158,6 +156,9 @@
 
       if (window.__AO11_INDEX_INIT__) return; // HOOK: init-guard-index
       window.__AO11_INDEX_INIT__ = true;
+
+      const PARTY_LIBRARY_KEY = 'PARTY_LIBRARY_V1'; // HOOK: party-library-key
+      const partyLibraryWrap = document.getElementById('partyLibraryWrap'); // HOOK: party-library-wrap
 
       const selectedModeLabel = document.getElementById('selectedModeLabel'); // HOOK: selected-mode-label
       const startBtn = document.getElementById('startBtn'); // HOOK: start-button
@@ -172,6 +173,144 @@
         u.search = '';
         u.hash = '';
         return u;
+      }
+
+      function safeJSONParse(str, fallback = null) {
+        try { return JSON.parse(str); } catch (_) { return fallback; }
+      }
+
+      function readPartyLibrary() {
+        try {
+          const raw = localStorage.getItem(PARTY_LIBRARY_KEY);
+          if (!raw) return [];
+          const v = safeJSONParse(raw, []);
+          if (!Array.isArray(v)) return [];
+          return v
+            .filter((x) => x && typeof x === 'object' && typeof x.id === 'string')
+            .map((x) => ({
+              id: String(x.id),
+              name: String(x.name || 'Skattjakt'),
+              checkpointCount: Number(x.checkpointCount || 0),
+              updatedAt: Number(x.updatedAt || 0)
+            }));
+        } catch (_) {
+          return [];
+        }
+      }
+
+      function renderPartyLibraryRow() {
+        if (!partyLibraryWrap) return;
+
+        const list = readPartyLibrary();
+        if (!list.length) {
+          partyLibraryWrap.innerHTML = '';
+          return;
+        }
+
+        list.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+
+        const section = document.createElement('section');
+        section.className = 'card';
+        section.setAttribute('aria-label', 'Mina skattjakter');
+
+        const head = document.createElement('div');
+        head.className = 'card__head';
+
+        const meta = document.createElement('div');
+        meta.className = 'card__meta';
+
+        const h = document.createElement('h2');
+        h.className = 'h2';
+        h.style.margin = '0';
+        h.textContent = 'Mina skattjakter';
+
+        const p = document.createElement('p');
+        p.className = 'muted small';
+        p.style.margin = '6px 0 0 0';
+        p.textContent = 'Publicerade från Admin på denna enhet. Klicka för att öppna/redigera.';
+
+        meta.appendChild(h);
+        meta.appendChild(p);
+        head.appendChild(meta);
+
+        const grid = document.createElement('div');
+        grid.className = 'grid grid--modes';
+        grid.style.marginTop = '12px';
+
+        // Länk: öppna admin med load=<id>
+        const base = currentBaseUrl();
+        const adminBase = new URL('pages/admin.html', base.toString());
+
+        for (const item of list) {
+          const a = document.createElement('a');
+          a.className = 'card card--mode';
+          a.setAttribute('role', 'listitem');
+          a.setAttribute('tabindex', '0');
+          a.style.display = 'block';
+
+          const url = new URL(adminBase.toString());
+          url.searchParams.set('load', item.id);
+          a.href = url.toString();
+
+          const top = document.createElement('div');
+          top.className = 'card__top';
+
+          const icon = document.createElement('div');
+          icon.className = 'card__icon';
+          icon.setAttribute('aria-hidden', 'true');
+          icon.textContent = '🎯';
+
+          const meta2 = document.createElement('div');
+          meta2.className = 'card__meta';
+
+          const title = document.createElement('h3');
+          title.className = 'card__title';
+          title.textContent = item.name;
+
+          const desc = document.createElement('p');
+          desc.className = 'card__desc muted';
+          desc.textContent = item.checkpointCount
+            ? `${item.checkpointCount} checkpoints • öppna i admin`
+            : 'Öppna i admin';
+
+          meta2.appendChild(title);
+          meta2.appendChild(desc);
+
+          top.appendChild(icon);
+          top.appendChild(meta2);
+
+          const bottom = document.createElement('div');
+          bottom.className = 'card__bottom';
+
+          const b1 = document.createElement('span');
+          b1.className = 'badge';
+          b1.textContent = 'Skattjakt';
+
+          const b2 = document.createElement('span');
+          b2.className = 'badge badge-success';
+          b2.textContent = 'Min karta';
+
+          bottom.appendChild(b1);
+          bottom.appendChild(b2);
+
+          a.appendChild(top);
+          a.appendChild(bottom);
+
+          a.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              window.location.assign(a.href);
+            }
+          });
+
+          grid.appendChild(a);
+        }
+
+        section.appendChild(head);
+        section.appendChild(grid);
+
+        partyLibraryWrap.innerHTML = '';
+        partyLibraryWrap.appendChild(section);
       }
 
       // =========================================================
@@ -201,6 +340,11 @@
         errorSlot.innerHTML = '';
         errorSlot.appendChild(card);
       }
+
+      // =========================================================
+      // Render “Mina skattjakter”
+      // =========================================================
+      renderPartyLibraryRow();
 
       // =========================================================
       // Om URL redan har mode+id: visa bara lätt feedback.
@@ -271,7 +415,6 @@
                    : '';
           if (!id) return;
 
-          // UI feedback utan extra “containers”
           startBtn.disabled = true;
           startBtn.textContent = 'Startar…';
           if (startHint) startHint.textContent = 'Startar…';
