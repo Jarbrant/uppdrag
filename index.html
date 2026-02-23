@@ -1,13 +1,14 @@
 <!-- ============================================================
      FIL: index.html  (HEL FIL)
-     AO 1/15 + AO 11/15 (PATCH) — Fix: GitHub Pages subpath (/uppdrag/)
+     AO 1/15 + AO 11/15 (PATCH) + UI-polish (autostart cleanup)
+     Mål: Ingen “dubbel-ui” — Starta ska routa direkt (QR-länk ska bara funka)
 ============================================================ -->
 <!doctype html>
 <html lang="sv">
 <head>
-  /* ==========================================================
+  <!-- ==========================================================
        BLOCK 1 — Meta + CSS
-  =========================================================== */
+  =========================================================== -->
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Naturjakt / Skattjakt — Start</title>
@@ -49,6 +50,7 @@
 
           <!-- ======================================================
                BLOCK 3.1 — Error slot (AO-11)
+               KRAV: err= visas som Error Card på index
           ======================================================= -->
           <div id="errorSlot" class="slot"> <!-- HOOK: error-slot --></div>
 
@@ -112,48 +114,28 @@
       </section>
 
       <!-- ========================================================
-           BLOCK 4 — Auto-start View (UI-hook)
+           BLOCK 4 — Autostart UI borttagen
+           Orsak: “dubbel UI” (Startar… + Autostart-läge) gav ingen nytta.
+           Boot (src/boot.js) sköter routing direkt.
       ========================================================= -->
-      <section id="autostartView" class="view" aria-label="Autostart" hidden> <!-- HOOK: view-autostart -->
-        <div class="container">
-          <div class="hero hero--center">
-            <div class="toast toast--info" role="status" aria-live="polite">
-              <strong id="autostartText">Startar…</strong> <!-- HOOK: autostart-text -->
-              <div id="autostartMeta" class="muted small"></div> <!-- HOOK: autostart-meta -->
-            </div>
-
-            <div class="card card--info">
-              <h2 class="h2">Autostart-läge</h2>
-              <p class="muted">QR-länk upptäckt. Du skickas vidare automatiskt.</p>
-
-              <a id="autostartLink" class="btn btn-primary" href="#" aria-label="Gå vidare">
-                Gå vidare
-              </a>
-              <!-- HOOK: autostart-link -->
-            </div>
-
-            <button class="btn btn-ghost" type="button" id="backToStartBtn">
-              Tillbaka
-            </button>
-            <!-- HOOK: back-to-start -->
-          </div>
-        </div>
-      </section>
     </main>
   </div>
 
   <!-- ==========================================================
        BLOCK 5 — Boot routing
+       - Kör alltid; gör inget om inga params finns.
   =========================================================== -->
   <script type="module" src="./src/boot.js"></script>
 
   <!-- ==========================================================
        BLOCK 6 — Index controller (mode-select + Start links + err-card)
-       FIX: Navigera alltid till SAMMA base path (t.ex. /uppdrag/)
+       - XSS-safe: DOM API + textContent
+       - Starta: direkt navigation till /uppdrag/?mode=...&id=...
+       - Ingen autostart container (endast lätt feedback)
   =========================================================== -->
   <script type="module">
     import { qsGet } from './src/util.js';
-    import { renderErrorCard } from './src/ui.js';
+    import { renderErrorCard, toast } from './src/ui.js';
 
     (function () {
       'use strict';
@@ -161,18 +143,10 @@
       if (window.__AO11_INDEX_INIT__) return; // HOOK: init-guard-index
       window.__AO11_INDEX_INIT__ = true;
 
-      const startView = document.getElementById('startView');         // HOOK: view-start
-      const autostartView = document.getElementById('autostartView'); // HOOK: view-autostart
-
       const selectedModeLabel = document.getElementById('selectedModeLabel'); // HOOK: selected-mode-label
       const startBtn = document.getElementById('startBtn'); // HOOK: start-button
       const startHint = document.getElementById('startHint'); // HOOK: hint-area
       const errorSlot = document.getElementById('errorSlot'); // HOOK: error-slot
-
-      const autostartText = document.getElementById('autostartText'); // HOOK: autostart-text
-      const autostartMeta = document.getElementById('autostartMeta'); // HOOK: autostart-meta
-      const autostartLink = document.getElementById('autostartLink'); // HOOK: autostart-link
-      const backToStartBtn = document.getElementById('backToStartBtn'); // HOOK: back-to-start
 
       function currentBaseUrl() {
         // Om vi är på /uppdrag/index.html => base blir /uppdrag/
@@ -184,24 +158,9 @@
         return u;
       }
 
-      function showAutostartUI(mode, id) {
-        if (startView) startView.hidden = true;
-        if (autostartView) autostartView.hidden = false;
-
-        if (autostartText) autostartText.textContent = 'Startar…';
-        if (autostartMeta) autostartMeta.textContent = `mode=${mode} • id=${id}`;
-
-        // Fallback-länk som stannar på samma base path
-        if (autostartLink) {
-          const base = currentBaseUrl();
-          base.searchParams.set('mode', mode);
-          base.searchParams.set('id', id);
-          autostartLink.href = base.toString();
-          autostartLink.setAttribute('data-next', 'boot'); // HOOK: future-router-target
-        }
-      }
-
+      // =========================================================
       // KRAV: err= visas som Error Card på index
+      // =========================================================
       const err = qsGet('err'); // HOOK: qs-err
       const rid = qsGet('rid'); // HOOK: qs-rid
       if (err && errorSlot) {
@@ -227,23 +186,25 @@
         errorSlot.appendChild(card);
       }
 
-      // Om URL redan har mode+id: visa autostart UI-hook (boot.js routar vidare)
+      // =========================================================
+      // Om URL redan har mode+id: visa bara lätt feedback.
+      // Boot.js routar vidare direkt.
+      // =========================================================
       const qsMode = qsGet('mode');
       const qsId = qsGet('id');
       if (qsMode && qsId) {
-        showAutostartUI(qsMode, qsId);
-        if (backToStartBtn) {
-          backToStartBtn.addEventListener('click', () => {
-            const url = new URL(window.location.href);
-            url.searchParams.delete('mode');
-            url.searchParams.delete('id');
-            window.location.assign(url.toString());
-          }, { passive: true });
+        try { toast('Startar…', 'info', { ttlMs: 900 }); } catch (_) {}
+        if (startHint) startHint.textContent = 'Startar…';
+        if (startBtn) {
+          startBtn.disabled = true;
+          startBtn.textContent = 'Startar…';
         }
         return;
       }
 
-      // Mode selection + Start links (FIX: samma base path)
+      // =========================================================
+      // Mode selection + Start links (samma base path)
+      // =========================================================
       let selectedMode = '';
 
       function setSelectedMode(nextMode) {
@@ -257,6 +218,7 @@
         }
 
         if (startBtn) startBtn.disabled = !selectedMode;
+
         if (startHint) {
           startHint.textContent = selectedMode
             ? 'Tryck Starta för att öppna demo via QR-länk.'
@@ -293,11 +255,16 @@
                    : '';
           if (!id) return;
 
+          // UI feedback utan extra “containers”
+          startBtn.disabled = true;
+          startBtn.textContent = 'Startar…';
+          if (startHint) startHint.textContent = 'Startar…';
+          try { toast('Startar…', 'info', { ttlMs: 900 }); } catch (_) {}
+
           const base = currentBaseUrl();
           base.searchParams.set('mode', selectedMode);
           base.searchParams.set('id', id);
 
-          // FIX: navigera till /uppdrag/?mode=...&id=...
           window.location.assign(base.toString());
         });
       }
