@@ -1,8 +1,8 @@
 /* ============================================================
    FIL: src/packs.js  (HEL FIL)
-   AO 4/15 + AO 13/15 — Packs loader + robust felkoder (fail-closed)
-   Mål: Alla fetch-fel mappas till tydliga felkoder.
-   Policy: UI-only, fail-closed, inga nya storage keys, inga token-loggar
+   AO 4/15 + AO 13/15 (PATCH) — Packs loader + robust felkoder
+   FIX: GitHub Pages subpath (/uppdrag/) — bygg URLs relativt import.meta.url
+   Policy: UI-only, fail-closed, inga nya storage keys
 ============================================================ */
 
 /* ============================================================
@@ -11,24 +11,29 @@
 import { uid } from './util.js';
 
 /* ============================================================
-   BLOCK 2 — Paths (kontrakt)
+   BLOCK 2 — Paths (subpath-safe)
+   Viktigt:
+   - Använd import.meta.url (t.ex. .../uppdrag/src/packs.js)
+   - Bygg data-URL:er relativt den filen → .../uppdrag/data/...
 ============================================================ */
-export const ZONES_INDEX_PATH = '/data/zones.index.json'; // HOOK: zones-index-path
-export const PACKS_BASE_PATH = '/data/packs/';            // HOOK: packs-base-path
+function dataUrl(pathFromSrc) {
+  // pathFromSrc ex: '../data/zones.index.json'
+  return new URL(pathFromSrc, import.meta.url).toString();
+}
+
+export const ZONES_INDEX_URL = dataUrl('../data/zones.index.json'); // HOOK: zones-index-url
+export const PACKS_BASE_URL = dataUrl('../data/packs/');           // HOOK: packs-base-url
 
 /* ============================================================
-   BLOCK 3 — Error codes (KRAV)
+   BLOCK 3 — Error codes
 ============================================================ */
 export const PACK_ERR = Object.freeze({
-  // input
   ZONE_ID_MISSING: 'P_ZONE_ID_MISSING',
 
-  // index fetch/parse
   INDEX_FETCH_NETWORK: 'P_INDEX_FETCH_NETWORK',
   INDEX_FETCH_HTTP: 'P_INDEX_FETCH_HTTP',
   INDEX_FETCH_JSON: 'P_INDEX_FETCH_JSON',
 
-  // index validation
   INDEX_BAD: 'P_INDEX_BAD',
   INDEX_EMPTY: 'P_INDEX_EMPTY',
   INDEX_ZONE_BAD: 'P_INDEX_ZONE_BAD',
@@ -39,12 +44,10 @@ export const PACK_ERR = Object.freeze({
   INDEX_ZONE_DUPLICATE: 'P_INDEX_ZONE_DUPLICATE',
   ZONE_NOT_FOUND: 'P_ZONE_NOT_FOUND',
 
-  // pack fetch/parse
   PACK_FETCH_NETWORK: 'P_PACK_FETCH_NETWORK',
   PACK_FETCH_HTTP: 'P_PACK_FETCH_HTTP',
   PACK_FETCH_JSON: 'P_PACK_FETCH_JSON',
 
-  // pack validation
   PACK_BAD: 'P_PACK_BAD',
   PACK_ID_MISSING: 'P_PACK_ID_MISSING',
   PACK_NAME_MISSING: 'P_PACK_NAME_MISSING',
@@ -54,7 +57,6 @@ export const PACK_ERR = Object.freeze({
 
 /* ============================================================
    BLOCK 4 — Controlled error object
-   KRAV: Vid fel → kasta kontrollerat felobjekt
 ============================================================ */
 export function PackError(code, message, details = {}) {
   return {
@@ -78,8 +80,7 @@ function asTextSafe(x) {
 }
 
 async function fetchJson(url, { scope = 'GEN' } = {}) {
-  // scope: INDEX | PACK | GEN
-  const rid = uid('fetch'); // HOOK: fetch-requestId
+  const rid = uid('fetch');
   let res;
 
   try {
@@ -179,12 +180,12 @@ function validateZonePack(pack) {
 /* ============================================================
    BLOCK 8 — Public API
 ============================================================ */
-let _zonesIndexCache = null; // in-memory only // HOOK: zones-index-cache
+let _zonesIndexCache = null; // HOOK: zones-index-cache
 
 export async function loadZonesIndex({ force = false } = {}) {
   if (_zonesIndexCache && !force) return _zonesIndexCache;
 
-  const idx = await fetchJson(ZONES_INDEX_PATH, { scope: 'INDEX' });
+  const idx = await fetchJson(ZONES_INDEX_URL, { scope: 'INDEX' });
   const map = validateZonesIndex(idx);
   _zonesIndexCache = map;
   return map;
@@ -201,7 +202,8 @@ export async function loadZonePack(zoneId, { forceIndex = false } = {}) {
     throw PackError(PACK_ERR.ZONE_NOT_FOUND, 'Zon finns inte i index.', { zoneId: zid });
   }
 
-  const packUrl = `${PACKS_BASE_PATH}${entry.file}`;
+  // Bygg pack-url relativt base (subpath-safe)
+  const packUrl = new URL(entry.file, PACKS_BASE_URL).toString();
   const pack = await fetchJson(packUrl, { scope: 'PACK' });
 
   validateZonePack(pack);
