@@ -4,11 +4,8 @@
    AO 5/8 (FAS 1.5) — Clear + reveal circle + nästa aktiv
    AO 7/8 (FAS 2.0) — Grid-läge (alternativ vy): Toggle Karta/Grid + grid UI-state
    AO 8/8 (FAS 2.0) — Auto-ledtråd + final “Skattkista”
-   KRAV (AO 8/8):
-   - När cp klar: nästa ledtråd visas direkt (auto unlock) ✅
-   - Finalpunkt: sista cp kan ha isFinal:true (skattkista)
-   - Skattkista syns/benämns först när alla före är klara
-   - Fail-closed: om isFinal saknas → behandla som vanlig sista cp
+   NICE-TO-HAVE PACK (FAS 2.1) — Progress persist + auto-pan + final stamp (UI-only)
+   Policy: UI-only, fail-closed, ingen engine
 ============================================================ */
 
 /* ============================================================
@@ -144,15 +141,17 @@ function isValidPayloadV1(obj) {
     if (t.length < 3 || t.length > 140) return false;
   }
 
-  // geo optional
   if (obj.geo !== undefined && !Array.isArray(obj.geo)) return false;
-
   return true;
 }
 
 /* ============================================================
    BLOCK 4 — Checkpoints model (inkl AO 8/8 isFinal)
 ============================================================ */
+let checkpoints = [];
+let activeIndex = 0;
+let cleared = new Set();
+
 function buildCheckpointsFromPayload(payload) {
   const cc = clampInt(payload.checkpointCount, 1, 20);
   const clues = payload.clues.slice(0, cc).map((c) => asText(c));
@@ -165,25 +164,14 @@ function buildCheckpointsFromPayload(payload) {
     const lng = Number.isFinite(Number(g.lng)) ? Number(g.lng) : null;
     const radius = clampInt(g.radius ?? 25, 5, 5000);
     const code = asText(g.code ?? '');
-
-    // AO 8/8: isFinal gäller endast sista cp — fail-closed annars.
     const isFinal = (i === cc - 1) ? (g.isFinal === true) : false;
 
-    cps.push({
-      index: i,
-      clue: clues[i] || `Checkpoint ${i + 1}`,
-      lat,
-      lng,
-      radius,
-      code,
-      isFinal
-    });
+    cps.push({ index: i, clue: clues[i] || `Checkpoint ${i + 1}`, lat, lng, radius, code, isFinal });
   }
   return cps;
 }
 
 function getFinalIndex() {
-  // Endast sista checkpoint kan vara final. Om flagga saknas => ingen final (behandla som vanlig sista).
   const last = checkpoints.length - 1;
   if (last >= 0 && checkpoints[last] && checkpoints[last].isFinal === true) return last;
   return -1;
@@ -198,15 +186,83 @@ function allBeforeFinalCleared(finalIdx) {
 }
 
 /* ============================================================
-   BLOCK 5 — Leaflet map state
+   BLOCK 5 — NICE: Progress persist (sessionStorage, fail-closed)
+   - Lagrar: cleared[], activeIndex, viewMode
+   - Skyddar mot “fel jakt” via payloadFingerprint
 ============================================================ */
-let map = null;
-let markerLayer = null;
-let revealCircle = null;
+const PROGRESS_KEY = 'PARTY_PROGRESS_V1'; // HOOK: progress-key
+let progressWritable = true;              // HOOK: progress-writable
+let payloadFingerprint = '';              // HOOK: payload-fingerprint
 
-let checkpoints = [];
-let activeIndex = 0;
-let cleared = new Set();
+function djb2Hash(str) {
+  const s = (str ?? '').toString();
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) {
+    h = ((h << 5) + h) + s.charCodeAt(i);
+    h = h >>> 0;
+  }
+  return h.toString(36);
+}
+
+function makePayloadFingerprint(payload) {
+  // Fail-closed: använd bara stabila fält som påverkar struktur
+  const base = {
+    v: Number(payload?.version) || 0,
+    name: asText(payload?.name),
+    cc: Number(payload?.checkpointCount) || 0,
+    // clues påverkar flow – inkludera kort hash
+    clues: Array.isArray(payload?.clues) ? payload.clues.map((c) => asText(c)) : []
+  };
+  return djb2Hash(JSON.stringify(base));
+}
+
+function safeReadProgress() {
+  try {
+    const raw = sessionStorage.getItem(PROGRESS_KEY);
+    if (!raw) return null;
+    const obj = JSON.parse(raw);
+    if (!obj || typeof obj !== 'object') return null;
+    if (obj.v !== 1) return null;
+    if (asText(obj.fp) !== payloadFingerprint) return null;
+
+    const cl = Array.isArray(obj.cleared) ? obj.cleared : [];
+    const set = new Set();
+    for (const x of cl) {
+      const idx = Number(x);
+      if (Number.isFinite(idx) && idx >= 0 && idx <= 999) set.add(idx);
+    }
+
+    const ai = Number(obj.activeIndex);
+    const vi = asText(obj.viewMode) === 'grid' ? 'grid' : 'map';
+
+    return {
+      cleared: set,
+      activeIndex: Number.isFinite(ai) ? clampInt(ai, 0, Math.max(0, checkpoints.length - 1)) : 0,
+      viewMode: vi
+    };
+  } catch (_) {
+    progressWritable = false;
+    return null;
+  }
+}
+
+function safeWriteProgress() {
+  if (!progressWritable) return false;
+  try {
+    const obj = {
+      v: 1,
+      fp: payloadFingerprint,
+      cleared: Array.from(cleared.values()).sort((a, b) => a - b),
+      activeIndex,
+      viewMode
+    };
+    sessionStorage.setItem(PROGRESS_KEY, JSON.stringify(obj));
+    return true;
+  } catch (_) {
+    progressWritable = false;
+    return false;
+  }
+}
 
 /* ============================================================
    BLOCK 6 — View state (Karta/Grid)
@@ -234,6 +290,9 @@ function setViewMode(next) {
   }
 
   if (viewMode === 'grid') renderGrid();
+
+  // NICE: persist view choice
+  safeWriteProgress();
 }
 
 function bindViewToggle() {
@@ -242,8 +301,12 @@ function bindViewToggle() {
 }
 
 /* ============================================================
-   BLOCK 7 — Leaflet visuals
+   BLOCK 7 — Leaflet map state + visuals
 ============================================================ */
+let map = null;
+let markerLayer = null;
+let revealCircle = null;
+
 function leafletReady() {
   return !!(window.L && elMap);
 }
@@ -317,13 +380,20 @@ function renderMarkers() {
         toast(`Checkpoint ${i + 1} är redan klar.`, 'info', 1200);
         return;
       }
-      // Fail-closed: final får inte aktiveras förrän upplåst
+
       const finalIdx = getFinalIndex();
       if (i === finalIdx && finalIdx >= 0 && !allBeforeFinalCleared(finalIdx)) {
         toast('🎁 Skattkistan är låst. Klara alla före först.', 'warn', 1600);
         return;
       }
-      setActiveCheckpoint(i);
+
+      // Fail-closed: ingen hoppa framåt
+      if (i > activeIndex) {
+        toast('🔒 Du kan inte hoppa till låsta checkpoints.', 'warn', 1400);
+        return;
+      }
+
+      setActiveCheckpoint(i, { pan: true });
     });
 
     m.addTo(markerLayer);
@@ -355,16 +425,13 @@ function renderRevealCircle() {
 }
 
 /* ============================================================
-   BLOCK 8 — Grid render (inkl AO 8/8 final)
+   BLOCK 8 — Grid render (inkl final)
 ============================================================ */
 function computeCellStatus(i) {
   const finalIdx = getFinalIndex();
 
   if (cleared.has(i)) return 'cleared';
-
-  // Final är låst tills alla före är klara
   if (i === finalIdx && finalIdx >= 0 && !allBeforeFinalCleared(finalIdx)) return 'locked';
-
   if (i === activeIndex) return 'active';
   if (i > activeIndex) return 'locked';
   return 'locked';
@@ -426,7 +493,7 @@ function renderGrid() {
         else toast(`Checkpoint ${i + 1} är redan klar.`, 'info', 1200);
         return;
       }
-      setActiveCheckpoint(i);
+      setActiveCheckpoint(i, { pan: true });
       try { elCode?.focus?.(); } catch (_) {}
     });
 
@@ -444,21 +511,19 @@ function renderGrid() {
 }
 
 /* ============================================================
-   BLOCK 9 — Active checkpoint UI (inkl AO 8/8 final label)
+   BLOCK 9 — Active checkpoint UI + NICE: auto-pan
 ============================================================ */
-function setActiveCheckpoint(nextIndex) {
+function setActiveCheckpoint(nextIndex, opts = {}) {
   const idx = clampInt(nextIndex, 0, Math.max(0, checkpoints.length - 1));
   if (idx < 0 || idx >= checkpoints.length) return;
 
   const finalIdx = getFinalIndex();
 
-  // Fail-closed: final kan inte väljas om låst
   if (idx === finalIdx && finalIdx >= 0 && !allBeforeFinalCleared(finalIdx)) {
     toast('🎁 Skattkistan är låst. Klara alla före först.', 'warn', 1600);
     return;
   }
 
-  // Fail-closed: ingen hoppa till "låst" (gäller även final)
   if (idx > activeIndex && !cleared.has(idx)) {
     toast('🔒 Du kan inte hoppa till låsta checkpoints.', 'warn', 1400);
     return;
@@ -479,13 +544,20 @@ function setActiveCheckpoint(nextIndex) {
   renderRevealCircle();
   if (viewMode === 'grid') renderGrid();
 
-  if (map && cp && Number.isFinite(cp.lat) && Number.isFinite(cp.lng)) {
-    try { map.setView([cp.lat, cp.lng], Math.max(14, map.getZoom() || 14)); } catch (_) {}
+  // NICE: auto-pan (mjuk)
+  if (opts.pan && map && cp && Number.isFinite(cp.lat) && Number.isFinite(cp.lng)) {
+    try {
+      const targetZoom = Math.max(15, map.getZoom() || 15);
+      map.flyTo([cp.lat, cp.lng], targetZoom, { duration: 0.8 });
+    } catch (_) {}
   }
+
+  // persist progress
+  safeWriteProgress();
 }
 
 /* ============================================================
-   BLOCK 10 — Code validation + clear/advance (AO 8/8 final flow)
+   BLOCK 10 — Code validation + clear/advance + final stamp
 ============================================================ */
 function validateCodeInput(value) {
   const t = asText(value);
@@ -497,25 +569,54 @@ function validateCodeInput(value) {
 function codesMatch(expected, entered) {
   const a = asText(expected);
   const b = asText(entered);
-  if (!a) return true; // om admin inte satte kod → ok
+  if (!a) return true;
   return a.toLowerCase() === b.toLowerCase();
 }
 
 function findNextPlayableIndex(fromIndex) {
   const finalIdx = getFinalIndex();
 
-  // 1) Gå framåt och välj första uncleared som INTE är final (om final finns).
   for (let i = fromIndex; i < checkpoints.length; i++) {
     if (cleared.has(i)) continue;
-    if (finalIdx >= 0 && i === finalIdx) continue; // hoppa final tills den är upplåst
+    if (finalIdx >= 0 && i === finalIdx) continue;
     return i;
   }
 
-  // 2) Om ingen kvar och final finns och är uncleared och upplåst -> final.
   if (finalIdx >= 0 && !cleared.has(finalIdx) && allBeforeFinalCleared(finalIdx)) return finalIdx;
-
-  // 3) annars: inget kvar
   return -1;
+}
+
+function showFinalStamp() {
+  // CSS-free fallback: overlay med inline styles (ser “papper/stämpel”-aktigt ut)
+  const existing = document.getElementById('finalStamp');
+  if (existing) return;
+
+  const wrap = document.createElement('div');
+  wrap.id = 'finalStamp';
+  wrap.setAttribute('role', 'status');
+  wrap.setAttribute('aria-live', 'polite');
+  wrap.textContent = '🎁 SKATT FUNNEN!';
+  wrap.style.position = 'fixed';
+  wrap.style.left = '50%';
+  wrap.style.top = '18%';
+  wrap.style.transform = 'translateX(-50%) rotate(-6deg)';
+  wrap.style.zIndex = '2000';
+  wrap.style.padding = '14px 18px';
+  wrap.style.borderRadius = '18px';
+  wrap.style.border = '1px solid rgba(255,214,150,.28)';
+  wrap.style.background = 'rgba(16, 26, 47, .78)';
+  wrap.style.boxShadow = '0 18px 40px rgba(0,0,0,.35)';
+  wrap.style.fontWeight = '900';
+  wrap.style.letterSpacing = '.08em';
+  wrap.style.backdropFilter = 'blur(10px)';
+  wrap.style.userSelect = 'none';
+
+  document.body.appendChild(wrap);
+
+  setTimeout(() => {
+    try { wrap.style.opacity = '0'; wrap.style.transition = 'opacity .25s ease'; } catch (_) {}
+    setTimeout(() => { try { wrap.remove(); } catch (_) {} }, 320);
+  }, 1800);
 }
 
 function onCheckpointApproved() {
@@ -529,21 +630,26 @@ function onCheckpointApproved() {
 
   if (wasFinal) {
     toast('🎁 Skattkistan är hittad!', 'success', 1800);
+    showFinalStamp();
   } else {
     toast(`✅ Checkpoint ${activeIndex + 1} klar!`, 'info', 1400);
   }
 
-  // Auto-ledtråd: sätt nästa aktiv direkt (visas direkt via setActiveCheckpoint)
+  // Persist
+  safeWriteProgress();
+
+  // Auto-ledtråd: nästa blir aktiv direkt
   const next = findNextPlayableIndex(activeIndex + 1);
 
   if (next === -1) {
     showStatus('🎉 Alla checkpoints klara! (MVP)', 'info');
     if (elOk) elOk.disabled = true;
     if (viewMode === 'grid') renderGrid();
+    safeWriteProgress();
     return;
   }
 
-  setActiveCheckpoint(next);
+  setActiveCheckpoint(next, { pan: true });
 }
 
 /* ============================================================
@@ -595,6 +701,8 @@ function onCheckpointApproved() {
   }
 
   const payload = parsed.value;
+  payloadFingerprint = makePayloadFingerprint(payload);
+
   checkpoints = buildCheckpointsFromPayload(payload);
 
   setText(elName, payload.name || 'Skattjakt');
@@ -615,10 +723,22 @@ function onCheckpointApproved() {
     }
   }
 
-  setViewMode('map');
+  // NICE: restore progress (fail-closed)
+  const restored = safeReadProgress();
+  if (restored) {
+    cleared = restored.cleared;
+    activeIndex = restored.activeIndex;
+    setViewMode(restored.viewMode);
+    toast('Återställde progress.', 'info', 900);
+  } else {
+    setViewMode('map');
+  }
 
-  // Start: första cp (final får inte vara enda “synliga” om den är låst, men final är bara sista)
-  setActiveCheckpoint(0);
+  // Init active UI (pan soft)
+  setActiveCheckpoint(activeIndex || 0, { pan: false });
+
+  // Render grid once (så den finns direkt när man togglar)
+  renderGrid();
 
   function setErr(text) { setText(elErrCode, text || ''); }
 
@@ -643,5 +763,6 @@ function onCheckpointApproved() {
     });
   }
 
-  renderGrid();
+  // Persist initial state
+  safeWriteProgress();
 })();
