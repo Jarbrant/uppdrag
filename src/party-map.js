@@ -3,12 +3,12 @@
    AO 4/8 (FAS 1.5) — Deltagarvy: karta + checkpoint + kod
    AO 5/8 (FAS 1.5) — Clear + reveal circle + nästa aktiv
    AO 7/8 (FAS 2.0) — Grid-läge (alternativ vy): Toggle Karta/Grid + grid UI-state
-   Mål:
-   - Toggle mellan “Karta” och “Grid”
-   - Grid visar 1..N med status: låst/aktiv/klar
-   - Ingen ny engine-logik: UI-state här i party-map.js
-   Fail-closed:
-   - fel kod → toast utan state-ändring
+   AO 8/8 (FAS 2.0) — Auto-ledtråd + final “Skattkista”
+   KRAV (AO 8/8):
+   - När cp klar: nästa ledtråd visas direkt (auto unlock) ✅
+   - Finalpunkt: sista cp kan ha isFinal:true (skattkista)
+   - Skattkista syns/benämns först när alla före är klara
+   - Fail-closed: om isFinal saknas → behandla som vanlig sista cp
 ============================================================ */
 
 /* ============================================================
@@ -16,24 +16,24 @@
 ============================================================ */
 const $ = (sel) => document.querySelector(sel);
 
-const elBack = $('#backBtn');            // HOOK: back-button
-const elStatusSlot = $('#statusSlot');   // HOOK: status-slot
-const elName = $('#partyName');          // HOOK: party-name
-const elStepPill = $('#stepPill');       // HOOK: step-pill
-const elClue = $('#clueText');           // HOOK: clue-text
-const elCode = $('#codeInput');          // HOOK: code-input
-const elErrCode = $('#errCode');         // HOOK: err-code
-const elOk = $('#okBtn');                // HOOK: ok-button
-const elMap = $('#partyMap');            // HOOK: party-map
-const elMapError = $('#mapError');       // HOOK: map-error
+const elBack = $('#backBtn');
+const elStatusSlot = $('#statusSlot');
+const elName = $('#partyName');
+const elStepPill = $('#stepPill');
+const elClue = $('#clueText');
+const elCode = $('#codeInput');
+const elErrCode = $('#errCode');
+const elOk = $('#okBtn');
+const elMap = $('#partyMap');
+const elMapError = $('#mapError');
 
-// AO 7/8 — view toggle hooks
-const elMapView = $('#mapView');         // HOOK: map-view
-const elGridView = $('#gridView');       // HOOK: grid-view
-const elViewMapBtn = $('#viewMapBtn');   // HOOK: view-map-btn
-const elViewGridBtn = $('#viewGridBtn'); // HOOK: view-grid-btn
-const elGridWrap = $('#gridWrap');       // HOOK: grid-wrap
-const elGridHint = $('#gridHint');       // HOOK: grid-hint
+// view toggle
+const elMapView = $('#mapView');
+const elGridView = $('#gridView');
+const elViewMapBtn = $('#viewMapBtn');
+const elViewGridBtn = $('#viewGridBtn');
+const elGridWrap = $('#gridWrap');
+const elGridHint = $('#gridHint');
 
 /* ============================================================
    BLOCK 2 — UI helpers
@@ -84,7 +84,6 @@ function qsGet(key) {
 function safeDecodePayload(raw) {
   const s = (raw ?? '').toString().trim();
   if (!s) return { ok: false, value: '' };
-
   try {
     const once = decodeURIComponent(s);
     try {
@@ -145,11 +144,15 @@ function isValidPayloadV1(obj) {
     if (t.length < 3 || t.length > 140) return false;
   }
 
+  // geo optional
   if (obj.geo !== undefined && !Array.isArray(obj.geo)) return false;
 
   return true;
 }
 
+/* ============================================================
+   BLOCK 4 — Checkpoints model (inkl AO 8/8 isFinal)
+============================================================ */
 function buildCheckpointsFromPayload(payload) {
   const cc = clampInt(payload.checkpointCount, 1, 20);
   const clues = payload.clues.slice(0, cc).map((c) => asText(c));
@@ -162,13 +165,40 @@ function buildCheckpointsFromPayload(payload) {
     const lng = Number.isFinite(Number(g.lng)) ? Number(g.lng) : null;
     const radius = clampInt(g.radius ?? 25, 5, 5000);
     const code = asText(g.code ?? '');
-    cps.push({ index: i, clue: clues[i] || `Checkpoint ${i + 1}`, lat, lng, radius, code });
+
+    // AO 8/8: isFinal gäller endast sista cp — fail-closed annars.
+    const isFinal = (i === cc - 1) ? (g.isFinal === true) : false;
+
+    cps.push({
+      index: i,
+      clue: clues[i] || `Checkpoint ${i + 1}`,
+      lat,
+      lng,
+      radius,
+      code,
+      isFinal
+    });
   }
   return cps;
 }
 
+function getFinalIndex() {
+  // Endast sista checkpoint kan vara final. Om flagga saknas => ingen final (behandla som vanlig sista).
+  const last = checkpoints.length - 1;
+  if (last >= 0 && checkpoints[last] && checkpoints[last].isFinal === true) return last;
+  return -1;
+}
+
+function allBeforeFinalCleared(finalIdx) {
+  if (finalIdx < 0) return true;
+  for (let i = 0; i < finalIdx; i++) {
+    if (!cleared.has(i)) return false;
+  }
+  return true;
+}
+
 /* ============================================================
-   BLOCK 4 — Leaflet map state (AO 5/8)
+   BLOCK 5 — Leaflet map state
 ============================================================ */
 let map = null;
 let markerLayer = null;
@@ -179,15 +209,14 @@ let activeIndex = 0;
 let cleared = new Set();
 
 /* ============================================================
-   BLOCK 5 — AO 7/8 view state (UI-only)
+   BLOCK 6 — View state (Karta/Grid)
 ============================================================ */
-let viewMode = 'map'; // 'map' | 'grid'  (HOOK: view-mode)
+let viewMode = 'map';
 
 function setViewMode(next) {
   const m = (next === 'grid') ? 'grid' : 'map';
   viewMode = m;
 
-  // Fail-soft om DOM saknas
   if (elMapView) elMapView.classList.toggle('is-hidden', viewMode !== 'map');
   if (elGridView) elGridView.classList.toggle('is-hidden', viewMode !== 'grid');
 
@@ -200,12 +229,10 @@ function setViewMode(next) {
     elViewGridBtn.setAttribute('aria-selected', viewMode === 'grid' ? 'true' : 'false');
   }
 
-  // När vi går till karta: invalidation/recenter lite så Leaflet ritar rätt
   if (viewMode === 'map' && map) {
     try { setTimeout(() => map.invalidateSize(), 60); } catch (_) {}
   }
 
-  // Grid render varje gång vi visar grid (UI state)
   if (viewMode === 'grid') renderGrid();
 }
 
@@ -215,7 +242,7 @@ function bindViewToggle() {
 }
 
 /* ============================================================
-   BLOCK 6 — Marker + circle visuals
+   BLOCK 7 — Leaflet visuals
 ============================================================ */
 function leafletReady() {
   return !!(window.L && elMap);
@@ -290,8 +317,12 @@ function renderMarkers() {
         toast(`Checkpoint ${i + 1} är redan klar.`, 'info', 1200);
         return;
       }
-      // UI-only: grid/logik säger att bara aktiva (eller tidigare) är valbara
-      // För karta tillåter vi byta till valfri icke-cleared (fail-soft).
+      // Fail-closed: final får inte aktiveras förrän upplåst
+      const finalIdx = getFinalIndex();
+      if (i === finalIdx && finalIdx >= 0 && !allBeforeFinalCleared(finalIdx)) {
+        toast('🎁 Skattkistan är låst. Klara alla före först.', 'warn', 1600);
+        return;
+      }
       setActiveCheckpoint(i);
     });
 
@@ -324,18 +355,40 @@ function renderRevealCircle() {
 }
 
 /* ============================================================
-   BLOCK 7 — Grid render (AO 7/8)
-   Status:
-   - cleared: i <activeIndex? (cleared set) => klar
-   - active: i === activeIndex och ej cleared
-   - locked: i > activeIndex och ej cleared
+   BLOCK 8 — Grid render (inkl AO 8/8 final)
 ============================================================ */
 function computeCellStatus(i) {
+  const finalIdx = getFinalIndex();
+
   if (cleared.has(i)) return 'cleared';
+
+  // Final är låst tills alla före är klara
+  if (i === finalIdx && finalIdx >= 0 && !allBeforeFinalCleared(finalIdx)) return 'locked';
+
   if (i === activeIndex) return 'active';
   if (i > activeIndex) return 'locked';
-  // i < activeIndex men inte cleared (kan hända om reload) → behandla som locked för fail-closed
   return 'locked';
+}
+
+function cellLabel(i) {
+  const finalIdx = getFinalIndex();
+  if (i === finalIdx && finalIdx >= 0 && allBeforeFinalCleared(finalIdx) && !cleared.has(finalIdx)) return '🎁';
+  return String(i + 1);
+}
+
+function cellAriaLabel(i, status) {
+  const finalIdx = getFinalIndex();
+  const isFinal = (i === finalIdx && finalIdx >= 0);
+
+  if (isFinal && status !== 'locked' && !cleared.has(i)) return 'Skattkista aktiv';
+  if (isFinal && cleared.has(i)) return 'Skattkista klar';
+  if (isFinal && status === 'locked') return 'Skattkista låst';
+
+  return (
+    status === 'cleared' ? `Checkpoint ${i + 1} klar` :
+    status === 'active' ? `Checkpoint ${i + 1} aktiv` :
+    `Checkpoint ${i + 1} låst`
+  );
 }
 
 function renderGrid() {
@@ -348,33 +401,32 @@ function renderGrid() {
     const status = computeCellStatus(i);
 
     const cell = document.createElement('div');
-    cell.className = `gridCell ${status === 'active' ? 'is-active' : status === 'cleared' ? 'is-cleared' : 'is-locked'}`;
+    cell.className = `gridCell ${
+      status === 'active' ? 'is-active' :
+      status === 'cleared' ? 'is-cleared' :
+      'is-locked'
+    }`;
+
     cell.setAttribute('role', 'listitem');
     cell.setAttribute('data-idx', String(i));
-    cell.textContent = String(i + 1);
+    cell.textContent = cellLabel(i);
 
     const disabled = (status === 'locked');
     cell.setAttribute('aria-disabled', disabled ? 'true' : 'false');
-    cell.setAttribute('aria-label',
-      status === 'cleared' ? `Checkpoint ${i + 1} klar` :
-      status === 'active' ? `Checkpoint ${i + 1} aktiv` :
-      `Checkpoint ${i + 1} låst`
-    );
+    cell.setAttribute('aria-label', cellAriaLabel(i, status));
 
-    // Klick: bara cleared/active är klickbara (ingen ny engine)
     cell.addEventListener('click', () => {
       if (disabled) {
         toast('🔒 Låst. Klara aktiv checkpoint först.', 'warn', 1400);
         return;
       }
-      // Om cleared: visa info. Om active: scroll till kodfält.
       if (status === 'cleared') {
-        toast(`Checkpoint ${i + 1} är redan klar.`, 'info', 1200);
+        const finalIdx = getFinalIndex();
+        if (i === finalIdx && finalIdx >= 0) toast('🎁 Skattkistan är redan klar.', 'info', 1200);
+        else toast(`Checkpoint ${i + 1} är redan klar.`, 'info', 1200);
         return;
       }
       setActiveCheckpoint(i);
-      // Auto: gå till karta om man vill se position (fail-soft)
-      // Men vi lämnar vyvalet till användaren.
       try { elCode?.focus?.(); } catch (_) {}
     });
 
@@ -382,22 +434,31 @@ function renderGrid() {
   }
 
   if (elGridHint) {
-    const remaining = total - cleared.size;
-    elGridHint.textContent = remaining > 0
-      ? `Kvar: ${remaining} checkpoint${remaining === 1 ? '' : 's'} • Aktiv: ${activeIndex + 1}`
+    const totalRemaining = checkpoints.length - cleared.size;
+    const finalIdx = getFinalIndex();
+    const finalLocked = (finalIdx >= 0 && !cleared.has(finalIdx) && !allBeforeFinalCleared(finalIdx));
+    elGridHint.textContent = totalRemaining > 0
+      ? `Kvar: ${totalRemaining} • Aktiv: ${activeIndex + 1}${finalLocked ? ' • Skattkista låst' : ''}`
       : 'Alla checkpoints klara.';
   }
 }
 
 /* ============================================================
-   BLOCK 8 — Active checkpoint UI
+   BLOCK 9 — Active checkpoint UI (inkl AO 8/8 final label)
 ============================================================ */
 function setActiveCheckpoint(nextIndex) {
   const idx = clampInt(nextIndex, 0, Math.max(0, checkpoints.length - 1));
   if (idx < 0 || idx >= checkpoints.length) return;
 
-  // Fail-closed: tillåt inte hoppa framåt i grid-logik
-  // (karta kan fortfarande hoppa via marker; men här begränsar vi UI-state)
+  const finalIdx = getFinalIndex();
+
+  // Fail-closed: final kan inte väljas om låst
+  if (idx === finalIdx && finalIdx >= 0 && !allBeforeFinalCleared(finalIdx)) {
+    toast('🎁 Skattkistan är låst. Klara alla före först.', 'warn', 1600);
+    return;
+  }
+
+  // Fail-closed: ingen hoppa till "låst" (gäller även final)
   if (idx > activeIndex && !cleared.has(idx)) {
     toast('🔒 Du kan inte hoppa till låsta checkpoints.', 'warn', 1400);
     return;
@@ -406,7 +467,9 @@ function setActiveCheckpoint(nextIndex) {
   activeIndex = idx;
 
   const cp = checkpoints[activeIndex];
-  setText(elStepPill, `Checkpoint ${activeIndex + 1}`);
+  const isFinalActive = (activeIndex === finalIdx && finalIdx >= 0);
+
+  setText(elStepPill, isFinalActive ? 'Skattkista' : `Checkpoint ${activeIndex + 1}`);
   setText(elClue, cp?.clue || '—');
   setText(elErrCode, '');
 
@@ -422,7 +485,7 @@ function setActiveCheckpoint(nextIndex) {
 }
 
 /* ============================================================
-   BLOCK 9 — Code validation + clear/advance
+   BLOCK 10 — Code validation + clear/advance (AO 8/8 final flow)
 ============================================================ */
 function validateCodeInput(value) {
   const t = asText(value);
@@ -434,26 +497,45 @@ function validateCodeInput(value) {
 function codesMatch(expected, entered) {
   const a = asText(expected);
   const b = asText(entered);
-  if (!a) return true; // MVP: om admin inte satte kod → allt ok
+  if (!a) return true; // om admin inte satte kod → ok
   return a.toLowerCase() === b.toLowerCase();
 }
 
-function findNextUnclearedIndex(fromIndex) {
+function findNextPlayableIndex(fromIndex) {
+  const finalIdx = getFinalIndex();
+
+  // 1) Gå framåt och välj första uncleared som INTE är final (om final finns).
   for (let i = fromIndex; i < checkpoints.length; i++) {
-    if (!cleared.has(i)) return i;
+    if (cleared.has(i)) continue;
+    if (finalIdx >= 0 && i === finalIdx) continue; // hoppa final tills den är upplåst
+    return i;
   }
+
+  // 2) Om ingen kvar och final finns och är uncleared och upplåst -> final.
+  if (finalIdx >= 0 && !cleared.has(finalIdx) && allBeforeFinalCleared(finalIdx)) return finalIdx;
+
+  // 3) annars: inget kvar
   return -1;
 }
 
 function onCheckpointApproved() {
+  const finalIdx = getFinalIndex();
+  const wasFinal = (finalIdx >= 0 && activeIndex === finalIdx);
+
   cleared.add(activeIndex);
 
   renderMarkers();
   if (viewMode === 'grid') renderGrid();
 
-  toast(`✅ Checkpoint ${activeIndex + 1} klar!`, 'info', 1400);
+  if (wasFinal) {
+    toast('🎁 Skattkistan är hittad!', 'success', 1800);
+  } else {
+    toast(`✅ Checkpoint ${activeIndex + 1} klar!`, 'info', 1400);
+  }
 
-  const next = findNextUnclearedIndex(activeIndex + 1);
+  // Auto-ledtråd: sätt nästa aktiv direkt (visas direkt via setActiveCheckpoint)
+  const next = findNextPlayableIndex(activeIndex + 1);
+
   if (next === -1) {
     showStatus('🎉 Alla checkpoints klara! (MVP)', 'info');
     if (elOk) elOk.disabled = true;
@@ -461,17 +543,16 @@ function onCheckpointApproved() {
     return;
   }
 
-  // Nästa checkpoint blir aktiv
   setActiveCheckpoint(next);
 }
 
 /* ============================================================
-   BLOCK 10 — Boot
+   BLOCK 11 — Boot
 ============================================================ */
 (function bootPartyMap() {
   'use strict';
 
-  if (window.__AO4_PARTY_MAP_INIT__) return; // HOOK: init-guard-party-map
+  if (window.__AO4_PARTY_MAP_INIT__) return;
   window.__AO4_PARTY_MAP_INIT__ = true;
 
   if (elBack) {
@@ -497,7 +578,7 @@ function onCheckpointApproved() {
     return redirectToIndex('MISSING_ID_OR_PAYLOAD');
   }
   if (!payloadRaw) {
-    showStatus('Saknar payload. Denna vy kräver payload-länk i AO 4/8–7/8.', 'danger');
+    showStatus('Saknar payload. Denna vy kräver payload-länk.', 'danger');
     return redirectToIndex('MISSING_PAYLOAD');
   }
 
@@ -518,7 +599,7 @@ function onCheckpointApproved() {
 
   setText(elName, payload.name || 'Skattjakt');
 
-  // Init map (fail-soft)
+  // Map init (fail-soft)
   if (!leafletReady()) {
     showMapError('Leaflet saknas (CDN blockerat/offline) eller #partyMap saknas.');
     showStatus('Karta kunde inte laddas. Grid fungerar ändå.', 'warn');
@@ -534,15 +615,15 @@ function onCheckpointApproved() {
     }
   }
 
-  // Init view mode: karta default
   setViewMode('map');
 
-  // Init active
+  // Start: första cp (final får inte vara enda “synliga” om den är låst, men final är bara sista)
   setActiveCheckpoint(0);
 
   function setErr(text) { setText(elErrCode, text || ''); }
 
   if (elOk) {
+    elOk.disabled = false;
     elOk.addEventListener('click', () => {
       const entered = asText(elCode?.value);
       const err = validateCodeInput(entered);
@@ -562,6 +643,5 @@ function onCheckpointApproved() {
     });
   }
 
-  // Render grid once (så den finns direkt när man togglar)
   renderGrid();
 })();
