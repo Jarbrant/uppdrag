@@ -1,3 +1,4 @@
+
 /* ============================================================
    FIL: src/admin.js  (HEL FIL)
    AO 5/6 (FAS 1.2) — Admin UI: skapa skattjakt (lokalt, utan konto)
