@@ -1,7 +1,9 @@
 <!-- ============================================================
      FIL: index.html  (HEL FIL)
      AO 1/15 + AO 11/15 (PATCH) + UI-polish (autostart cleanup)
+     AO 5/6 (FAS 1.2) — Admin entry link (topbar)
      Mål: Ingen “dubbel-ui” — Starta ska routa direkt (QR-länk ska bara funka)
+     Patch: Lägg till tydlig länk till pages/admin.html i topbar (utan nav-system)
 ============================================================ -->
 <!doctype html>
 <html lang="sv">
@@ -32,6 +34,20 @@
         </div>
 
         <div class="topbar__right">
+          <!-- ======================================================
+               AO 5/6 (FAS 1.2) — Admin link
+               - Ingen nav-motor i MVP: direkt länk
+               - Relativ path från /uppdrag/index.html → /uppdrag/pages/admin.html
+               - XSS-safe: statisk href
+          ======================================================= -->
+          <a id="adminLink"
+             class="badge"
+             href="pages/admin.html"
+             aria-label="Öppna admin för att skapa skattjakt">
+            Admin
+          </a>
+          <!-- HOOK: admin-link -->
+
           <span class="badge badge-success">MVP</span>
         </div>
       </div>
