@@ -1,10 +1,7 @@
 /* ============================================================
    FIL: src/boot.js  (HEL FIL)
-   AO 2/15 + AO 11/15 — Boot routing (URL → rätt sida) + fail-closed
-   Mål: QR-länk ska “bara funka”
-   - /?mode=zone&id=skogsrundan  -> pages/play.html?mode=zone&id=skogsrundan
-   - /?mode=party&id=kalas_demo  -> pages/party.html?mode=party&id=kalas_demo
-   Policy: UI-only (GitHub Pages), inga nya storage keys, XSS-safe
+   AO 2/15 + AO 11/15 (PATCH) — Boot routing (subpath-safe)
+   Mål: QR-länk ska “bara funka” även under /uppdrag/
 ============================================================ */
 
 /* ============================================================
@@ -14,15 +11,15 @@ import { qsGet, uid } from './util.js';
 
 /* ============================================================
    BLOCK 2 — Routing targets (KRAV)
-   OBS: använd RELATIVA paths för att fungera på GitHub Pages repo-subpath.
+   FIX: bygg relativt current directory så /uppdrag/ följer med.
 ============================================================ */
 const ROUTES = Object.freeze({
-  zone: './pages/play.html',   // HOOK: route-target-zone
-  party: './pages/party.html'  // HOOK: route-target-party
+  zone: 'pages/play.html',   // HOOK: route-target-zone
+  party: 'pages/party.html'  // HOOK: route-target-party
 });
 
 /* ============================================================
-   BLOCK 3 — Error codes (fail-closed)
+   BLOCK 3 — Error codes
 ============================================================ */
 const ERR = Object.freeze({
   MISSING_MODE: 'MISSING_MODE',
@@ -32,7 +29,7 @@ const ERR = Object.freeze({
 });
 
 /* ============================================================
-   BLOCK 4 — Validation (fail-closed)
+   BLOCK 4 — Validation
 ============================================================ */
 function normalizeMode(raw) {
   const m = (raw || '').toString().trim().toLowerCase();
@@ -49,41 +46,49 @@ function isValidId(raw) {
 }
 
 /* ============================================================
-   BLOCK 5 — Redirect helper
-   - Till index med err=... (KRAV)
-   - rid=<requestId> för spårbarhet (ingen storage)
+   BLOCK 5 — Helpers
 ============================================================ */
+function currentBaseUrl() {
+  // Gör base = katalogen vi står i, så det funkar på /uppdrag/
+  const u = new URL(window.location.href);
+  const p = u.pathname;
+  u.pathname = p.endsWith('/') ? p : p.substring(0, p.lastIndexOf('/') + 1);
+  u.search = '';
+  u.hash = '';
+  return u;
+}
+
 function redirectToIndex(errCode) {
   const code = (errCode || 'UNKNOWN').toString().trim() || 'UNKNOWN';
-  const rid = uid('rid'); // HOOK: requestId
+  const rid = uid('rid');
 
-  // Viktigt: RELATIVT index för GitHub Pages
-  const url = new URL('./index.html', window.location.href);
-  url.searchParams.set('err', code);
-  url.searchParams.set('rid', rid);
+  const base = currentBaseUrl();
+  base.pathname = base.pathname; // (för tydlighet)
+  base.searchParams.set('err', code);
+  base.searchParams.set('rid', rid);
+
+  // Index ligger i base root (index.html)
+  const url = new URL('index.html', base.toString());
+  url.search = base.search;
 
   window.location.assign(url.toString());
 }
 
 /* ============================================================
    BLOCK 6 — Main boot
-   - Kör bara om mode/id finns i URL (annars: gör inget på index).
-   - Fail-closed om partial/ogiltigt.
 ============================================================ */
 (function boot() {
   'use strict';
 
-  // INIT-GUARD
   if (window.__AO11_BOOT_INIT__) return; // HOOK: init-guard-boot
   window.__AO11_BOOT_INIT__ = true;
 
   const rawMode = qsGet('mode'); // HOOK: qs-mode
   const rawId = qsGet('id');     // HOOK: qs-id
 
-  // Om inga params: boot gör inget (så index utan QR inte loopar)
+  // Om inga params: gör inget
   if (!rawMode && !rawId) return;
 
-  // Om någon param saknas: fail-closed
   if (!rawMode) return redirectToIndex(ERR.MISSING_MODE);
   if (!rawId) return redirectToIndex(ERR.MISSING_ID);
 
@@ -92,11 +97,12 @@ function redirectToIndex(errCode) {
 
   if (!isValidId(rawId)) return redirectToIndex(ERR.INVALID_ID);
 
-  const targetPath = ROUTES[mode];
-  if (!targetPath) return redirectToIndex(ERR.INVALID_MODE);
+  const targetRel = ROUTES[mode];
+  if (!targetRel) return redirectToIndex(ERR.INVALID_MODE);
 
-  // Bygg target URL och behåll mode/id
-  const target = new URL(targetPath, window.location.href);
+  // Bygg target relativt base (/uppdrag/)
+  const base = currentBaseUrl();
+  const target = new URL(targetRel, base.toString());
   target.searchParams.set('mode', mode);
   target.searchParams.set('id', rawId);
 
