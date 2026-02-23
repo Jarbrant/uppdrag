@@ -1,11 +1,13 @@
 /* ============================================================
    FIL: src/engine.js  (HEL FIL)
-   AO 3/15 + AO 10/15 + AO 12/15 — Engine: progression + unlock
-   - Behåller befintliga exports/API
-   - Lägger till (AO-12):
-       completedCount(state)
-       isNormalUnlocked(state, threshold=15)
-   Policy: deterministiskt, robust, fail-closed i inputs
+   AO 3/15 + AO 10/15 + AO 2/6 (FAS 1.1) — Engine: award + unlock
+   Mål:
+   - Konfigbar konstant: NORMAL_UNLOCK_AFTER = 15
+   - Store: completedCount (antal klarade missions totalt)
+   - Engine: isNormalUnlocked(state) -> true om completedCount >= 15
+   - När mission klaras: increment completedCount + award XP/poäng
+   Fail-closed:
+   - saknas completedCount => anta 0
 ============================================================ */
 
 /* ============================================================
@@ -14,7 +16,12 @@
 import { clamp, nowISO } from './util.js';
 
 /* ============================================================
-   BLOCK 2 — Level rules
+   BLOCK 2 — Config (KRAV)
+============================================================ */
+export const NORMAL_UNLOCK_AFTER = 15; // HOOK: normal-unlock-after (konfigbar)
+
+/* ============================================================
+   BLOCK 3 — Level rules
 ============================================================ */
 export function calcLevel(xp) {
   const x = Number(xp);
@@ -23,7 +30,7 @@ export function calcLevel(xp) {
 }
 
 /* ============================================================
-   BLOCK 3 — Day helpers (streak per dag)
+   BLOCK 4 — Day helpers (streak per dag)
 ============================================================ */
 function pad2(n) { return String(n).padStart(2, '0'); }
 
@@ -32,7 +39,7 @@ export function localDayKey(date = new Date()) {
   const y = d.getFullYear();
   const m = pad2(d.getMonth() + 1);
   const day = pad2(d.getDate());
-  return `${y}-${m}-${day}`; // YYYY-MM-DD
+  return `${y}-${m}-${day}`;
 }
 
 function dayDiff(a, b) {
@@ -49,7 +56,7 @@ function dayDiff(a, b) {
 }
 
 /* ============================================================
-   BLOCK 4 — Streak logic
+   BLOCK 5 — Streak logic
 ============================================================ */
 export function applyStreak(state, dayKey) {
   const s = state;
@@ -83,8 +90,25 @@ export function applyStreak(state, dayKey) {
 }
 
 /* ============================================================
-   BLOCK 5 — awardMissionComplete
-   KRAV: awardMissionComplete({points,xp})
+   BLOCK 6 — Unlock helpers (KRAV)
+============================================================ */
+export function getCompletedCount(state) {
+  // Fail-closed: om saknas => 0
+  const n = Math.floor(Number(state?.completedCount));
+  return Number.isFinite(n) && n >= 0 ? n : 0;
+}
+
+export function isNormalUnlocked(state, threshold = NORMAL_UNLOCK_AFTER) {
+  const t = Math.floor(Number(threshold));
+  const need = Number.isFinite(t) && t > 0 ? t : NORMAL_UNLOCK_AFTER;
+  return getCompletedCount(state) >= need;
+}
+
+/* ============================================================
+   BLOCK 7 — awardMissionComplete
+   KRAV:
+   - increment completedCount
+   - award XP/poäng
 ============================================================ */
 export function awardMissionComplete(state, payload) {
   const s = state;
@@ -96,6 +120,10 @@ export function awardMissionComplete(state, payload) {
   const p = payload && typeof payload === 'object' ? payload : {};
   const addPoints = clamp(Math.floor(Number(p.points || 0)), 0, 1_000_000);
   const addXp = clamp(Math.floor(Number(p.xp || 0)), 0, 1_000_000);
+
+  // Fail-closed: saknas completedCount => anta 0 och increment
+  const prevCompleted = getCompletedCount(s);
+  s.completedCount = prevCompleted + 1;
 
   s.points = clamp(Math.floor(Number(s.points || 0)), 0, 1_000_000_000) + addPoints;
   s.xp = clamp(Math.floor(Number(s.xp || 0)), 0, 1_000_000_000) + addXp;
@@ -113,7 +141,8 @@ export function awardMissionComplete(state, payload) {
     type: 'mission_complete',
     points: addPoints,
     xp: addXp,
-    levelAfter: s.level
+    levelAfter: s.level,
+    completedCountAfter: s.completedCount // HOOK: history-completedCountAfter
   };
 
   s.history.push(entry);
@@ -123,7 +152,7 @@ export function awardMissionComplete(state, payload) {
 }
 
 /* ============================================================
-   BLOCK 6 — awardCheckpointComplete (AO-10)
+   BLOCK 8 — awardCheckpointComplete (behåll API stabilt)
 ============================================================ */
 export function awardCheckpointComplete(state, payload) {
   const s = state;
@@ -173,31 +202,4 @@ export function awardCheckpointComplete(state, payload) {
   if (s.history.length > 200) s.history = s.history.slice(s.history.length - 200);
 
   return s;
-}
-
-/* ============================================================
-   BLOCK 7 — Difficulty unlock (AO-12)
-   KRAV:
-   - Engine håller completedCount och isNormalUnlocked()
-   NOTE: Vi håller detta utan ny store-shape genom att räkna history.
-============================================================ */
-export const NORMAL_UNLOCK_AFTER = 15; // HOOK: normal-unlock-after
-
-export function completedCount(state) {
-  const s = state;
-  const hist = Array.isArray(s?.history) ? s.history : [];
-  let count = 0;
-
-  for (const h of hist) {
-    if (!h || typeof h !== 'object') continue;
-    if (h.type === 'mission_complete') count += 1;
-  }
-
-  return count;
-}
-
-export function isNormalUnlocked(state, threshold = NORMAL_UNLOCK_AFTER) {
-  const t = Math.floor(Number(threshold));
-  const need = Number.isFinite(t) && t > 0 ? t : NORMAL_UNLOCK_AFTER;
-  return completedCount(state) >= need;
 }
