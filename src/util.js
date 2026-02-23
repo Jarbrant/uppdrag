@@ -1,6 +1,7 @@
 /* ============================================================
    FIL: src/util.js  (HEL FIL)
    AO 2/15 — Util: safe parse + query helpers + misc
+   AO 6/6 (FAS 1.2) — Export: copyToClipboard(text) med robust fallback
    Policy: UI-only, fail-closed helpers, inga nya storage keys
 ============================================================ */
 
@@ -71,4 +72,48 @@ export function uid(prefix = 'id') {
   const t = Date.now().toString(36);
   const r = Math.floor(Math.random() * 1e9).toString(36);
   return `${p}_${t}_${r}`;
+}
+
+/* ============================================================
+   BLOCK 6 — copyToClipboard (AO 6/6)
+   - Robust: navigator.clipboard (secure context) → fallback via textarea + execCommand
+   - Fail-closed: returnerar { ok:false, reason } vid nekad/blocked
+   - OBS: Ingen storage, UI-only helper
+============================================================ */
+export async function copyToClipboard(text) {
+  const value = (text ?? '').toString();
+
+  // 1) Modern clipboard (kräver ofta https + user gesture)
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(value);
+      return { ok: true, method: 'navigator.clipboard' };
+    }
+  } catch (err) {
+    // fallthrough → fallback
+  }
+
+  // 2) Fallback: temporary textarea + select + execCommand
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = value;
+    ta.setAttribute('readonly', ''); // minimerar mobil-keyboard-flimmer
+    ta.style.position = 'fixed';
+    ta.style.left = '-9999px';
+    ta.style.top = '0';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+
+    ta.focus();
+    ta.select();
+    ta.setSelectionRange(0, ta.value.length);
+
+    const ok = document.execCommand && document.execCommand('copy');
+    document.body.removeChild(ta);
+
+    if (ok) return { ok: true, method: 'execCommand' };
+    return { ok: false, method: 'execCommand', reason: 'copy-denied' };
+  } catch (_) {
+    return { ok: false, method: 'fallback', reason: 'fallback-failed' };
+  }
 }
