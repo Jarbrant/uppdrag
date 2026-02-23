@@ -1,6 +1,6 @@
 /* ============================================================
    FIL: styles/main.css  (HEL FIL)
-   AO 1/15 + AO 5/15 — Tokens kvar + UI helpers CSS (toast/modal/error card)
+   AO 1/15 + AO 5/15 + AO 14/15 — Tokens kvar + A11y + mobil states + safe areas
 ============================================================ */
 
 /* ============================================================
@@ -80,11 +80,6 @@ body {
 }
 
 a { color: inherit; text-decoration: none; }
-a:focus-visible, button:focus-visible, [tabindex="0"]:focus-visible {
-  outline: none;
-  box-shadow: var(--focus);
-  border-radius: var(--r-2);
-}
 
 .app { min-height: 100%; }
 
@@ -274,7 +269,7 @@ a:focus-visible, button:focus-visible, [tabindex="0"]:focus-visible {
 }
 
 /* ============================================================
-   BLOCK 8 — Button component (utökad i AO-5)
+   BLOCK 8 — Button component (utökad i AO-5, A11y i AO-14)
 ============================================================ */
 .btn {
   appearance: none;
@@ -289,7 +284,7 @@ a:focus-visible, button:focus-visible, [tabindex="0"]:focus-visible {
   align-items: center;
   justify-content: center;
   gap: var(--sp-2);
-  min-height: 44px; /* mobil-klickyta */
+  min-height: 44px; /* KRAV: min 44px */
   transition: transform .08s ease, filter .12s ease, border-color .12s ease, background .12s ease, opacity .12s ease;
   text-decoration: none;
 }
@@ -324,7 +319,8 @@ a:focus-visible, button:focus-visible, [tabindex="0"]:focus-visible {
 
 .btn-danger:hover { filter: brightness(1.02); }
 
-.btn:disabled {
+.btn:disabled,
+.btn[aria-disabled="true"] {
   opacity: .55;
   cursor: not-allowed;
   transform: none;
@@ -353,7 +349,7 @@ a:focus-visible, button:focus-visible, [tabindex="0"]:focus-visible {
 }
 
 /* ============================================================
-   BLOCK 10 — Toast component (utökad i AO-5)
+   BLOCK 10 — Toast component (utökad i AO-5, safe areas i AO-14)
 ============================================================ */
 .toast {
   width: 100%;
@@ -416,10 +412,10 @@ a:focus-visible, button:focus-visible, [tabindex="0"]:focus-visible {
   z-index: 1000;
   right: var(--sp-4);
   left: var(--sp-4);
-  bottom: var(--sp-4);
+  bottom: calc(var(--sp-4) + env(safe-area-inset-bottom, 0px)); /* AO-14: safe area */
   display: grid;
   gap: var(--sp-2);
-  pointer-events: none; /* toasts själva kan få events via child */
+  pointer-events: none;
 }
 
 .toastStack .toast {
@@ -434,7 +430,7 @@ a:focus-visible, button:focus-visible, [tabindex="0"]:focus-visible {
 }
 
 /* ============================================================
-   BLOCK 11 — Modal component (AO-5)
+   BLOCK 11 — Modal component (AO-5) + A11y support (AO-14)
 ============================================================ */
 .modalPortal {
   position: relative;
@@ -469,6 +465,7 @@ a:focus-visible, button:focus-visible, [tabindex="0"]:focus-visible {
   background: rgba(16, 26, 47, .92);
   box-shadow: var(--sh-2);
   overflow: hidden;
+  outline: none; /* focus ring hanteras på fokusbara element */
 }
 
 .modal__header {
@@ -538,5 +535,78 @@ a:focus-visible, button:focus-visible, [tabindex="0"]:focus-visible {
   .container {
     padding-left: var(--sp-6);
     padding-right: var(--sp-6);
+  }
+}
+
+/* ============================================================
+   BLOCK 14 — AO-14 A11y + mobil states + safe areas
+   KRAV:
+   - Synlig focus ring på alla interaktiva element
+   - Buttons min 44px höjd (redan i .btn)
+   - Safe areas för sticky bars / toasts
+============================================================ */
+
+/* Focus ring: matcha alla vanliga interaktiva element */
+:where(
+  a,
+  button,
+  input,
+  select,
+  textarea,
+  summary,
+  [role="button"],
+  [tabindex]:not([tabindex="-1"])
+):focus-visible {
+  outline: none;
+  box-shadow: var(--focus);
+}
+
+/* Ge även tydlig focus på “kort” som är tabindex=0 */
+:where(.card--mode, .missionItem, .stepDot):focus-visible {
+  outline: none;
+  box-shadow: var(--focus);
+}
+
+/* Minsta klickyta även för custom-knappar */
+.stepDot,
+.missionItem {
+  min-height: 44px; /* KRAV: minst 44px */
+}
+
+/* Disabled/fake-disabled */
+:where(button, .btn)[disabled],
+:where(button, .btn)[aria-disabled="true"] {
+  pointer-events: none;
+}
+
+/* Safe area helpers (kan användas av pages inline) */
+.safeBottomPad {
+  padding-bottom: calc(var(--sp-4) + env(safe-area-inset-bottom, 0px));
+}
+
+/* Skip link (om sidan har den) */
+.skipLink {
+  position: absolute;
+  left: -9999px;
+  top: var(--sp-3);
+  z-index: 2000;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(16, 26, 47, .95);
+  border: 1px solid var(--border);
+}
+
+.skipLink:focus-visible {
+  left: var(--sp-3);
+  box-shadow: var(--focus);
+}
+
+/* Reduce motion */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
   }
 }
