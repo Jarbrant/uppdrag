@@ -1,20 +1,16 @@
 /* ============================================================
    FIL: src/admin.js  (HEL FIL)
    AO 5/6 (FAS 1.2) — Admin UI: skapa skattjakt (lokalt, utan konto)
-   AO 6/6 (FAS 1.2) — Export (tidigare version)
    AO 2/8 (FAS 1.5) — Klick → lägg checkpoint + lista + markers
    AO 3/8 (FAS 1.5) — Export: KOPIERA JSON + KOPIERA LÄNK (deltagarvy)
-   KRAV (AO 3/8):
-   - Knapp 1: KOPIERA JSON (clipboard + fallback)
-   - Knapp 2: KOPIERA LÄNK som startar deltagarvy:
-       pages/party.html?mode=party&payload=...
-       Fail-closed: om payload för stor → tydlig error + uppmana KOPIERA JSON
-   Kodkrav:
-   - Inlinekommentar: exakt hur payload serialiseras + max-längd policy.
-   Policy: UI-only, inga externa libs (Leaflet ok via CDN), XSS-safe rendering
+   AO 8/8 (FAS 2.0) — Final “Skattkista” flagga (isFinal) på sista checkpoint
+   KRAV (AO 8/8):
+   - Admin kan markera sista cp som isFinal: true (skattkista)
+   - Fail-closed: om isFinal saknas → behandlas som vanlig sista cp (i deltagarvy)
+   Policy: UI-only, XSS-safe rendering
 ============================================================ */
 
-import { copyToClipboard } from './util.js'; // AO 6/6 + AO 3/8
+import { copyToClipboard } from './util.js'; // clipboard helper
 
 /* ============================================================
    BLOCK 1 — Storage key + draft shape (state/draft)
@@ -86,11 +82,14 @@ function defaultDraft() {
     pointsPerCheckpoint: 10,
     clues: Array.from({ length: 5 }, (_, i) => `Checkpoint ${i + 1}: Ledtråd...`),
     checkpoints: Array.from({ length: 5 }, () => ({
-      lat: null, lng: null,
+      lat: null,
+      lng: null,
       radius: 25,
       code: '',
       clue: '',
-      points: null
+      points: null,
+      // AO 8/8: final flag (endast sista cp ska kunna vara true)
+      isFinal: false
     }))
   };
 }
@@ -136,7 +135,7 @@ function writeDraft(draft) {
 }
 
 /* ============================================================
-   BLOCK 6 — Migration/shape guard + sync
+   BLOCK 6 — Migration/shape guard + sync (inkl AO 8/8 isFinal)
 ============================================================ */
 function migrateDraft(raw) {
   const def = defaultDraft();
@@ -159,17 +158,22 @@ function migrateDraft(raw) {
       radius: clampInt(o.radius, 5, 5000),
       code: safeText(o.code).trim(),
       clue: safeText(o.clue).trim(),
-      points: Number.isFinite(Number(o.points)) ? clampInt(o.points, 0, 1000) : null
+      points: Number.isFinite(Number(o.points)) ? clampInt(o.points, 0, 1000) : null,
+      isFinal: o.isFinal === true
     };
   }).slice(0, 20);
 
   syncCountToStructures(next, next.checkpointCount);
 
+  // Sync clue strings into checkpoints if missing
   for (let i = 0; i < next.checkpointCount; i++) {
     if (!next.checkpoints[i]) continue;
     const c = safeText(next.clues[i] ?? '').trim();
     if (!next.checkpoints[i].clue) next.checkpoints[i].clue = c;
   }
+
+  // AO 8/8 fail-closed: endast sista cp får ha isFinal=true
+  enforceFinalOnlyOnLast(next);
 
   return next;
 }
@@ -182,9 +186,26 @@ function syncCountToStructures(d, nextCount) {
   if (d.clues.length > n) d.clues = d.clues.slice(0, n);
 
   while (d.checkpoints.length < n) {
-    d.checkpoints.push({ lat: null, lng: null, radius: 25, code: '', clue: '', points: null });
+    d.checkpoints.push({ lat: null, lng: null, radius: 25, code: '', clue: '', points: null, isFinal: false });
   }
   if (d.checkpoints.length > n) d.checkpoints = d.checkpoints.slice(0, n);
+
+  // AO 8/8: efter resize, säkerställ final-regel
+  enforceFinalOnlyOnLast(d);
+}
+
+function enforceFinalOnlyOnLast(d) {
+  const n = clampInt(d.checkpointCount, 1, 20);
+  const last = n - 1;
+
+  for (let i = 0; i < d.checkpoints.length; i++) {
+    if (!d.checkpoints[i]) continue;
+    if (i !== last && d.checkpoints[i].isFinal === true) d.checkpoints[i].isFinal = false;
+  }
+  // Om last saknar property, normalisera
+  if (d.checkpoints[last] && d.checkpoints[last].isFinal !== true) {
+    d.checkpoints[last].isFinal = false;
+  }
 }
 
 function syncDerivedFields() {
@@ -196,7 +217,7 @@ function syncDerivedFields() {
 }
 
 /* ============================================================
-   BLOCK 7 — Validation
+   BLOCK 7 — Validation (fail-closed)
 ============================================================ */
 function validateDraft(d) {
   const errors = { name: '', count: '', points: '', clues: '' };
@@ -245,7 +266,7 @@ function renderErrors(errors) {
 }
 
 /* ============================================================
-   BLOCK 8 — Render loop (editor + preview)
+   BLOCK 8 — Render loop (editor + preview) + AO 8/8 final toggle
 ============================================================ */
 let draft = readDraft(); // HOOK: draft-state
 let dirty = false;       // HOOK: dirty-state
@@ -263,6 +284,8 @@ function renderCheckpointEditor() {
 
   for (let i = 0; i < draft.checkpointCount; i++) {
     const cp = draft.checkpoints[i] || {};
+    const isLast = i === (draft.checkpointCount - 1);
+
     const row = document.createElement('div');
     row.className = 'clueRow';
 
@@ -286,7 +309,7 @@ function renderCheckpointEditor() {
     clueInput.className = 'input clueInput';
     clueInput.type = 'text';
     clueInput.autocomplete = 'off';
-    clueInput.placeholder = 'Skriv ledtråd…';
+    clueInput.placeholder = isLast && cp.isFinal ? 'Skattkista: ledtråd…' : 'Skriv ledtråd…';
     clueInput.value = safeText(cp.clue || draft.clues[i] || '');
     clueInput.setAttribute('data-cp-index', String(i)); // HOOK: cp-clue-index
 
@@ -322,7 +345,7 @@ function renderCheckpointEditor() {
     code.className = 'input';
     code.type = 'text';
     code.autocomplete = 'off';
-    code.placeholder = 'Kod (valfri)';
+    code.placeholder = isLast && cp.isFinal ? 'Skattkista-kod (valfri)' : 'Kod (valfri)';
     code.value = safeText(cp.code || '');
     code.setAttribute('data-cp-code', String(i)); // HOOK: cp-code
     code.addEventListener('input', (e) => {
@@ -351,9 +374,42 @@ function renderCheckpointEditor() {
     grid.appendChild(code);
     grid.appendChild(radius);
 
+    // AO 8/8 — Final toggle (endast sista cp)
+    const finalRow = document.createElement('div');
+    finalRow.style.display = 'flex';
+    finalRow.style.alignItems = 'center';
+    finalRow.style.justifyContent = 'space-between';
+    finalRow.style.gap = '10px';
+    finalRow.style.marginTop = '6px';
+
+    const finalLabel = document.createElement('div');
+    finalLabel.className = 'muted small';
+    finalLabel.textContent = isLast ? 'Sista checkpoint kan vara “Skattkista (final)”' : 'Final kan bara vara sista checkpoint';
+
+    const finalToggle = document.createElement('input');
+    finalToggle.type = 'checkbox';
+    finalToggle.checked = (isLast && cp.isFinal === true);
+    finalToggle.disabled = !isLast;
+    finalToggle.setAttribute('data-cp-final', String(i)); // HOOK: cp-final
+    finalToggle.setAttribute('aria-label', 'Markera som Skattkista (final)');
+
+    finalToggle.addEventListener('change', (e) => {
+      const k = clampInt(e.target.getAttribute('data-cp-final'), 0, 99);
+      const isLastNow = k === (draft.checkpointCount - 1);
+      if (!isLastNow) return; // fail-closed
+
+      draft.checkpoints[k].isFinal = !!e.target.checked;
+      enforceFinalOnlyOnLast(draft);
+      markDirtyAndRender(true);
+    });
+
+    finalRow.appendChild(finalLabel);
+    finalRow.appendChild(finalToggle);
+
     row.appendChild(meta);
     row.appendChild(clueInput);
     row.appendChild(grid);
+    row.appendChild(finalRow);
 
     elCluesWrap.appendChild(row);
   }
@@ -371,7 +427,9 @@ function renderPreview() {
     for (let i = 0; i < draft.checkpointCount; i++) {
       const li = document.createElement('li');
       li.className = 'previewItem';
-      li.textContent = safeText(draft.clues[i] ?? `Checkpoint ${i + 1}`);
+      const cp = draft.checkpoints[i] || {};
+      const label = (i === draft.checkpointCount - 1 && cp.isFinal) ? `🎁 Skattkista: ${draft.clues[i]}` : draft.clues[i];
+      li.textContent = safeText(label ?? `Checkpoint ${i + 1}`);
       elPreviewList.appendChild(li);
     }
   }
@@ -432,7 +490,7 @@ function markDirtyAndRender(triggerSave = true) {
 }
 
 /* ============================================================
-   BLOCK 10 — AO 2/8: add checkpoint from map click
+   BLOCK 10 — Map click → add checkpoint
 ============================================================ */
 function isMapReady() {
   const api = window.__ADMIN_MAP_API__;
@@ -459,6 +517,9 @@ function addCheckpointFromMap(lat, lng) {
   cp.code = '';
   cp.points = null;
   cp.clue = draft.clues[nextIndex] || `Checkpoint ${nextIndex + 1}: Ledtråd...`;
+  cp.isFinal = false;
+
+  enforceFinalOnlyOnLast(draft);
 
   markDirtyAndRender(true);
   showStatus(`Checkpoint ${nextIndex + 1} tillagd från karta.`, 'info');
@@ -558,19 +619,13 @@ function bindEvents() {
 }
 
 /* ============================================================
-   BLOCK 12 — AO 3/8 Export (2 knappar)
-   KRAV:
-   - Knapp 1: KOPIERA JSON
-   - Knapp 2: KOPIERA LÄNK (direkt till pages/party.html?mode=party&payload=...)
-   Fail-closed:
-   - Om payload för stor → error + uppmana KOPIERA JSON
-   Inlinekommentarer:
-   - Exakt serialisering + max-längd policy
+   BLOCK 12 — Export (KOPIERA JSON + KOPIERA LÄNK)
 ============================================================ */
 
-// Policy: vi bygger payload som JSON.stringify(payload, null, 0) (minifierad)
-// och URL-encodar via encodeURIComponent(). Vi mäter ENCODED längd för stabilitet.
-// Max-längd är konservativ för att undvika miljöskillnader (browser/hosting).
+// Serialisering-policy:
+// 1) payloadJSON = JSON.stringify(payload, null, 0) (minifierad)
+// 2) encoded = encodeURIComponent(payloadJSON)
+// 3) Om encoded.length > MAX_INLINE_QS_CHARS → FAIL (för stor att dela som länk)
 const MAX_INLINE_QS_CHARS = 1400; // HOOK: max-inline-payload-policy
 
 let elExportRoot = null;
@@ -587,28 +642,28 @@ function hasBlockingErrors() {
 
 function getDraftJSON({ pretty = false } = {}) {
   syncDerivedFields();
+  enforceFinalOnlyOnLast(draft);
 
-  // NOTE: payload som party.js accepterar (v1):
-  // { version, name, checkpointCount, pointsPerCheckpoint, clues }
-  // Extra geo skickas i "geo" och ignoreras fail-soft av party.js om det inte används.
   const payload = {
     version: 1,
     name: safeText(draft.name).trim(),
     checkpointCount: clampInt(draft.checkpointCount, 1, 20),
     pointsPerCheckpoint: clampInt(draft.pointsPerCheckpoint, 0, 1000),
     clues: Array.isArray(draft.clues) ? draft.clues.map((c) => safeText(c).trim()) : [],
+    // geo: extra data (party-map.js läser isFinal om det finns; fail-soft om saknas)
     geo: Array.isArray(draft.checkpoints)
-      ? draft.checkpoints.map((cp) => ({
+      ? draft.checkpoints.map((cp, i) => ({
           lat: Number.isFinite(Number(cp.lat)) ? Number(cp.lat) : null,
           lng: Number.isFinite(Number(cp.lng)) ? Number(cp.lng) : null,
           radius: clampInt(cp.radius ?? 25, 5, 5000),
           code: safeText(cp.code).trim(),
-          points: (cp.points === null || cp.points === undefined) ? null : clampInt(cp.points, 0, 1000)
+          points: (cp.points === null || cp.points === undefined) ? null : clampInt(cp.points, 0, 1000),
+          // AO 8/8: endast sista cp kan ha isFinal true (annars false)
+          isFinal: (i === draft.checkpointCount - 1) ? (cp.isFinal === true) : false
         }))
       : []
   };
 
-  // pretty=true → läsbar JSON (för manuell copy fallback)
   return JSON.stringify(payload, null, pretty ? 2 : 0);
 }
 
@@ -736,11 +791,8 @@ function ensureExportPanel() {
   card.appendChild(head);
   card.appendChild(body);
 
-  if (previewCard && previewCard.parentNode) {
-    previewCard.parentNode.insertBefore(card, previewCard.nextSibling);
-  } else {
-    mount.appendChild(card);
-  }
+  if (previewCard && previewCard.parentNode) previewCard.parentNode.insertBefore(card, previewCard.nextSibling);
+  else mount.appendChild(card);
 
   elExportRoot = card;
 
@@ -754,20 +806,14 @@ function renderExportUI() {
   if (elExportJSON) elExportJSON.value = json;
 }
 
-// Build participant link (directly to party.html)
-// NOTE: Serialisering + max-längd policy:
-// 1) payloadJSON = JSON.stringify(payload, null, 0)  (minifierad)
-// 2) encoded = encodeURIComponent(payloadJSON)
-// 3) Om encoded.length > MAX_INLINE_QS_CHARS → FAIL (för stor att dela som länk)
 function buildParticipantLinkOrFail() {
   const payloadJSON = getDraftJSON({ pretty: false }); // minifierad
-
   const encoded = encodeURIComponent(payloadJSON);
+
   if (encoded.length > MAX_INLINE_QS_CHARS) {
     return { ok: false, reason: 'too-large', encodedLength: encoded.length };
   }
 
-  // Från pages/admin.html → pages/party.html ligger i samma folder: "party.html"
   const url = new URL('party.html', window.location.href);
   url.searchParams.set('mode', 'party');
   url.searchParams.set('payload', encoded);
@@ -808,7 +854,6 @@ async function onCopyLink() {
   const built = buildParticipantLinkOrFail();
   if (!built.ok) {
     if (built.reason === 'too-large') {
-      // Fail-closed: tydligt error + uppmana KOPIERA JSON
       setExportMessage('Payload för stor att dela som länk. Använd KOPIERA JSON istället.', 'danger');
       if (elExportLink) elExportLink.value = '';
       selectAll(elExportJSON);
@@ -826,7 +871,6 @@ async function onCopyLink() {
     return;
   }
 
-  // Clipboard nekas → fail-closed fallback: markera input
   setExportMessage('Kopiering nekades. Markera länken och kopiera manuellt.', 'warn');
   selectAll(elExportLink);
 }
