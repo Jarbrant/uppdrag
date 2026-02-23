@@ -2,29 +2,31 @@
    FIL: src/admin.js  (HEL FIL)
    AO 5/6 (FAS 1.2) — Admin UI: skapa skattjakt (lokalt, utan konto)
    AO 6/6 (FAS 1.2) — Export: QR-länk + “kopiera JSON”
-   KRAV:
-   - Formfält: namn, antal (1–20), poäng/checkpoint (default), ledtrådar (lista växer/krymper)
-   - Live preview cp-lista
-   - Local draft: localStorage med EN stabil key
-   - Fail-closed: ogiltig input -> error text under fält (inte alert)
-   - Export 1: Kopiera JSON (clipboard) med fallback (markera text)
-   - Export 2: Skapa QR-länk (delbar länk) med copy-knapp
-       - inline payload i querystring endast om liten nog, annars fel “för stor att dela som länk”
-   Kodkrav: BLOCK för state/draft, render loop, events, validate (+ export/util)
-   Policy: UI-only, inga externa libs, XSS-safe rendering
+   AO 2/8 (FAS 1.5) — Klick → lägg checkpoint (cp=1..N) + lista (edit)
+   KRAV (AO 2/8):
+   - Klick på karta → lägg checkpoint: cp(1..N), lat, lng, radius(default 25m), code(tom/auto)
+   - Markers med etikett “1,2,3…” (admin-map.js)
+   - Lista i admin: redigera ledtråd, poäng, kod, radius
+   - Fail-closed: om karta ej init → disable “lägg cp” (karta-klick blir no-op + tydlig status)
+   Policy: UI-only, inga externa libs (Leaflet ok via CDN i admin.html), XSS-safe rendering
 ============================================================ */
 
 import { copyToClipboard } from './util.js'; // AO 6/6
 
 /* ============================================================
-   BLOCK 1 — Storage key + draft shape (state/draft)  (KRAV)
-   Draft shape:
+   BLOCK 1 — Storage key + draft shape (state/draft)
+   Draft shape (bakåtkompatibel):
    {
      version: 1,
      name: string,
      checkpointCount: number (1..20),
      pointsPerCheckpoint: number (0..1000),
-     clues: string[] (length = checkpointCount)
+     clues: string[] (length = checkpointCount),
+     // AO 2/8 (FAS 1.5): geo/checkpoints (optional, fail-soft)
+     checkpoints?: Array<{
+       lat?: number, lng?: number, radius?: number, code?: string,
+       clue?: string, points?: number
+     }>
    }
 ============================================================ */
 const DRAFT_KEY = 'PARTY_DRAFT_V1'; // HOOK: draft-storage-key (stabil)
@@ -42,7 +44,7 @@ const elName = $('#partyNameInput');       // HOOK: party-name-input
 const elCount = $('#cpCountInput');        // HOOK: checkpoint-count-input
 const elPoints = $('#pointsPerInput');     // HOOK: points-per-input
 
-const elCluesWrap = $('#cluesWrap');       // HOOK: clues-wrap
+const elCluesWrap = $('#cluesWrap');       // HOOK: clues-wrap  (AO 2/8: blir cp-list editor)
 const elAddCp = $('#addCpBtn');            // HOOK: add-cp
 const elRemoveCp = $('#removeCpBtn');      // HOOK: remove-cp
 const elReset = $('#resetBtn');            // HOOK: reset-draft
@@ -57,15 +59,6 @@ const elPreviewName = $('#previewName');     // HOOK: preview-name
 const elPreviewPoints = $('#previewPoints'); // HOOK: preview-points
 const elPreviewCount = $('#previewCount');   // HOOK: preview-count
 const elPreviewList = $('#previewList');     // HOOK: preview-list
-
-// AO 6/6 — Export UI mount (skapas via JS för att hålla 2-filsgränsen)
-let elExportRoot = null;   // HOOK: export-root
-let elExportMsg = null;    // HOOK: export-msg
-let elExportLink = null;   // HOOK: export-link
-let elExportJSON = null;   // HOOK: export-json
-let elBtnCopyJSON = null;  // HOOK: btn-copy-json
-let elBtnMakeLink = null;  // HOOK: btn-make-link
-let elBtnCopyLink = null;  // HOOK: btn-copy-link
 
 /* ============================================================
    BLOCK 3 — Fail-closed storage guard
@@ -83,7 +76,7 @@ function showStatus(message, type = 'info') {
 }
 
 /* ============================================================
-   BLOCK 4 — Defaults + helpers (validate)
+   BLOCK 4 — Defaults + helpers
 ============================================================ */
 function clampInt(n, min, max) {
   const x = Math.floor(Number(n));
@@ -101,7 +94,14 @@ function defaultDraft() {
     name: '',
     checkpointCount: 5,
     pointsPerCheckpoint: 10,
-    clues: Array.from({ length: 5 }, (_, i) => `Checkpoint ${i + 1}: Ledtråd...`)
+    clues: Array.from({ length: 5 }, (_, i) => `Checkpoint ${i + 1}: Ledtråd...`),
+    checkpoints: Array.from({ length: 5 }, () => ({
+      lat: null, lng: null,
+      radius: 25,
+      code: '',
+      clue: '',
+      points: null
+    }))
   };
 }
 
@@ -133,8 +133,20 @@ function readDraft() {
   }
 }
 
+function writeDraft(draft) {
+  if (!storageWritable) return false;
+  try {
+    localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+    return true;
+  } catch (_) {
+    storageWritable = false;
+    showStatus('Kunde inte spara utkast (localStorage write fail).', 'warn');
+    return false;
+  }
+}
+
 /* ============================================================
-   BLOCK 6 — Migration/shape guard (KRAV: migrationslogik)
+   BLOCK 6 — Migration/shape guard + sync (AO 2/8)
 ============================================================ */
 function migrateDraft(raw) {
   const def = defaultDraft();
@@ -148,26 +160,54 @@ function migrateDraft(raw) {
   if (!Array.isArray(next.clues)) next.clues = [];
   next.clues = next.clues.map((c) => safeText(c)).slice(0, 20);
 
-  // Säkerställ att clues.length matchar count
-  while (next.clues.length < next.checkpointCount) {
-    next.clues.push(`Checkpoint ${next.clues.length + 1}: Ledtråd...`);
-  }
-  if (next.clues.length > next.checkpointCount) {
-    next.clues = next.clues.slice(0, next.checkpointCount);
+  // AO 2/8: checkpoints geo/editor
+  if (!Array.isArray(next.checkpoints)) next.checkpoints = [];
+  next.checkpoints = next.checkpoints.map((cp) => {
+    const o = (cp && typeof cp === 'object') ? cp : {};
+    return {
+      lat: Number.isFinite(Number(o.lat)) ? Number(o.lat) : null,
+      lng: Number.isFinite(Number(o.lng)) ? Number(o.lng) : null,
+      radius: clampInt(o.radius, 5, 5000),
+      code: safeText(o.code).trim(),
+      clue: safeText(o.clue).trim(),
+      points: Number.isFinite(Number(o.points)) ? clampInt(o.points, 0, 1000) : null
+    };
+  }).slice(0, 20);
+
+  // Sync arrays to checkpointCount
+  syncCountToStructures(next, next.checkpointCount);
+
+  // Sync clue strings into checkpoints if missing
+  for (let i = 0; i < next.checkpointCount; i++) {
+    if (!next.checkpoints[i]) continue;
+    const c = safeText(next.clues[i] ?? '').trim();
+    if (!next.checkpoints[i].clue) next.checkpoints[i].clue = c;
   }
 
   return next;
 }
 
-function writeDraft(draft) {
-  if (!storageWritable) return false;
-  try {
-    localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
-    return true;
-  } catch (_) {
-    storageWritable = false;
-    showStatus('Kunde inte spara utkast (localStorage write fail).', 'warn');
-    return false;
+function syncCountToStructures(d, nextCount) {
+  const n = clampInt(nextCount, 1, 20);
+  d.checkpointCount = n;
+
+  // clues
+  while (d.clues.length < n) d.clues.push(`Checkpoint ${d.clues.length + 1}: Ledtråd...`);
+  if (d.clues.length > n) d.clues = d.clues.slice(0, n);
+
+  // checkpoints
+  while (d.checkpoints.length < n) {
+    d.checkpoints.push({ lat: null, lng: null, radius: 25, code: '', clue: '', points: null });
+  }
+  if (d.checkpoints.length > n) d.checkpoints = d.checkpoints.slice(0, n);
+}
+
+function syncDerivedFields() {
+  // Se till att clues[] reflekterar cp.clue (så preview + export funkar stabilt)
+  for (let i = 0; i < draft.checkpointCount; i++) {
+    const cp = draft.checkpoints[i] || {};
+    const c = safeText(cp.clue || draft.clues[i] || '').trim();
+    draft.clues[i] = c || `Checkpoint ${i + 1}: Ledtråd...`;
   }
 }
 
@@ -191,17 +231,30 @@ function validateDraft(d) {
     errors.points = 'Poäng måste vara 0–1000.';
   }
 
-  if (!Array.isArray(d.clues) || d.clues.length !== d.checkpointCount) {
-    errors.clues = 'Ledtrådar måste matcha antal checkpoints.';
+  // clues/editor validering (AO 2/8: per checkpoint)
+  if (!Array.isArray(d.checkpoints) || d.checkpoints.length !== d.checkpointCount) {
+    errors.clues = 'Checkpoints måste matcha antal.';
   } else {
-    for (let i = 0; i < d.clues.length; i++) {
-      const t = safeText(d.clues[i]).trim();
-      if (t.length < 3) {
+    for (let i = 0; i < d.checkpoints.length; i++) {
+      const cp = d.checkpoints[i] || {};
+      const clue = safeText(cp.clue ?? d.clues[i]).trim();
+      if (clue.length < 3) {
         errors.clues = `Ledtråd ${i + 1} är för kort (minst 3 tecken).`;
         break;
       }
-      if (t.length > 140) {
+      if (clue.length > 140) {
         errors.clues = `Ledtråd ${i + 1} är för lång (max 140 tecken).`;
+        break;
+      }
+      const radius = clampInt(cp.radius, 5, 5000);
+      if (!Number.isFinite(Number(radius)) || radius < 5 || radius > 5000) {
+        errors.clues = `Radius ${i + 1} är ogiltig (5–5000 m).`;
+        break;
+      }
+      const points = (cp.points === null || cp.points === undefined) ? d.pointsPerCheckpoint : cp.points;
+      const p = clampInt(points, 0, 1000);
+      if (!Number.isFinite(Number(p)) || p < 0 || p > 1000) {
+        errors.clues = `Poäng ${i + 1} är ogiltig (0–1000).`;
         break;
       }
     }
@@ -218,7 +271,7 @@ function renderErrors(errors) {
 }
 
 /* ============================================================
-   BLOCK 8 — Render loop (form + preview)
+   BLOCK 8 — Render loop (form + cp-list + preview)
 ============================================================ */
 let draft = readDraft(); // HOOK: draft-state
 let dirty = false;       // HOOK: dirty-state
@@ -230,49 +283,118 @@ function setPill(text, ok = true) {
   elSavePill.style.opacity = ok ? '1' : '0.8';
 }
 
-function renderClueInputs() {
+// AO 2/8: cp-list editor (renderas i cluesWrap)
+function renderCheckpointEditor() {
   if (!elCluesWrap) return;
   elCluesWrap.innerHTML = '';
 
   for (let i = 0; i < draft.checkpointCount; i++) {
+    const cp = draft.checkpoints[i] || {};
     const row = document.createElement('div');
     row.className = 'clueRow';
 
+    // Meta
     const meta = document.createElement('div');
     meta.className = 'clueMeta';
 
     const idx = document.createElement('div');
     idx.className = 'clueIdx';
-    idx.textContent = `Checkpoint ${i + 1}`;
+    idx.textContent = `CP ${i + 1}`;
 
-    const badge = document.createElement('div');
-    badge.className = 'muted small';
-    badge.textContent = `${safeText(draft.pointsPerCheckpoint)}p`;
+    const coord = document.createElement('div');
+    coord.className = 'muted small';
+    const lat = Number.isFinite(Number(cp.lat)) ? Number(cp.lat).toFixed(5) : '—';
+    const lng = Number.isFinite(Number(cp.lng)) ? Number(cp.lng).toFixed(5) : '—';
+    coord.textContent = `(${lat}, ${lng})`;
 
     meta.appendChild(idx);
-    meta.appendChild(badge);
+    meta.appendChild(coord);
 
-    const input = document.createElement('input');
-    input.className = 'input clueInput';
-    input.type = 'text';
-    input.autocomplete = 'off';
-    input.placeholder = 'Skriv ledtråd…';
-    input.value = safeText(draft.clues[i] ?? '');
-    input.setAttribute('data-clue-index', String(i)); // HOOK: clue-input-index
+    // Ledtråd
+    const clueInput = document.createElement('input');
+    clueInput.className = 'input clueInput';
+    clueInput.type = 'text';
+    clueInput.autocomplete = 'off';
+    clueInput.placeholder = 'Skriv ledtråd…';
+    clueInput.value = safeText(cp.clue || draft.clues[i] || '');
+    clueInput.setAttribute('data-cp-index', String(i)); // HOOK: cp-clue-index
 
-    input.addEventListener('input', (e) => {
-      const k = clampInt(e.target.getAttribute('data-clue-index'), 0, 99);
-      draft.clues[k] = safeText(e.target.value);
+    clueInput.addEventListener('input', (e) => {
+      const k = clampInt(e.target.getAttribute('data-cp-index'), 0, 99);
+      draft.checkpoints[k].clue = safeText(e.target.value);
       markDirtyAndRender(false);
     });
 
+    // Grid row: points / code / radius
+    const grid = document.createElement('div');
+    grid.style.display = 'grid';
+    grid.style.gridTemplateColumns = '1fr 1fr 1fr';
+    grid.style.gap = '8px';
+
+    const points = document.createElement('input');
+    points.className = 'input';
+    points.type = 'number';
+    points.inputMode = 'numeric';
+    points.min = '0';
+    points.max = '1000';
+    points.step = '1';
+    points.placeholder = `Poäng (${draft.pointsPerCheckpoint})`;
+    points.value = (cp.points === null || cp.points === undefined) ? '' : String(cp.points);
+    points.setAttribute('data-cp-points', String(i)); // HOOK: cp-points
+
+    points.addEventListener('input', (e) => {
+      const k = clampInt(e.target.getAttribute('data-cp-points'), 0, 99);
+      const v = safeText(e.target.value).trim();
+      draft.checkpoints[k].points = v === '' ? null : clampInt(v, 0, 1000);
+      markDirtyAndRender(false);
+    });
+
+    const code = document.createElement('input');
+    code.className = 'input';
+    code.type = 'text';
+    code.autocomplete = 'off';
+    code.placeholder = 'Kod (valfri)';
+    code.value = safeText(cp.code || '');
+    code.setAttribute('data-cp-code', String(i)); // HOOK: cp-code
+
+    code.addEventListener('input', (e) => {
+      const k = clampInt(e.target.getAttribute('data-cp-code'), 0, 99);
+      draft.checkpoints[k].code = safeText(e.target.value).trim();
+      markDirtyAndRender(false);
+    });
+
+    const radius = document.createElement('input');
+    radius.className = 'input';
+    radius.type = 'number';
+    radius.inputMode = 'numeric';
+    radius.min = '5';
+    radius.max = '5000';
+    radius.step = '1';
+    radius.placeholder = 'Radius (m)';
+    radius.value = String(clampInt(cp.radius ?? 25, 5, 5000));
+    radius.setAttribute('data-cp-radius', String(i)); // HOOK: cp-radius
+
+    radius.addEventListener('input', (e) => {
+      const k = clampInt(e.target.getAttribute('data-cp-radius'), 0, 99);
+      draft.checkpoints[k].radius = clampInt(e.target.value, 5, 5000);
+      markDirtyAndRender(false);
+    });
+
+    grid.appendChild(points);
+    grid.appendChild(code);
+    grid.appendChild(radius);
+
     row.appendChild(meta);
-    row.appendChild(input);
+    row.appendChild(clueInput);
+    row.appendChild(grid);
+
     elCluesWrap.appendChild(row);
   }
 }
 
 function renderPreview() {
+  syncDerivedFields();
+
   if (elPreviewName) elPreviewName.textContent = draft.name?.trim() ? draft.name.trim() : '—';
   if (elPreviewPoints) elPreviewPoints.textContent = `${draft.pointsPerCheckpoint} p`;
   if (elPreviewCount) elPreviewCount.textContent = `${draft.checkpointCount}`;
@@ -288,15 +410,17 @@ function renderPreview() {
   }
 }
 
-function renderExportUI() {
-  // Export UI är injected (ingen admin.html-ändring i AO 6/6)
-  if (!elExportRoot) return;
+function broadcastDraftToMap() {
+  // HOOK: draft-changed-event
+  window.dispatchEvent(new CustomEvent('admin:draft-changed', {
+    detail: { checkpoints: draft.checkpoints }
+  }));
 
-  // JSON textarea alltid uppdaterad (för fallback-markering)
-  const json = getDraftJSON({ pretty: true });
-  if (elExportJSON) elExportJSON.value = json;
-
-  // Link box uppdateras bara när vi skapar ny länk (ej varje render)
+  // Om map API finns, kör setCheckpoints direkt också (fail-soft)
+  const api = window.__ADMIN_MAP_API__;
+  if (api && typeof api.setCheckpoints === 'function') {
+    try { api.setCheckpoints(draft.checkpoints); } catch (_) {}
+  }
 }
 
 function renderAll() {
@@ -305,7 +429,7 @@ function renderAll() {
   if (elCount) elCount.value = String(draft.checkpointCount);
   if (elPoints) elPoints.value = String(draft.pointsPerCheckpoint);
 
-  renderClueInputs();
+  renderCheckpointEditor();
   renderPreview();
 
   // Validate and show errors
@@ -315,13 +439,12 @@ function renderAll() {
   const hasErrors = !!(errors.name || errors.count || errors.points || errors.clues);
   setPill(hasErrors ? 'Utkast (fel)' : dirty ? 'Utkast (osparat)' : 'Utkast', !hasErrors);
 
-  // If storage not writable, warn once
   if (!storageWritable) {
     showStatus('LocalStorage är låst. Utkast kan inte sparas på denna enhet.', 'warn');
   }
 
-  // Export panel (AO 6/6)
-  renderExportUI();
+  // Uppdatera karta-markers
+  broadcastDraftToMap();
 }
 
 /* ============================================================
@@ -348,18 +471,59 @@ function markDirtyAndRender(triggerSave = true) {
 }
 
 /* ============================================================
-   BLOCK 10 — Events
+   BLOCK 10 — AO 2/8: add checkpoint from map click
 ============================================================ */
-function syncCountToClues(nextCount) {
-  const n = clampInt(nextCount, 1, 20);
-  draft.checkpointCount = n;
-
-  while (draft.clues.length < n) {
-    draft.clues.push(`Checkpoint ${draft.clues.length + 1}: Ledtråd...`);
-  }
-  if (draft.clues.length > n) draft.clues = draft.clues.slice(0, n);
+function isMapReady() {
+  const api = window.__ADMIN_MAP_API__;
+  return !!(api && typeof api.isReady === 'function' && api.isReady());
 }
 
+function addCheckpointFromMap(lat, lng) {
+  if (!isMapReady()) {
+    // Fail-closed: karta inte init → disable “lägg cp” (klick blir no-op + status)
+    showStatus('Kartan är inte redo. Kan inte lägga checkpoint.', 'warn');
+    return;
+  }
+
+  if (draft.checkpointCount >= 20) {
+    showStatus('Max 20 checkpoints nått.', 'warn');
+    return;
+  }
+
+  // Ny CP sist
+  const nextIndex = draft.checkpointCount; // 0-based
+  syncCountToStructures(draft, draft.checkpointCount + 1);
+
+  const cp = draft.checkpoints[nextIndex];
+  cp.lat = Number(lat);
+  cp.lng = Number(lng);
+  cp.radius = 25;
+  cp.code = '';
+  cp.points = null;
+  cp.clue = draft.clues[nextIndex] || `Checkpoint ${nextIndex + 1}: Ledtråd...`;
+
+  // Center view lite på första koordinat
+  const api = window.__ADMIN_MAP_API__;
+  if (api && typeof api.setViewIfNeeded === 'function' && nextIndex === 0) {
+    try { api.setViewIfNeeded(cp.lat, cp.lng, 15); } catch (_) {}
+  }
+
+  markDirtyAndRender(true);
+  showStatus(`Checkpoint ${nextIndex + 1} tillagd från karta.`, 'info');
+}
+
+function bindMapEvents() {
+  window.addEventListener('admin:map-click', (e) => {
+    const lat = e?.detail?.lat;
+    const lng = e?.detail?.lng;
+    if (!Number.isFinite(Number(lat)) || !Number.isFinite(Number(lng))) return;
+    addCheckpointFromMap(lat, lng);
+  });
+}
+
+/* ============================================================
+   BLOCK 11 — Events (form + buttons)
+============================================================ */
 function bindEvents() {
   // Back
   if (elBack) {
@@ -377,15 +541,15 @@ function bindEvents() {
     });
   }
 
-  // Count
+  // Count (manual)
   if (elCount) {
     elCount.addEventListener('input', (e) => {
-      syncCountToClues(e.target.value);
+      syncCountToStructures(draft, e.target.value);
       markDirtyAndRender(true);
     });
   }
 
-  // Points
+  // Points (default per cp)
   if (elPoints) {
     elPoints.addEventListener('input', (e) => {
       draft.pointsPerCheckpoint = clampInt(e.target.value, 0, 1000);
@@ -393,16 +557,16 @@ function bindEvents() {
     });
   }
 
-  // Add/Remove checkpoint buttons
+  // Add/Remove checkpoint buttons (behåll gamla knappar som count +/-)
   if (elAddCp) {
     elAddCp.addEventListener('click', () => {
-      syncCountToClues(draft.checkpointCount + 1);
+      syncCountToStructures(draft, draft.checkpointCount + 1);
       markDirtyAndRender(true);
     });
   }
   if (elRemoveCp) {
     elRemoveCp.addEventListener('click', () => {
-      syncCountToClues(draft.checkpointCount - 1);
+      syncCountToStructures(draft, draft.checkpointCount - 1);
       markDirtyAndRender(true);
     });
   }
@@ -418,6 +582,7 @@ function bindEvents() {
         setPill('Utkast (fel)', false);
         return;
       }
+      syncDerivedFields();
       const ok = writeDraft(draft);
       if (ok) {
         dirty = false;
@@ -444,35 +609,24 @@ function bindEvents() {
       showStatus('Utkast rensat.', 'info');
     });
   }
-
-  // AO 6/6 — Export events
-  if (elBtnCopyJSON) {
-    elBtnCopyJSON.addEventListener('click', async () => {
-      await onCopyJSON();
-    });
-  }
-  if (elBtnMakeLink) {
-    elBtnMakeLink.addEventListener('click', async () => {
-      await onMakeShareLink();
-    });
-  }
-  if (elBtnCopyLink) {
-    elBtnCopyLink.addEventListener('click', async () => {
-      await onCopyLink();
-    });
-  }
 }
 
 /* ============================================================
-   BLOCK 11 — AO 6/6 Export: JSON + QR-länk (inline payload)
-   - Ingen admin.html-ändring: vi injicerar en export-panel i DOM
-   - Fail-closed: för stor payload => felmeddelande
-   - Clipboard nekas => fallback: textarea markeras
+   BLOCK 12 — AO 6/6 Export helpers (behåll befintlig export om den redan finns)
+   - Vi lämnar export-panelen injected som tidigare.
+   - Uppdaterar JSON så att den fortfarande innehåller v1 fields + extra geo (fail-soft).
 ============================================================ */
 
 // Rimlig maxlängd för querystring payload.
-// (Browser/servers varierar, men vi failar tidigt för stabilitet.)
 const MAX_INLINE_QS_CHARS = 1400; // HOOK: max-inline-payload
+
+let elExportRoot = null;
+let elExportMsg = null;
+let elExportLink = null;
+let elExportJSON = null;
+let elBtnCopyJSON = null;
+let elBtnMakeLink = null;
+let elBtnCopyLink = null;
 
 function hasBlockingErrors() {
   const errors = validateDraft(draft);
@@ -480,8 +634,9 @@ function hasBlockingErrors() {
 }
 
 function getDraftJSON({ pretty = false } = {}) {
-  // Minifierad men läsbar: vi väljer 2 spaces för att vara mänskligt läsbar.
-  // (Vill du mer “minify” senare kan vi byta till JSON.stringify(obj) utan spaces.)
+  syncDerivedFields();
+
+  // Bas (måste vara kompatibel med party.js payload-validator i tidigare AO)
   const payload = {
     version: 1,
     name: safeText(draft.name).trim(),
@@ -489,6 +644,18 @@ function getDraftJSON({ pretty = false } = {}) {
     pointsPerCheckpoint: clampInt(draft.pointsPerCheckpoint, 0, 1000),
     clues: Array.isArray(draft.clues) ? draft.clues.map((c) => safeText(c).trim()) : []
   };
+
+  // AO 2/8 extra geo: fail-soft (party.js ignorerar okända fält)
+  payload.geo = Array.isArray(draft.checkpoints)
+    ? draft.checkpoints.map((cp) => ({
+        lat: Number.isFinite(Number(cp.lat)) ? Number(cp.lat) : null,
+        lng: Number.isFinite(Number(cp.lng)) ? Number(cp.lng) : null,
+        radius: clampInt(cp.radius ?? 25, 5, 5000),
+        code: safeText(cp.code).trim(),
+        points: (cp.points === null || cp.points === undefined) ? null : clampInt(cp.points, 0, 1000)
+      }))
+    : [];
+
   return JSON.stringify(payload, null, pretty ? 2 : 0);
 }
 
@@ -504,7 +671,6 @@ function setExportMessage(msg, type = 'info') {
 function ensureExportPanel() {
   if (elExportRoot) return;
 
-  // Mount: lägg export-panel under preview-kortet om möjligt, annars under main container
   const previewCard = elPreviewList?.closest('.card') || null;
   const mount = previewCard || document.querySelector('.container') || document.body;
 
@@ -617,7 +783,6 @@ function ensureExportPanel() {
   card.appendChild(head);
   card.appendChild(body);
 
-  // Insert: om previewCard finns, lägg efter den. Annars längst ned i mount.
   if (previewCard && previewCard.parentNode) {
     previewCard.parentNode.insertBefore(card, previewCard.nextSibling);
   } else {
@@ -626,14 +791,16 @@ function ensureExportPanel() {
 
   elExportRoot = card;
 
-  // Bind export events (nu när knapparna finns)
-  bindEventsExportOnly();
-}
-
-function bindEventsExportOnly() {
+  // Bind export events
   if (elBtnCopyJSON) elBtnCopyJSON.addEventListener('click', async () => { await onCopyJSON(); });
   if (elBtnMakeLink) elBtnMakeLink.addEventListener('click', async () => { await onMakeShareLink(); });
   if (elBtnCopyLink) elBtnCopyLink.addEventListener('click', async () => { await onCopyLink(); });
+}
+
+function renderExportUI() {
+  if (!elExportRoot) return;
+  const json = getDraftJSON({ pretty: true });
+  if (elExportJSON) elExportJSON.value = json;
 }
 
 function selectAll(el) {
@@ -662,16 +829,11 @@ async function onCopyJSON() {
     return;
   }
 
-  // Fail-closed fallback: visa instruktion + markera text
   setExportMessage('Kopiering nekades. Markera JSON-rutan och kopiera manuellt (Ctrl/Cmd+C).', 'warn');
   selectAll(elExportJSON);
 }
 
 function makeInlineShareURL(payloadJSON) {
-  // Bygg en länk mot spelstart (antag ../index.html från pages/admin.html)
-  // Parametrar:
-  // - mode=party (framtida koppling)
-  // - payload=<urlencoded json>
   const url = new URL('../index.html', window.location.href);
 
   const encoded = encodeURIComponent(payloadJSON);
@@ -710,7 +872,7 @@ async function onMakeShareLink() {
   if (elExportLink) elExportLink.value = out.url;
   if (elBtnCopyLink) elBtnCopyLink.disabled = false;
 
-  setExportMessage('Länk skapad. Du kan nu kopiera den eller göra QR i nästa steg i appen.', 'info');
+  setExportMessage('Länk skapad. Du kan nu kopiera den.', 'info');
   selectAll(elExportLink);
 }
 
@@ -734,21 +896,29 @@ async function onCopyLink() {
 }
 
 /* ============================================================
-   BLOCK 12 — Boot
+   BLOCK 13 — Boot
 ============================================================ */
 (function bootAdmin() {
   'use strict';
 
-  // INIT-GUARD
   if (window.__FAS12_AO5_ADMIN_INIT__) return; // HOOK: init-guard-admin
   window.__FAS12_AO5_ADMIN_INIT__ = true;
 
-  // Skapa export-panel direkt (AO 6/6) — men utan att kräva admin.html-ändring
+  // Export-panel (AO 6/6)
   ensureExportPanel();
 
+  // Events
+  bindMapEvents();
   bindEvents();
-  renderAll();
 
-  // Initial save-pill
+  // First render
+  renderAll();
+  renderExportUI();
+
   setPill('Utkast', true);
+
+  // Fail-closed: om kartan inte är init, indikera att map-klick inte kan lägga cp
+  if (!isMapReady()) {
+    showStatus('Karta ej redo: Klick på karta kan inte lägga checkpoints just nu.', 'warn');
+  }
 })();
