@@ -1,7 +1,7 @@
 <!-- ============================================================
      FIL: pages/play.html  (HEL FIL)
-     AO 6/15 — Play page UI (missions + progress) utan kamera
-     Policy: UI-only, mobil-first, inga externa deps
+     AO 6/15 + AO 14/15 — Play page UI (missions + progress)
+     Mål: A11y basics + mobil states
 ============================================================ -->
 <!doctype html>
 <html lang="sv">
@@ -12,17 +12,22 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Spela — Uppdrag</title>
-  <meta name="description" content="Spelvy för uppdrag och progression (utan kamera i AO-6)." />
+  <meta name="description" content="Spelvy för uppdrag och progression." />
   <link rel="stylesheet" href="../styles/main.css" />
 </head>
 
 <body>
   <!-- ==========================================================
-       BLOCK 2 — App Root
+       BLOCK 2 — Skip link (A11y)
+  =========================================================== -->
+  <a class="skipLink" href="#mainContent">Hoppa till innehåll</a> <!-- HOOK: skip-link -->
+
+  <!-- ==========================================================
+       BLOCK 3 — App Root
   =========================================================== -->
   <div id="app" class="app"> <!-- HOOK: app-root -->
     <!-- ========================================================
-         BLOCK 3 — Header
+         BLOCK 4 — Header
          KRAV: back + packnamn + level-pill (data-hook)
     ========================================================= -->
     <header class="topbar">
@@ -40,7 +45,7 @@
           </div>
 
           <div class="headerRight">
-            <span id="levelPill" class="pill pill--level" data-hook="level-pill">Lvl 1</span>
+            <span id="levelPill" class="pill pill--level" data-hook="level-pill" aria-label="Nuvarande level">Lvl 1</span>
             <!-- HOOK: level-pill -->
           </div>
         </div>
@@ -48,34 +53,34 @@
     </header>
 
     <!-- ========================================================
-         BLOCK 4 — Main Content
+         BLOCK 5 — Main Content
     ========================================================= -->
-    <main class="main">
+    <main id="mainContent" class="main" role="main"> <!-- HOOK: main -->
       <div class="container">
         <!-- Progress row -->
-        <section class="panel panel--tight">
+        <section class="panel panel--tight" aria-label="Progression">
           <div class="panel__row panel__row--stack">
             <div>
               <div class="label muted">Progress</div>
-              <div class="value">
+              <div class="value" aria-live="polite">
                 <span id="xpLabel">XP: 0</span>
-                <span class="sep">•</span>
+                <span class="sep" aria-hidden="true">•</span>
                 <span id="pointsLabel">Poäng: 0</span>
-                <span class="sep">•</span>
+                <span class="sep" aria-hidden="true">•</span>
                 <span id="streakLabel">Streak: 0</span>
               </div>
               <!-- HOOK: progress-labels -->
             </div>
 
             <div class="rightRow">
-              <span id="activeMissionPill" class="pill pill--muted">Inget uppdrag valt</span>
+              <span id="activeMissionPill" class="pill pill--muted" aria-live="polite">Inget uppdrag valt</span>
               <!-- HOOK: active-mission-pill -->
             </div>
           </div>
         </section>
 
         <!-- Error / loading slot -->
-        <div id="statusSlot" class="slot">
+        <div id="statusSlot" class="slot" aria-live="polite">
           <!-- HOOK: status-slot -->
         </div>
 
@@ -83,7 +88,7 @@
              Mission Card (active)
              KRAV: titel + instruktion + difficulty pill
         ======================================================= -->
-        <section id="missionCard" class="card card--mission" hidden>
+        <section id="missionCard" class="card card--mission" hidden aria-label="Aktivt uppdrag">
           <!-- HOOK: mission-card -->
           <div class="card__head">
             <div class="card__meta">
@@ -94,42 +99,44 @@
             </div>
 
             <div class="card__side">
-              <span id="difficultyPill" class="pill pill--difficulty">normal</span>
+              <span id="difficultyPill" class="pill pill--difficulty" aria-label="Svårighetsgrad">normal</span>
               <!-- HOOK: difficulty-pill -->
             </div>
           </div>
+          <!-- Kamera UI mountas här av JS (AO-7) -->
+          <!-- HOOK: camera-slot -->
         </section>
 
         <!-- Missions list -->
-        <section class="card card--list">
+        <section class="card card--list" aria-label="Uppdragslista">
           <div class="listHead">
             <h3 class="h2">Uppdrag</h3>
             <p class="muted small">Välj ett uppdrag för att aktivera “Klar”.</p>
           </div>
 
-          <div id="missionsList" class="missionsList" role="list">
+          <div id="missionsList" class="missionsList" role="list" aria-label="Uppdrag">
             <!-- HOOK: missions-list (JS renderar items) -->
           </div>
         </section>
 
         <div class="muted small footerNote">
-          Kamera/foto kopplas i senare AO. (AO-6 använder stub.)
+          Kamera/foto kopplas i senare AO. (Den här vyn kan kräva foto beroende på AO.)
         </div>
       </div>
     </main>
 
     <!-- ========================================================
-         BLOCK 5 — Sticky CTA bar
+         BLOCK 6 — Sticky CTA bar (safe area)
          KRAV: “Klar” disabled tills mission aktiv + “Byt uppdrag”
     ========================================================= -->
-    <div class="ctaBar">
+    <div class="ctaBar" role="region" aria-label="Åtgärder">
       <div class="ctaBar__inner">
-        <button id="completeBtn" class="btn btn-primary" type="button" disabled>
+        <button id="completeBtn" class="btn btn-primary" type="button" disabled aria-label="Markera uppdrag som klart">
           Klar
         </button>
         <!-- HOOK: complete-button -->
 
-        <button id="switchBtn" class="btn btn-ghost" type="button">
+        <button id="switchBtn" class="btn btn-ghost" type="button" aria-label="Byt uppdrag">
           Byt uppdrag
         </button>
         <!-- HOOK: switch-mission-button -->
@@ -138,11 +145,11 @@
   </div>
 
   <!-- ==========================================================
-       BLOCK 6 — Inline styles (page-only)
-       NOTE: Inline-styles tillåtna enligt profil, men vi håller det minimalt.
+       BLOCK 7 — Inline styles (page-only)
+       NOTE: Inline-styles tillåtna, men tokens ligger i main.css
   =========================================================== -->
   <style>
-    /* AO-6 page additions (behåller tokens i main.css) */
+    /* AO-6/14 page additions */
     .row { display:flex; align-items:center; gap: var(--sp-3); }
     .row--header { width:100%; }
     .btn--icon { width:44px; padding: 10px 10px; }
@@ -170,13 +177,26 @@
     .missionItem__title { font-weight: 800; white-space: nowrap; overflow:hidden; text-overflow: ellipsis; }
     .missionItem__sub { margin-top: 2px; font-size: var(--fs-1); }
     .footerNote { margin-top: var(--sp-5); text-align:center; opacity:.85; }
-    .ctaBar { position: sticky; bottom: 0; left:0; right:0; z-index: 20; padding: var(--sp-3) var(--sp-4); background: rgba(5,10,20,.75); border-top: 1px solid var(--border); backdrop-filter: blur(10px); }
+
+    /* AO-14: safe area i sticky bar */
+    .ctaBar {
+      position: sticky;
+      bottom: 0;
+      left:0;
+      right:0;
+      z-index: 20;
+      padding: var(--sp-3) var(--sp-4);
+      padding-bottom: calc(var(--sp-3) + env(safe-area-inset-bottom, 0px));
+      background: rgba(5,10,20,.75);
+      border-top: 1px solid var(--border);
+      backdrop-filter: blur(10px);
+    }
     .ctaBar__inner { max-width: var(--container); margin: 0 auto; display:flex; gap: var(--sp-2); }
     .ctaBar__inner .btn { flex: 1; }
   </style>
 
   <!-- ==========================================================
-       BLOCK 7 — Script
+       BLOCK 8 — Script
   =========================================================== -->
   <script type="module" src="../src/play.js"></script>
 </body>
