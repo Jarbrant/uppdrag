@@ -4,13 +4,15 @@
    AO 2/8 (FAS 1.5) — Klick → lägg checkpoint + lista + markers
    AO 3/8 (FAS 1.5) — Export: KOPIERA JSON + KOPIERA LÄNK (deltagarvy)
    AO 8/8 (FAS 2.0) — Final “Skattkista” flagga (isFinal) på sista checkpoint
-   KRAV (AO 8/8):
-   - Admin kan markera sista cp som isFinal: true (skattkista)
-   - Fail-closed: om isFinal saknas → behandlas som vanlig sista cp (i deltagarvy)
+   NICE-TO-HAVE (FAS 2.1) — Admin “Random code” (one-click + per checkpoint)
+   KRAV (Random code):
+   - En vuxen kan generera koder snabbt utan att skriva manuellt
+   - One-click (global) + även per checkpoint (UI-only)
+   - Fail-closed: påverkar inte redan ifyllda koder, och genererar unika koder
    Policy: UI-only, XSS-safe rendering
 ============================================================ */
 
-import { copyToClipboard } from './util.js'; // clipboard helper
+import { copyToClipboard } from './util.js';
 
 /* ============================================================
    BLOCK 1 — Storage key + draft shape (state/draft)
@@ -88,7 +90,6 @@ function defaultDraft() {
       code: '',
       clue: '',
       points: null,
-      // AO 8/8: final flag (endast sista cp ska kunna vara true)
       isFinal: false
     }))
   };
@@ -135,7 +136,7 @@ function writeDraft(draft) {
 }
 
 /* ============================================================
-   BLOCK 6 — Migration/shape guard + sync (inkl AO 8/8 isFinal)
+   BLOCK 6 — Migration/shape guard + sync (inkl isFinal)
 ============================================================ */
 function migrateDraft(raw) {
   const def = defaultDraft();
@@ -165,14 +166,12 @@ function migrateDraft(raw) {
 
   syncCountToStructures(next, next.checkpointCount);
 
-  // Sync clue strings into checkpoints if missing
   for (let i = 0; i < next.checkpointCount; i++) {
     if (!next.checkpoints[i]) continue;
     const c = safeText(next.clues[i] ?? '').trim();
     if (!next.checkpoints[i].clue) next.checkpoints[i].clue = c;
   }
 
-  // AO 8/8 fail-closed: endast sista cp får ha isFinal=true
   enforceFinalOnlyOnLast(next);
 
   return next;
@@ -190,7 +189,6 @@ function syncCountToStructures(d, nextCount) {
   }
   if (d.checkpoints.length > n) d.checkpoints = d.checkpoints.slice(0, n);
 
-  // AO 8/8: efter resize, säkerställ final-regel
   enforceFinalOnlyOnLast(d);
 }
 
@@ -202,7 +200,6 @@ function enforceFinalOnlyOnLast(d) {
     if (!d.checkpoints[i]) continue;
     if (i !== last && d.checkpoints[i].isFinal === true) d.checkpoints[i].isFinal = false;
   }
-  // Om last saknar property, normalisera
   if (d.checkpoints[last] && d.checkpoints[last].isFinal !== true) {
     d.checkpoints[last].isFinal = false;
   }
@@ -252,6 +249,13 @@ function validateDraft(d) {
       if (!Number.isFinite(Number(p)) || p < 0 || p > 1000) {
         errors.clues = `Poäng ${i + 1} är ogiltig (0–1000).`; break;
       }
+
+      // Code length guard
+      const code = safeText(cp.code).trim();
+      if (code.length > 32) {
+        errors.clues = `Kod ${i + 1} är för lång (max 32 tecken).`;
+        break;
+      }
     }
   }
 
@@ -266,7 +270,68 @@ function renderErrors(errors) {
 }
 
 /* ============================================================
-   BLOCK 8 — Render loop (editor + preview) + AO 8/8 final toggle
+   BLOCK 8 — NICE: Random code generator (global + per cp)
+============================================================ */
+const CODE_CHARS = '23456789ABCDEFGHJKMNPQRSTUVWXYZ'; // undvik 0,O,1,I,L
+function randomCode(len = 5) {
+  const n = clampInt(len, 4, 12);
+  let out = '';
+  for (let i = 0; i < n; i++) {
+    out += CODE_CHARS[Math.floor(Math.random() * CODE_CHARS.length)];
+  }
+  return out;
+}
+
+function normalizeCode(s) {
+  return safeText(s).trim().toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 32);
+}
+
+function usedCodesSet() {
+  const set = new Set();
+  for (let i = 0; i < draft.checkpointCount; i++) {
+    const c = normalizeCode(draft.checkpoints[i]?.code || '');
+    if (c) set.add(c);
+  }
+  return set;
+}
+
+function generateUniqueCode(existingSet, len = 5) {
+  for (let tries = 0; tries < 30; tries++) {
+    const c = randomCode(len);
+    if (!existingSet.has(c)) return c;
+  }
+  // fail-closed fallback: append suffix
+  let base = randomCode(len);
+  let suffix = 2;
+  while (existingSet.has(`${base}${suffix}`) && suffix < 99) suffix++;
+  return normalizeCode(`${base}${suffix}`);
+}
+
+function fillRandomCodesForEmpty({ len = 5 } = {}) {
+  const used = usedCodesSet();
+  let changed = 0;
+
+  for (let i = 0; i < draft.checkpointCount; i++) {
+    const cp = draft.checkpoints[i];
+    if (!cp) continue;
+
+    const cur = normalizeCode(cp.code || '');
+    if (cur) {
+      used.add(cur);
+      continue; // påverka inte ifyllda
+    }
+
+    const next = generateUniqueCode(used, len);
+    cp.code = next;
+    used.add(next);
+    changed++;
+  }
+
+  return changed;
+}
+
+/* ============================================================
+   BLOCK 9 — Render loop (editor + preview) + export panel
 ============================================================ */
 let draft = readDraft(); // HOOK: draft-state
 let dirty = false;       // HOOK: dirty-state
@@ -312,7 +377,6 @@ function renderCheckpointEditor() {
     clueInput.placeholder = isLast && cp.isFinal ? 'Skattkista: ledtråd…' : 'Skriv ledtråd…';
     clueInput.value = safeText(cp.clue || draft.clues[i] || '');
     clueInput.setAttribute('data-cp-index', String(i)); // HOOK: cp-clue-index
-
     clueInput.addEventListener('input', (e) => {
       const k = clampInt(e.target.getAttribute('data-cp-index'), 0, 99);
       draft.checkpoints[k].clue = safeText(e.target.value);
@@ -350,7 +414,7 @@ function renderCheckpointEditor() {
     code.setAttribute('data-cp-code', String(i)); // HOOK: cp-code
     code.addEventListener('input', (e) => {
       const k = clampInt(e.target.getAttribute('data-cp-code'), 0, 99);
-      draft.checkpoints[k].code = safeText(e.target.value).trim();
+      draft.checkpoints[k].code = normalizeCode(e.target.value);
       markDirtyAndRender(false);
     });
 
@@ -374,7 +438,41 @@ function renderCheckpointEditor() {
     grid.appendChild(code);
     grid.appendChild(radius);
 
-    // AO 8/8 — Final toggle (endast sista cp)
+    // NICE: per checkpoint random code button (påverkar bara om code är tom)
+    const codeRow = document.createElement('div');
+    codeRow.style.display = 'flex';
+    codeRow.style.alignItems = 'center';
+    codeRow.style.justifyContent = 'space-between';
+    codeRow.style.gap = '10px';
+    codeRow.style.marginTop = '6px';
+
+    const codeHint = document.createElement('div');
+    codeHint.className = 'muted small';
+    codeHint.textContent = 'Kod: valfri (admin kan generera)';
+
+    const btnRnd = document.createElement('button');
+    btnRnd.type = 'button';
+    btnRnd.className = 'btn btn-ghost miniBtn';
+    btnRnd.textContent = 'Slumpkod';
+    btnRnd.setAttribute('data-cp-rnd', String(i)); // HOOK: cp-random-code
+    btnRnd.addEventListener('click', () => {
+      const k = clampInt(btnRnd.getAttribute('data-cp-rnd'), 0, 99);
+      const cur = normalizeCode(draft.checkpoints[k]?.code || '');
+      if (cur) {
+        showStatus(`CP ${k + 1} har redan en kod.`, 'warn');
+        return;
+      }
+      const used = usedCodesSet();
+      const next = generateUniqueCode(used, 5);
+      draft.checkpoints[k].code = next;
+      markDirtyAndRender(true);
+      showStatus(`Kod skapad för CP ${k + 1}.`, 'info');
+    });
+
+    codeRow.appendChild(codeHint);
+    codeRow.appendChild(btnRnd);
+
+    // Final toggle (endast sista cp)
     const finalRow = document.createElement('div');
     finalRow.style.display = 'flex';
     finalRow.style.alignItems = 'center';
@@ -392,11 +490,10 @@ function renderCheckpointEditor() {
     finalToggle.disabled = !isLast;
     finalToggle.setAttribute('data-cp-final', String(i)); // HOOK: cp-final
     finalToggle.setAttribute('aria-label', 'Markera som Skattkista (final)');
-
     finalToggle.addEventListener('change', (e) => {
       const k = clampInt(e.target.getAttribute('data-cp-final'), 0, 99);
       const isLastNow = k === (draft.checkpointCount - 1);
-      if (!isLastNow) return; // fail-closed
+      if (!isLastNow) return;
 
       draft.checkpoints[k].isFinal = !!e.target.checked;
       enforceFinalOnlyOnLast(draft);
@@ -409,6 +506,7 @@ function renderCheckpointEditor() {
     row.appendChild(meta);
     row.appendChild(clueInput);
     row.appendChild(grid);
+    row.appendChild(codeRow);
     row.appendChild(finalRow);
 
     elCluesWrap.appendChild(row);
@@ -467,7 +565,7 @@ function renderAll() {
 }
 
 /* ============================================================
-   BLOCK 9 — Autosave (debounced)
+   BLOCK 10 — Autosave (debounced)
 ============================================================ */
 function scheduleSave() {
   if (!storageWritable) return;
@@ -490,7 +588,7 @@ function markDirtyAndRender(triggerSave = true) {
 }
 
 /* ============================================================
-   BLOCK 10 — Map click → add checkpoint
+   BLOCK 11 — Map click → add checkpoint
 ============================================================ */
 function isMapReady() {
   const api = window.__ADMIN_MAP_API__;
@@ -535,7 +633,7 @@ function bindMapEvents() {
 }
 
 /* ============================================================
-   BLOCK 11 — Events
+   BLOCK 12 — Events
 ============================================================ */
 function bindEvents() {
   if (elBack) {
@@ -619,7 +717,7 @@ function bindEvents() {
 }
 
 /* ============================================================
-   BLOCK 12 — Export (KOPIERA JSON + KOPIERA LÄNK)
+   BLOCK 13 — Export (KOPIERA JSON + KOPIERA LÄNK) + NICE: Fill random codes button
 ============================================================ */
 
 // Serialisering-policy:
@@ -634,6 +732,8 @@ let elExportLink = null;
 let elExportJSON = null;
 let elBtnCopyJSON = null;
 let elBtnCopyLink = null;
+// NICE
+let elBtnFillCodes = null;
 
 function hasBlockingErrors() {
   const errors = validateDraft(draft);
@@ -650,15 +750,13 @@ function getDraftJSON({ pretty = false } = {}) {
     checkpointCount: clampInt(draft.checkpointCount, 1, 20),
     pointsPerCheckpoint: clampInt(draft.pointsPerCheckpoint, 0, 1000),
     clues: Array.isArray(draft.clues) ? draft.clues.map((c) => safeText(c).trim()) : [],
-    // geo: extra data (party-map.js läser isFinal om det finns; fail-soft om saknas)
     geo: Array.isArray(draft.checkpoints)
       ? draft.checkpoints.map((cp, i) => ({
           lat: Number.isFinite(Number(cp.lat)) ? Number(cp.lat) : null,
           lng: Number.isFinite(Number(cp.lng)) ? Number(cp.lng) : null,
           radius: clampInt(cp.radius ?? 25, 5, 5000),
-          code: safeText(cp.code).trim(),
+          code: normalizeCode(cp.code || ''),
           points: (cp.points === null || cp.points === undefined) ? null : clampInt(cp.points, 0, 1000),
-          // AO 8/8: endast sista cp kan ha isFinal true (annars false)
           isFinal: (i === draft.checkpointCount - 1) ? (cp.isFinal === true) : false
         }))
       : []
@@ -736,8 +834,16 @@ function ensureExportPanel() {
   btnLink.textContent = 'KOPIERA LÄNK';
   elBtnCopyLink = btnLink;
 
+  // NICE: fill random codes for empty
+  const btnFill = document.createElement('button');
+  btnFill.type = 'button';
+  btnFill.className = 'btn btn-ghost miniBtn';
+  btnFill.textContent = 'FYLL SLUMPKODER (tomma)';
+  elBtnFillCodes = btnFill;
+
   row.appendChild(btnJson);
   row.appendChild(btnLink);
+  row.appendChild(btnFill);
 
   const msg = document.createElement('div');
   msg.className = 'muted small';
@@ -798,6 +904,7 @@ function ensureExportPanel() {
 
   if (elBtnCopyJSON) elBtnCopyJSON.addEventListener('click', async () => { await onCopyJSON(); });
   if (elBtnCopyLink) elBtnCopyLink.addEventListener('click', async () => { await onCopyLink(); });
+  if (elBtnFillCodes) elBtnFillCodes.addEventListener('click', () => { onFillRandomCodes(); });
 }
 
 function renderExportUI() {
@@ -819,6 +926,16 @@ function buildParticipantLinkOrFail() {
   url.searchParams.set('payload', encoded);
 
   return { ok: true, url: url.toString(), encodedLength: encoded.length };
+}
+
+function onFillRandomCodes() {
+  const changed = fillRandomCodesForEmpty({ len: 5 });
+  if (changed <= 0) {
+    setExportMessage('Inga tomma koder att fylla (alla har redan kod).', 'info');
+    return;
+  }
+  markDirtyAndRender(true);
+  setExportMessage(`Fyllde ${changed} slumpkod${changed === 1 ? '' : 'er'} (endast tomma).`, 'info');
 }
 
 async function onCopyJSON() {
@@ -876,7 +993,7 @@ async function onCopyLink() {
 }
 
 /* ============================================================
-   BLOCK 13 — Boot
+   BLOCK 14 — Boot
 ============================================================ */
 (function bootAdmin() {
   'use strict';
