@@ -2,6 +2,7 @@
    FIL: styles/main.css  (HEL FIL)
    AO 1/15 + AO 5/15 + AO 14/15 — Tokens kvar + A11y + mobil states + safe areas
    AO 5/8 (FAS 1.5) — Leaflet overlays + “cleared” visuals helpers
+   AO 6/8 (FAS 2.0) — Party theme: sepia/paper + fog-of-war look (CSS)
 ============================================================ */
 
 /* ============================================================
@@ -542,8 +543,6 @@ a { color: inherit; text-decoration: none; }
 /* ============================================================
    BLOCK 14 — AO-14 A11y + mobil states + safe areas
 ============================================================ */
-
-/* Focus ring: matcha alla vanliga interaktiva element */
 :where(
   a,
   button,
@@ -558,30 +557,25 @@ a { color: inherit; text-decoration: none; }
   box-shadow: var(--focus);
 }
 
-/* Ge även tydlig focus på “kort” som är tabindex=0 */
 :where(.card--mode, .missionItem, .stepDot):focus-visible {
   outline: none;
   box-shadow: var(--focus);
 }
 
-/* Minsta klickyta även för custom-knappar */
 .stepDot,
 .missionItem {
   min-height: 44px; /* KRAV: minst 44px */
 }
 
-/* Disabled/fake-disabled */
 :where(button, .btn)[disabled],
 :where(button, .btn)[aria-disabled="true"] {
   pointer-events: none;
 }
 
-/* Safe area helpers (kan användas av pages inline) */
 .safeBottomPad {
   padding-bottom: calc(var(--sp-4) + env(safe-area-inset-bottom, 0px));
 }
 
-/* Skip link (om sidan har den) */
 .skipLink {
   position: absolute;
   left: -9999px;
@@ -598,7 +592,6 @@ a { color: inherit; text-decoration: none; }
   box-shadow: var(--focus);
 }
 
-/* Reduce motion */
 @media (prefers-reduced-motion: reduce) {
   * {
     animation-duration: 0.001ms !important;
@@ -610,32 +603,101 @@ a { color: inherit; text-decoration: none; }
 
 /* ============================================================
    BLOCK 15 — AO 5/8 (FAS 1.5) Leaflet helpers
-   Syfte:
-   - Se till att Leaflet-kartor matchar typografi och inte “läcker” styles
-   - Små, säkra hooks för marker/overlay states (cleared/active)
-   OBS: Vi undviker aggressiva Leaflet overrides för att inte bryta kartans UI.
 ============================================================ */
-
-/* Leaflet container: ärva font för enhetlig känsla */
 .leaflet-container {
   font-family: var(--font);
   color: var(--text);
 }
 
-/* Vår divIcon wrapper ska inte skapa extra box runt ikonen */
 .cpMarker,
 .partyCpMarker {
   background: transparent !important;
   border: none !important;
 }
 
-/* “Cleared” helper om vi senare vill använda CSS-klass i HTML */
 .is-cleared {
   color: rgba(74,222,128,.95);
 }
 
-/* Liten overlay-boost: gör circle kanterna lite tydligare mot mörk bakgrund */
 .leaflet-interactive {
-  /* lämna minimal justering – Leaflet styr i övrigt */
   filter: drop-shadow(0 6px 14px rgba(0,0,0,.20));
+}
+
+/* ============================================================
+   BLOCK 16 — AO 6/8 (FAS 2.0) Party “paper/sepia” theme + fog look
+   KRAV:
+   - Sepia bakgrund + “paper card”
+   - Fog overlay på kartan: dimmig känsla utanför “reveal”
+   - Tillgänglighet: bibehåll hög kontrast (text aldrig för ljus)
+============================================================ */
+
+/* Theme scope: bara party-läget */
+body.theme-party {
+  /* Sepia-ish men mörk nog för kontrast */
+  background:
+    radial-gradient(1100px 650px at 10% -10%, rgba(255, 214, 150, .14), transparent 60%),
+    radial-gradient(900px 520px at 100% 0%, rgba(255, 214, 150, .10), transparent 55%),
+    linear-gradient(180deg, #0c0a08, #08060a 70%);
+}
+
+/* Party topbar lite “varmare” men fortfarande mörk */
+body.theme-party .partyTopbar {
+  background: rgba(18, 13, 10, .60);
+  border-bottom-color: rgba(255, 214, 150, .14);
+}
+
+/* Paper card: varm yta + subtil “fiber” */
+body.theme-party .paperCard {
+  border-color: rgba(255, 214, 150, .16);
+  background:
+    radial-gradient(700px 220px at 30% 0%, rgba(255, 214, 150, .10), transparent 60%),
+    radial-gradient(600px 240px at 90% 20%, rgba(255, 214, 150, .08), transparent 60%),
+    rgba(16, 26, 47, .62); /* bas behåller läsbarhet */
+  box-shadow: 0 10px 26px rgba(0,0,0,.22);
+}
+
+/* Inputs i party: lite varmare kant men samma kontrast */
+body.theme-party .paperCard .input {
+  border-color: rgba(255, 214, 150, .18);
+  background: rgba(255, 255, 255, .05);
+}
+
+/* Map fog:
+   Vi gör kartan lite dimmig generellt (sepia/kontrast/brightness),
+   och lägger ett overlay-lager som ser “papper/fog” ut.
+   (JS-mask för exakt “utanför radie” görs i AO 7/8 om du vill.)
+*/
+body.theme-party .partyMap .leaflet-tile-pane {
+  filter: sepia(.55) saturate(.80) contrast(1.06) brightness(.90);
+}
+
+body.theme-party .fogWrap {
+  position: relative;
+}
+
+/* Fog overlay: “papper + dimma”.
+   - pointer-events: none (så karta går att zooma/dragga)
+   - mix-blend-mode: multiply för att kännas som lager ovanpå kartan
+*/
+body.theme-party .fogOverlay {
+  background:
+    radial-gradient(220px 160px at 35% 40%, rgba(255, 255, 255, .06), transparent 60%),
+    radial-gradient(240px 180px at 70% 55%, rgba(255, 255, 255, .05), transparent 62%),
+    linear-gradient(180deg, rgba(15, 10, 7, .30), rgba(10, 7, 10, .38));
+  opacity: .92;
+  mix-blend-mode: multiply;
+  backdrop-filter: blur(1.5px);
+  border: 1px solid rgba(255, 214, 150, .10);
+}
+
+/* “Reveal”-känsla (CSS-only):
+   Vi gör Leaflet-cirkeln (overlay) mer “ljus” så det upplevs som avtäckt.
+   (Utanför-radie-mask kräver JS och kommer i nästa AO om du vill.)
+*/
+body.theme-party .leaflet-overlay-pane svg path {
+  filter: drop-shadow(0 10px 18px rgba(0,0,0,.25));
+}
+
+body.theme-party .leaflet-overlay-pane svg path[fill] {
+  opacity: .45;
 }
