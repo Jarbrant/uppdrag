@@ -148,47 +148,50 @@ function writeDraft(d) {
 }
 
 /* ============================================================
-   BLOCK 5.5 — Library (publicerade spelkort)
-   Shape: [{ id, name, checkpointCount, updatedAt, payloadJSON }]
+   BLOCK 5.5 — Library (publicerade spelkort) (Flyttad till src/admin-library.js)
+   Policy: admin.js sätter storageWritable=false vid read/write-fel
 ============================================================ */
-function readLibrary() {
-  try {
-    const raw = localStorage.getItem(LIB_KEY);
-    if (!raw) return [];
-    const v = safeJSONParse(raw, []);
-    if (!Array.isArray(v)) return [];
-    return v.filter((x) => x && typeof x === 'object' && typeof x.id === 'string');
-  } catch (_) {
+function readLibraryLocal() {
+  const res = readLibrary();
+  if (!res.ok) {
+    storageWritable = false;
+    showStatus('LocalStorage är låst. Kan inte läsa biblioteket.', 'warn');
     return [];
   }
+  return res.list;
 }
 
-function writeLibrary(list) {
+function findLibraryEntryLocal(id) {
+  const res = findLibraryEntry(id);
+  if (!res.ok) {
+    storageWritable = false;
+    showStatus('LocalStorage är låst. Kan inte läsa biblioteket.', 'warn');
+    return null;
+  }
+  return res.entry;
+}
+
+function upsertLibraryEntryLocal(entry) {
   if (!storageWritable) return false;
-  try {
-    localStorage.setItem(LIB_KEY, JSON.stringify(Array.isArray(list) ? list : []));
-    return true;
-  } catch (_) {
+  const res = upsertLibraryEntry(entry);
+  if (!res.ok) {
     storageWritable = false;
     showStatus('Kunde inte skriva till bibliotek (localStorage write fail).', 'warn');
     return false;
   }
+  return true;
 }
 
-function upsertLibraryEntry(entry) {
-  const list = readLibrary();
-  const next = Array.isArray(list) ? list.slice(0, 200) : [];
-  const idx = next.findIndex((x) => x && x.id === entry.id);
-  if (idx >= 0) next[idx] = entry;
-  else next.unshift(entry);
-  return writeLibrary(next);
+function deleteLibraryEntryLocal(id) {
+  if (!storageWritable) return { ok: false, changed: false };
+  const res = deleteLibraryEntry(id);
+  if (!res.ok) {
+    storageWritable = false;
+    showStatus('Kunde inte skriva till bibliotek (localStorage write fail).', 'warn');
+    return { ok: false, changed: false };
+  }
+  return { ok: true, changed: !!res.changed };
 }
-
-function findLibraryEntry(id) {
-  const list = readLibrary();
-  return list.find((x) => x && x.id === id) || null;
-}
-
 /* ============================================================
    BLOCK 6 — Migration/shape guard + sync (inkl isFinal)
 ============================================================ */
