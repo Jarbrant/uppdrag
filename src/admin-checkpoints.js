@@ -1,6 +1,11 @@
 /* ============================================================
-   FIL: src/admin-checkpoints.js  (NY FIL)
-   AO 3/5 — Flytta “Checkpoint editor render + input events” ur admin.js
+   FIL: src/admin-checkpoints.js  (HEL FIL)
+   AO 3/5 — Checkpoint editor render + input events (ur admin.js)
+
+   PATCH (P0) — Återställer:
+   - “Slumpkod” per CP (unik kod, exakt samma princip som tidigare)
+   - “Spara” per CP (kallar deps.saveNowOrWarn om finns, annars fallback)
+   - Kartklick sätter dirty/pill via deps.markDirtyLIGHT (ingen FULL render)
 
    Policy: UI-only, XSS-safe, fail-closed, inga nya storage keys
    Krav: INGA FULL re-render per tangenttryck (endast LIGHT via deps.markDirtyLIGHT)
@@ -15,34 +20,25 @@
      }
 ============================================================ */
 
-/**
- * initAdminCheckpoints(deps)
- *
- * deps-kontrakt (admin.js → modul)
- * - getDraft() -> draft ref
- * - setDraft(nextDraft) (valfritt)
- * - getActiveCpIndex()
- * - setActiveCpIndex(i)
- * - clampInt, safeText, normalizeCode
- * - enforceFinalOnlyOnLast(draft)
- * - markDirtyLIGHT(triggerSave, { rerenderQR })
- * - scheduleSave()
- * - renderPreview() (valfritt)
- * - renderErrorsAndPill()
- * - broadcastDraftToMap()
- * - showStatus(msg,type)
- * - isMapReady() + getMapApi()  (valfritt; fallback: window.__ADMIN_MAP_API__)
- * - DOM hooks: elCluesWrap, elActiveCpLabel, elMapHint
- */
 export function initAdminCheckpoints(deps) {
   const d = deps || {};
 
   const getDraft = typeof d.getDraft === 'function' ? d.getDraft : () => null;
   const getActiveCpIndex = typeof d.getActiveCpIndex === 'function' ? d.getActiveCpIndex : () => 0;
   const setActiveCpIndex = typeof d.setActiveCpIndex === 'function' ? d.setActiveCpIndex : () => {};
-  const clampInt = typeof d.clampInt === 'function' ? d.clampInt : (x, min, max) => Math.max(min, Math.min(max, Math.floor(Number(x) || min)));
-  const safeText = typeof d.safeText === 'function' ? d.safeText : (x) => (x ?? '').toString();
-  const normalizeCode = typeof d.normalizeCode === 'function' ? d.normalizeCode : (s) => safeText(s).trim().toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 32);
+
+  const clampInt = typeof d.clampInt === 'function'
+    ? d.clampInt
+    : (x, min, max) => Math.max(min, Math.min(max, Math.floor(Number(x) || min)));
+
+  const safeText = typeof d.safeText === 'function'
+    ? d.safeText
+    : (x) => (x ?? '').toString();
+
+  const normalizeCode = typeof d.normalizeCode === 'function'
+    ? d.normalizeCode
+    : (s) => safeText(s).trim().toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 32);
+
   const enforceFinalOnlyOnLast = typeof d.enforceFinalOnlyOnLast === 'function' ? d.enforceFinalOnlyOnLast : () => {};
   const markDirtyLIGHT = typeof d.markDirtyLIGHT === 'function' ? d.markDirtyLIGHT : () => {};
   const scheduleSave = typeof d.scheduleSave === 'function' ? d.scheduleSave : () => {};
@@ -50,11 +46,44 @@ export function initAdminCheckpoints(deps) {
   const renderErrorsAndPill = typeof d.renderErrorsAndPill === 'function' ? d.renderErrorsAndPill : () => {};
   const broadcastDraftToMap = typeof d.broadcastDraftToMap === 'function' ? d.broadcastDraftToMap : () => {};
   const showStatus = typeof d.showStatus === 'function' ? d.showStatus : () => {};
+  const saveNowOrWarn = typeof d.saveNowOrWarn === 'function' ? d.saveNowOrWarn : null;
 
   const elCluesWrap = d.elCluesWrap || null;
   const elActiveCpLabel = d.elActiveCpLabel || null;
   const elMapHint = d.elMapHint || null;
 
+  // --- Random code helpers (för “Slumpkod”) ---
+  const CODE_CHARS = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
+
+  function randomCode(len = 5) {
+    const n = clampInt(len, 4, 12);
+    let out = '';
+    for (let i = 0; i < n; i++) out += CODE_CHARS[Math.floor(Math.random() * CODE_CHARS.length)];
+    return out;
+  }
+
+  function usedCodesSet(draft) {
+    const set = new Set();
+    const n = clampInt(draft?.checkpointCount || 0, 0, 99);
+    for (let i = 0; i < n; i++) {
+      const c = normalizeCode(draft?.checkpoints?.[i]?.code || '');
+      if (c) set.add(c);
+    }
+    return set;
+  }
+
+  function generateUniqueCode(existingSet, len = 5) {
+    for (let tries = 0; tries < 30; tries++) {
+      const c = randomCode(len);
+      if (!existingSet.has(c)) return c;
+    }
+    let base = randomCode(len);
+    let suffix = 2;
+    while (existingSet.has(`${base}${suffix}`) && suffix < 99) suffix++;
+    return normalizeCode(`${base}${suffix}`);
+  }
+
+  // --- Map helpers ---
   function getMapApi() {
     if (typeof d.getMapApi === 'function') {
       try { return d.getMapApi(); } catch (_) { return null; }
@@ -141,8 +170,9 @@ export function initAdminCheckpoints(deps) {
     cp.lat = Number(lat);
     cp.lng = Number(lng);
 
-    // IMPORTANT: ingen FULL render här
-    scheduleSave();
+    // P0: ska ge dirty/pill som förr, men utan FULL render
+    markDirtyLIGHT(true, { rerenderQR: false });
+
     updateCoordText(idx);
     broadcastDraftToMap();
     renderErrorsAndPill();
@@ -268,7 +298,6 @@ export function initAdminCheckpoints(deps) {
         if (!draft.checkpoints[k]) return;
         const v = safeText(e.target.value).trim();
         draft.checkpoints[k].points = v === '' ? null : clampInt(v, 0, 1000);
-
         markDirtyLIGHT(true, { rerenderQR: false });
       });
 
@@ -285,7 +314,6 @@ export function initAdminCheckpoints(deps) {
         const k = clampInt(e.target.getAttribute('data-cp-code'), 0, 99);
         if (!draft.checkpoints[k]) return;
         draft.checkpoints[k].code = normalizeCode(e.target.value);
-
         markDirtyLIGHT(true, { rerenderQR: true });
       });
 
@@ -305,7 +333,6 @@ export function initAdminCheckpoints(deps) {
         const k = clampInt(e.target.getAttribute('data-cp-radius'), 0, 99);
         if (!draft.checkpoints[k]) return;
         draft.checkpoints[k].radius = clampInt(e.target.value, 5, 5000);
-
         markDirtyLIGHT(true, { rerenderQR: false });
       });
 
@@ -313,6 +340,7 @@ export function initAdminCheckpoints(deps) {
       grid.appendChild(labeled('Kod', code));
       grid.appendChild(labeled('Radie (m)', radius));
 
+      // --- Code row: hint + actions (Slumpkod + Spara) ---
       const codeRow = document.createElement('div');
       codeRow.style.display = 'flex';
       codeRow.style.alignItems = 'center';
@@ -330,13 +358,60 @@ export function initAdminCheckpoints(deps) {
       actionsWrap.style.flexWrap = 'wrap';
       actionsWrap.style.justifyContent = 'flex-end';
 
-      // Slumpkod-knapp ligger kvar i admin.js (KRAV 2: core helper + generatorer stannar)
-      // Modulens ansvar är events för inputs + cp-rows.
-      // Men om admin.js vill injicera knappar i framtiden kan den göra det vid FULL render.
+      const btnRnd = document.createElement('button');
+      btnRnd.type = 'button';
+      btnRnd.className = 'btn btn-ghost miniBtn';
+      btnRnd.textContent = 'Slumpkod';
+      btnRnd.setAttribute('data-cp-rnd', String(i));
+
+      btnRnd.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+
+        const k = clampInt(btnRnd.getAttribute('data-cp-rnd'), 0, 99);
+        setActiveCp(k, { centerMap: false });
+
+        const cur = normalizeCode(draft.checkpoints?.[k]?.code || '');
+        if (cur) { showStatus(`CP ${k + 1} har redan en kod.`, 'warn'); return; }
+
+        const used = usedCodesSet(draft);
+        const next = generateUniqueCode(used, 5);
+
+        if (!draft.checkpoints?.[k]) return;
+        draft.checkpoints[k].code = next;
+
+        const input = document.querySelector(`input[data-cp-code="${k}"]`);
+        if (input) input.value = next;
+
+        markDirtyLIGHT(true, { rerenderQR: true });
+        showStatus(`Kod skapad för CP ${k + 1}.`, 'info');
+      });
+
+      const btnSaveCp = document.createElement('button');
+      btnSaveCp.type = 'button';
+      btnSaveCp.className = 'btn btn-primary miniBtn';
+      btnSaveCp.textContent = 'Spara';
+      btnSaveCp.setAttribute('data-cp-save', String(i));
+
+      btnSaveCp.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        if (saveNowOrWarn) {
+          try { saveNowOrWarn(); } catch (_) {}
+          return;
+        }
+        // Fallback: autosave-style
+        scheduleSave();
+        showStatus('Utkast sparas automatiskt.', 'info');
+      });
+
+      actionsWrap.appendChild(btnRnd);
+      actionsWrap.appendChild(btnSaveCp);
 
       codeRow.appendChild(codeHint);
       codeRow.appendChild(actionsWrap);
 
+      // --- Final row ---
       const finalRow = document.createElement('div');
       finalRow.style.display = 'flex';
       finalRow.style.alignItems = 'center';
@@ -374,21 +449,20 @@ export function initAdminCheckpoints(deps) {
         const isLastNow = k === (draft.checkpointCount - 1);
         if (!isLastNow) return;
 
-        if (!draft.checkpoints[k]) return;
+        if (!draft.checkpoints?.[k]) return;
         draft.checkpoints[k].isFinal = !!e.target.checked;
 
         enforceFinalOnlyOnLast(draft);
 
         // INGEN FULL render här
         markDirtyLIGHT(true, { rerenderQR: false });
-
-        // Preview behöver uppdateras så skattkista-text syns direkt
         renderPreview();
       });
 
       finalRow.appendChild(finalLeft);
       finalRow.appendChild(finalToggleWrap);
 
+      // --- Assemble ---
       row.appendChild(meta);
       row.appendChild(clueInput);
       row.appendChild(grid);
@@ -401,7 +475,7 @@ export function initAdminCheckpoints(deps) {
     setActiveCp(getActiveCpIndex(), { centerMap: false });
   }
 
-  // Fail-closed: om init saknar dom, returnera stubs men krascha inte
+  // Robust DOM hint (fail-closed)
   if (!elCluesWrap || !elActiveCpLabel || !elMapHint) {
     showStatus('Admin checkpoints: viktiga DOM-element saknas. Editor kan vara ofullständig.', 'warn');
   }
