@@ -1,6 +1,7 @@
 <!-- ============================================================
      FIL: pages/dashboard.html  (HEL FIL)
      AO-LOGIN-02 (2/2) — Dashboard: ⚙️ login/logout (token i minnet)
+     + AO-DASH-NEWCUSTOMER-01 — Dashboard: “Skapa ny kund” länk-ruta + flytt av onboarding-form
      Policy: UI-only, XSS-safe, fail-closed, subpath-safe
 ============================================================ -->
 <!doctype html>
@@ -59,6 +60,30 @@
              BLOCK 4.1 — Status / Toast slot
         ======================================================= -->
         <div id="statusSlot" class="slot" aria-live="polite"></div> <!-- HOOK: status-slot -->
+
+        <!-- ======================================================
+             BLOCK 4.15 — Quick action: Skapa ny kund (KRAV 1)
+        ======================================================= -->
+        <section class="card paperCard" aria-label="Skapa ny kund" style="margin-top: var(--sp-4);">
+          <div class="card__head">
+            <div class="card__meta">
+              <h2 class="h2" style="margin:0">Skapa ny kund</h2>
+              <p class="muted small" style="margin:6px 0 0 0">
+                Lägg upp företagsuppgifter och skapa partner.
+              </p>
+            </div>
+            <div class="card__side">
+              <!-- HOOK: new-customer-link (href uppdateras av JS, token endast i minnet) -->
+              <a id="newCustomerLink" class="btn btn-primary" href="./new-customer.html" aria-label="Öppna skapa ny kund">
+                Öppna
+              </a>
+            </div>
+          </div>
+
+          <div class="muted small" id="newCustomerHint" style="margin-top:10px;">
+            Logga in via ⚙️ för att skicka med token (MVP).
+          </div>
+        </section>
 
         <!-- ======================================================
              BLOCK 4.2 — Login Panel (overlay)
@@ -136,31 +161,13 @@
 
         <!-- ======================================================
              BLOCK 6 — Create partner + invite (låst utan token)
+             KRAV 2: “Skapa butik” onboarding-form borttagen från huvudvyn
+             (Flyttat till “Skapa ny kund”)
         ======================================================= -->
         <div class="grid" style="margin-top: var(--sp-5); display:grid; gap: var(--sp-4); grid-template-columns: 1fr;">
           <div class="grid2" style="display:grid; gap: var(--sp-4); grid-template-columns: 1fr;">
-            <section class="card paperCard" aria-label="Skapa butik">
-              <div class="card__head">
-                <div class="card__meta">
-                  <h2 class="h2" style="margin:0">Skapa butik</h2>
-                  <p class="muted small" style="margin:6px 0 0 0">Skapar partner i backend.</p>
-                </div>
-              </div>
 
-              <div class="form" style="margin-top:12px;">
-                <div class="field">
-                  <label class="label2" for="partnerIdInput">PartnerId</label>
-                  <input id="partnerIdInput" class="input" type="text" placeholder="t.ex butik-123" />
-                </div>
-
-                <div class="field">
-                  <label class="label2" for="partnerNameInput">Namn</label>
-                  <input id="partnerNameInput" class="input" type="text" placeholder="t.ex Café Nova" />
-                </div>
-
-                <button id="createPartnerBtn" class="btn btn-primary" type="button">Skapa</button>
-              </div>
-            </section>
+            <!-- (Skapa butik-form borttagen) -->
 
             <section class="card paperCard" aria-label="Bjud in butik">
               <div class="card__head">
@@ -284,9 +291,13 @@
     const elLogoutBtn = $('#logoutBtn');
     const elAuthStateText = $('#authStateText');
 
+    const elNewCustomerLink = $('#newCustomerLink');
+    const elNewCustomerHint = $('#newCustomerHint');
+
     const elFetchBtn = $('#fetchBtn');
     const elLockedHint = $('#lockedHint');
 
+    // (Skapa butik-form borttagen från DOM)
     const elPartnerId = $('#partnerIdInput');
     const elPartnerName = $('#partnerNameInput');
     const elCreatePartnerBtn = $('#createPartnerBtn');
@@ -309,7 +320,8 @@
     const state = {
       adminToken: '',     // in-memory only
       tokenExp: 0,
-      partners: []        // cached list
+      partners: [],       // cached list
+      pendingPartnerId: ''// från query (?partnerId=...)
     };
 
     /* ==========================================================
@@ -334,6 +346,28 @@
       return !!state.adminToken;
     }
 
+    function getBaseDirUrlForPages() {
+      // dashboard ligger i /pages/ => vi vill länka relativt
+      // (behåll subpath-safe)
+      return './';
+    }
+
+    function updateNewCustomerLink() {
+      if (!elNewCustomerLink) return;
+
+      const base = getBaseDirUrlForPages();
+      const ok = isAuthed();
+
+      if (ok) {
+        const t = encodeURIComponent((state.adminToken || '').toString());
+        elNewCustomerLink.setAttribute('href', `${base}new-customer.html?t=${t}`);
+        if (elNewCustomerHint) elNewCustomerHint.style.display = 'none';
+      } else {
+        elNewCustomerLink.setAttribute('href', `${base}new-customer.html`);
+        if (elNewCustomerHint) elNewCustomerHint.style.display = '';
+      }
+    }
+
     function setAuthUi() {
       const ok = isAuthed();
       setText(elAuthStateText, ok ? 'Upplåst' : 'Låst');
@@ -346,6 +380,8 @@
       if (elLockedHint) {
         elLockedHint.style.display = ok ? 'none' : '';
       }
+
+      updateNewCustomerLink();
     }
 
     function openLoginPanel() {
@@ -703,6 +739,17 @@
         opt.textContent = `${(p?.name || p?.partnerId || '—').toString()} (${(p?.partnerId || '—').toString()})`;
         elPartnerPick.appendChild(opt);
       });
+
+      // (MVP) Förifyll invite via query: ?partnerId=<id>
+      if (state.pendingPartnerId) {
+        const target = state.pendingPartnerId;
+        const exists = arr.some((p) => (p?.partnerId || '').toString() === target);
+        if (exists) {
+          elPartnerPick.value = target;
+          toast(`PartnerId förifylld: ${target}`, 'info', 1200);
+          state.pendingPartnerId = ''; // engång
+        }
+      }
     }
 
     /* ==========================================================
@@ -858,6 +905,7 @@
     }
 
     async function doCreatePartner() {
+      // kvar som defensiv kod (element finns inte längre i DOM)
       if (!isAuthed()) return toast('Logga in via ⚙️', 'warn', 1600);
 
       const pid = (elPartnerId?.value || '').toString().trim();
@@ -1000,10 +1048,18 @@
        BLOCK 8.12 — Boot
     =========================================================== */
     (function boot() {
+      // Läs query (?partnerId=...) för att kunna förifylla invite (MVP)
+      try {
+        const u = new URL(window.location.href);
+        const pid = (u.searchParams.get('partnerId') || '').toString().trim();
+        if (pid) state.pendingPartnerId = pid;
+      } catch (_) {}
+
       setAuthUi();            // start: låst
       renderOverview(null);
       renderPartners([]);
       renderPartnerPick([]);
+      updateNewCustomerLink();
     })();
   </script>
 
