@@ -18,21 +18,33 @@
 </head>
 
 <body>
-  <!-- ==========================================================
-       BLOCK 2 — App Root
-  =========================================================== -->
-  <div id="app" class="app"> <!-- HOOK: app-root -->
-    <header class="topbar">
-      <div class="topbar__inner">
-        <div class="brand">
-          <div class="brand__mark" aria-hidden="true">◎</div>
-          <div class="brand__text">
-            <div class="brand__name">Jakt-spelet</div>
-            <div class="brand__tag muted">Mobil-first • UI-only baseline</div>
-          </div>
+ <!-- ==========================================================
+     BLOCK 2 — App Root
+=========================================================== -->
+<div id="app" class="app"> <!-- HOOK: app-root -->
+  <header class="topbar">
+    <div class="topbar__inner">
+      <div class="brand">
+        <div class="brand__mark" aria-hidden="true">◎</div>
+        <div class="brand__text">
+          <div class="brand__name">Jakt-spelet</div>
+          <div class="brand__tag muted">Mobil-first • UI-only baseline</div>
         </div>
+      </div>
 
-        <div class="topbar__right">
+      <div class="topbar__right">
+        <a id="adminLink"
+           class="badge"
+           href="pages/admin.html?new=1"
+           aria-label="Öppna admin och skapa ny skattjakt">
+          Admin
+        </a>
+        <!-- HOOK: admin-link -->
+
+        <span class="badge badge-success">MVP</span>
+      </div>
+    </div>
+  </header>
           <!-- ======================================================
                AO 5/6 (FAS 1.2) — Admin link
           ======================================================= -->
