@@ -2,9 +2,8 @@
    FIL: src/admin.js  (HEL FIL) — PATCH
    AO 3/5 + AO 4/5 + AO 5/5
 
-   - AO 3/5: Flyttar checkpoint-editor render + input events till src/admin-checkpoints.js
-   - AO 4/5: Flyttar boot + bindEvents-flöde till src/admin-boot.js (admin.js = state + API)
-   - AO 5/5: Tydliga gränser, deterministisk init, inga dubletter (i denna baseline finns inga dubletter)
+   P0 PATCH (krav-identiskt beteende):
+   - initAdminCheckpoints får deps.saveNowOrWarn så “Spara” per CP fungerar exakt som innan.
 
    Policy: UI-only, XSS-safe, fail-closed, inga nya storage keys
 ============================================================ */
@@ -153,7 +152,6 @@ function writeDraft(d) {
 
 /* ============================================================
    BLOCK 5.5 — Library (flyttad till src/admin-library.js)
-   Policy: admin.js sätter storageWritable=false vid read/write-fel
 ============================================================ */
 function findLibraryEntryLocal(id) {
   const res = findLibraryEntry(id);
@@ -499,7 +497,7 @@ function fillRandomCodesForEmpty({ len = 5 } = {}) {
 }
 
 /* ============================================================
-   BLOCK 9 — State: active checkpoint index (UI använder checkpointsUI)
+   BLOCK 9 — State: active checkpoint index
 ============================================================ */
 let activeCpIndex = 0; // HOOK: active-cp-index
 
@@ -513,10 +511,7 @@ let draft = readDraft(); // HOOK: draft-state
 let dirty = false;       // HOOK: dirty-state
 let saveTimer = null;    // HOOK: autosave-timer
 
-// Export-modul initas deterministiskt en gång
-let exportUI = null;     // HOOK: export-ui
-
-// Checkpoints-modul initas deterministiskt en gång
+let exportUI = null;      // HOOK: export-ui
 let checkpointsUI = null; // HOOK: checkpoints-ui
 
 function setPillState(kind) {
@@ -533,12 +528,7 @@ function setPillState(kind) {
     elSavePill.style.background = 'rgba(34,197,94,.08)';
     return;
   }
-
-  if (kind === 'dirty') {
-    elSavePill.textContent = 'Osparat';
-    return;
-  }
-
+  if (kind === 'dirty') { elSavePill.textContent = 'Osparat'; return; }
   if (kind === 'error') {
     elSavePill.textContent = 'Fel';
     elSavePill.style.color = 'rgba(251,113,133,.95)';
@@ -546,7 +536,6 @@ function setPillState(kind) {
     elSavePill.style.background = 'rgba(251,113,133,.08)';
     return;
   }
-
   if (kind === 'readonly') {
     elSavePill.textContent = 'Read-only';
     elSavePill.style.color = 'rgba(251,191,36,.95)';
@@ -554,7 +543,6 @@ function setPillState(kind) {
     elSavePill.style.background = 'rgba(251,191,36,.08)';
     return;
   }
-
   elSavePill.textContent = 'Utkast';
 }
 
@@ -631,6 +619,9 @@ function broadcastDraftToMap() {
   }
 }
 
+/* ============================================================
+   BLOCK 10.5 — Checkpoints module wiring (AO 3/5)
+============================================================ */
 function ensureCheckpointsModuleOnce() {
   if (checkpointsUI) return;
 
@@ -654,6 +645,9 @@ function ensureCheckpointsModuleOnce() {
     renderErrorsAndPill,
     broadcastDraftToMap,
     showStatus,
+
+    // P0: exakt “Spara” per CP
+    saveNowOrWarn,
 
     // map
     isMapReady,
@@ -912,7 +906,7 @@ function onPublishToLibrary() {
 }
 
 function initExportModule() {
-  if (exportUI) return; // deterministisk init (AO 5/5)
+  if (exportUI) return; // deterministisk init
   exportUI = initAdminExport({
     // state
     getDraft: () => draft,
