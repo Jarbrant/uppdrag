@@ -512,18 +512,40 @@ function renderGrid() {
 
 /* ============================================================
    BLOCK 9 — Active checkpoint UI + NICE: auto-pan
+   PATCH:
+   - Om vald checkpoint redan är klar → hoppa till nästa spelbara
+   - Om inget finns kvar → lås UI och visa klart-läge
 ============================================================ */
 function setActiveCheckpoint(nextIndex, opts = {}) {
-  const idx = clampInt(nextIndex, 0, Math.max(0, checkpoints.length - 1));
-  if (idx < 0 || idx >= checkpoints.length) return;
+  const maxIdx = Math.max(0, checkpoints.length - 1);
+  let idx = clampInt(nextIndex, 0, maxIdx);
+
+  if (idx < 0 || idx > maxIdx) return;
 
   const finalIdx = getFinalIndex();
 
+  // Om den valda redan är klar: hoppa fram till nästa spelbara
+  if (cleared.has(idx)) {
+    const nextPlayable = findNextPlayableIndex(idx + 1);
+    if (nextPlayable === -1) {
+      // Allt klart
+      showStatus('🎉 Alla checkpoints klara! (MVP)', 'info');
+      if (elOk) elOk.disabled = true;
+      if (elCode) elCode.disabled = true;
+      if (viewMode === 'grid') renderGrid();
+      safeWriteProgress();
+      return;
+    }
+    idx = nextPlayable;
+  }
+
+  // Lås final om inte alla före är klara
   if (idx === finalIdx && finalIdx >= 0 && !allBeforeFinalCleared(finalIdx)) {
     toast('🎁 Skattkistan är låst. Klara alla före först.', 'warn', 1600);
     return;
   }
 
+  // Fail-closed: ingen hoppa framåt
   if (idx > activeIndex && !cleared.has(idx)) {
     toast('🔒 Du kan inte hoppa till låsta checkpoints.', 'warn', 1400);
     return;
@@ -538,7 +560,12 @@ function setActiveCheckpoint(nextIndex, opts = {}) {
   setText(elClue, cp?.clue || '—');
   setText(elErrCode, '');
 
-  if (elCode) elCode.value = '';
+  // Kod-UX: om ingen kod krävs
+  if (elCode) {
+    elCode.value = '';
+    const needsCode = !!asText(cp?.code);
+    elCode.placeholder = needsCode ? 'Skriv koden här…' : 'Ingen kod krävs — tryck OK';
+  }
 
   renderMarkers();
   renderRevealCircle();
@@ -558,18 +585,29 @@ function setActiveCheckpoint(nextIndex, opts = {}) {
 
 /* ============================================================
    BLOCK 10 — Code validation + clear/advance + final stamp
+   PATCH:
+   - Om ingen kod är satt på CP: tillåt OK utan kod och tydlig UX
+   - Lås UI tydligt när allt är klart
 ============================================================ */
-function validateCodeInput(value) {
-  const t = asText(value);
-  if (t.length < 1) return 'Skriv in en kod.';
-  if (t.length > 32) return 'Koden är för lång (max 32 tecken).';
+function validateCodeInput(value, expectedCode) {
+  const expected = asText(expectedCode);
+  const entered = asText(value);
+
+  // Ingen kod krävs
+  if (!expected) return '';
+
+  if (entered.length < 1) return 'Skriv in en kod.';
+  if (entered.length > 32) return 'Koden är för lång (max 32 tecken).';
   return '';
 }
 
 function codesMatch(expected, entered) {
   const a = asText(expected);
   const b = asText(entered);
+
+  // Ingen kod krävs → alltid OK
   if (!a) return true;
+
   return a.toLowerCase() === b.toLowerCase();
 }
 
@@ -587,7 +625,6 @@ function findNextPlayableIndex(fromIndex) {
 }
 
 function showFinalStamp() {
-  // CSS-free fallback: overlay med inline styles (ser “papper/stämpel”-aktigt ut)
   const existing = document.getElementById('finalStamp');
   if (existing) return;
 
@@ -619,6 +656,14 @@ function showFinalStamp() {
   }, 1800);
 }
 
+function lockCompletedUI() {
+  showStatus('🎉 Alla checkpoints klara! (MVP)', 'info');
+  if (elOk) elOk.disabled = true;
+  if (elCode) elCode.disabled = true;
+  if (viewMode === 'grid') renderGrid();
+  safeWriteProgress();
+}
+
 function onCheckpointApproved() {
   const finalIdx = getFinalIndex();
   const wasFinal = (finalIdx >= 0 && activeIndex === finalIdx);
@@ -640,20 +685,19 @@ function onCheckpointApproved() {
 
   // Auto-ledtråd: nästa blir aktiv direkt
   const next = findNextPlayableIndex(activeIndex + 1);
-
   if (next === -1) {
-    showStatus('🎉 Alla checkpoints klara! (MVP)', 'info');
-    if (elOk) elOk.disabled = true;
-    if (viewMode === 'grid') renderGrid();
-    safeWriteProgress();
+    lockCompletedUI();
     return;
   }
 
   setActiveCheckpoint(next, { pan: true });
 }
-
 /* ============================================================
    BLOCK 11 — Boot
+   PATCH:
+   - Enter i kodfältet triggar OK
+   - Om karta ej funkar → auto Grid + disable map-tab
+   - Restore progress: om activeIndex redan klar → hoppa till nästa spelbara
 ============================================================ */
 (function bootPartyMap() {
   'use strict';
@@ -704,10 +748,10 @@ function onCheckpointApproved() {
   payloadFingerprint = makePayloadFingerprint(payload);
 
   checkpoints = buildCheckpointsFromPayload(payload);
-
   setText(elName, payload.name || 'Skattjakt');
 
   // Map init (fail-soft)
+  let mapOk = false;
   if (!leafletReady()) {
     showMapError('Leaflet saknas (CDN blockerat/offline) eller #partyMap saknas.');
     showStatus('Karta kunde inte laddas. Grid fungerar ändå.', 'warn');
@@ -717,13 +761,21 @@ function onCheckpointApproved() {
     const zoom = firstWithPos ? 15 : 12;
     try {
       initMap(center, zoom);
+      mapOk = !!map;
     } catch (_) {
       showMapError('Kunde inte initiera kartan.');
       showStatus('Karta kunde inte laddas. Grid fungerar ändå.', 'warn');
+      mapOk = false;
     }
   }
 
-  // NICE: restore progress (fail-closed)
+  // Om karta inte funkar: auto Grid + disable map tab
+  if (!mapOk) {
+    setViewMode('grid');
+    if (elViewMapBtn) elViewMapBtn.disabled = true;
+  }
+
+  // Restore progress (fail-closed)
   const restored = safeReadProgress();
   if (restored) {
     cleared = restored.cleared;
@@ -731,29 +783,54 @@ function onCheckpointApproved() {
     setViewMode(restored.viewMode);
     toast('Återställde progress.', 'info', 900);
   } else {
-    setViewMode('map');
+    // om map inte funkar: stanna i grid, annars map
+    if (mapOk) setViewMode('map');
   }
 
-  // Init active UI (pan soft)
+  // Om restored activeIndex redan klar → hoppa till nästa spelbara
+  if (cleared && cleared.has(activeIndex)) {
+    const nextPlayable = findNextPlayableIndex(activeIndex + 1);
+    if (nextPlayable === -1) {
+      showStatus('🎉 Alla checkpoints klara! (MVP)', 'info');
+      if (elOk) elOk.disabled = true;
+      if (elCode) elCode.disabled = true;
+      renderGrid();
+      safeWriteProgress();
+      return;
+    }
+    activeIndex = nextPlayable;
+  }
+
+  // Init active UI
   setActiveCheckpoint(activeIndex || 0, { pan: false });
 
-  // Render grid once (så den finns direkt när man togglar)
+  // Render grid once
   renderGrid();
 
   function setErr(text) { setText(elErrCode, text || ''); }
 
+  // Enter = OK
+  if (elCode) {
+    elCode.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        try { elOk?.click?.(); } catch (_) {}
+      }
+    });
+  }
+
   if (elOk) {
     elOk.disabled = false;
     elOk.addEventListener('click', () => {
-      const entered = asText(elCode?.value);
-      const err = validateCodeInput(entered);
-      if (err) { setErr(err); return; }
-      setErr('');
-
       const cp = checkpoints[activeIndex];
       if (!cp) return;
 
-      // Fail-closed: fel kod → feedback utan state-ändring
+      const entered = asText(elCode?.value);
+      const err = validateCodeInput(entered, cp.code);
+      if (err) { setErr(err); return; }
+      setErr('');
+
+      // Fel kod → ingen state-ändring
       if (!codesMatch(cp.code, entered)) {
         toast('❌ Fel kod. Försök igen.', 'danger', 1400);
         return;
