@@ -1,10 +1,13 @@
 /* ============================================================
  * FIL: worker/index.js (HEL FIL)
- * AO 1/6 — Worker + D1: Partners + Invites + Rewards + pick3
- * Litet AO (PATCH): Admin GET endpoints för dashboard:
- *   - GET /admin/partners/list
- *   - GET /admin/rewards/stats
- *   - GET /admin/rewards/list?partnerId=<optional>
+ * AO 5/6 — Game Reward Pool + Claim (stock--) + Voucher i D1
+ *
+ * ÄNDRINGAR I DENNA FIL (AO 5/6):
+ *   - /rewards/pick3: FAIL-SOFT (0–3 picks), tier default = cp, seed-stöd
+ *   - NY: POST /vouchers/claim  (stock-- + skapa voucher i D1)
+ *   - NY: GET  /vouchers/:id    (verify-stöd)
+ *   - NY: POST /vouchers/redeem (verify-stöd, partnerId+pin)
+ *   - Vouchers lagras i D1 (CREATE TABLE IF NOT EXISTS vid behov)
  *
  * Bindings (env):
  *   - DB (D1 binding)
@@ -29,7 +32,12 @@
  *     GET  /rewards/list?partnerId=...&pin=...
  *
  *   Game:
- *     GET  /rewards/pick3?tier=cp|final&partnerPool=csv(optional)&seed=string(optional)
+ *     GET  /rewards/pick3?tier=cp|final(optional)&partnerPool=csv(optional)&seed=string(optional)
+ *     POST /vouchers/claim        { gameId, checkpointIndex, rewardId }
+ *
+ *   Verify:
+ *     GET  /vouchers/:voucherId
+ *     POST /vouchers/redeem       { voucherId, partnerId, pin }
  *
  * Policy:
  *   - Fail-closed: validera input, 400/403/404
@@ -97,6 +105,7 @@ function parseOrigins(env) {
 
 function corsHeadersFor(req, allowed) {
   const origin = req.headers.get('origin');
+
   // curl/postman utan origin: OK
   if (!origin) {
     return {
@@ -107,6 +116,7 @@ function corsHeadersFor(req, allowed) {
       'access-control-allow-credentials': 'false'
     };
   }
+
   if (!allowed.includes(origin)) return null;
 
   return {
@@ -163,9 +173,12 @@ function mulberry32(seed) {
   };
 }
 
-function pick3Unique(rows, rngFn) {
+/**
+ * FAIL-SOFT: returnera 0–3 unika rows beroende på pool.
+ */
+function pickUpTo3Unique(rows, rngFn) {
   const arr = Array.isArray(rows) ? rows.slice() : [];
-  if (arr.length < 3) return [];
+  if (arr.length === 0) return [];
 
   // Shuffle (Fisher-Yates)
   for (let i = arr.length - 1; i > 0; i--) {
@@ -216,6 +229,33 @@ async function verifyPartnerPin(partnerId, pin, env) {
 }
 
 /* ============================================================
+ * BLOCK 5.1 — Ensure vouchers table (D1)
+ * ============================================================ */
+async function ensureVouchersTable(env) {
+  // Fail-soft: CREATE IF NOT EXISTS (idempotent)
+  try {
+    await env.DB.prepare(`
+      CREATE TABLE IF NOT EXISTS vouchers (
+        voucherId TEXT PRIMARY KEY,
+        partnerId TEXT NOT NULL,
+        rewardId TEXT NOT NULL,
+        status TEXT NOT NULL,
+        createdAt INTEGER NOT NULL,
+        expiresAt INTEGER NOT NULL,
+        redeemedAt INTEGER,
+        gameId TEXT,
+        checkpointIndex INTEGER
+      )
+    `).run();
+
+    await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_vouchers_partnerId ON vouchers(partnerId)`).run();
+    await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_vouchers_status ON vouchers(status)`).run();
+  } catch (_) {
+    // Om D1 är read-only/misconfigured → server_error senare i callers
+  }
+}
+
+/* ============================================================
  * BLOCK 6 — Endpoint handlers
  * ============================================================ */
 async function adminCreatePartner(req, env) {
@@ -230,7 +270,6 @@ async function adminCreatePartner(req, env) {
 
   const createdAt = nowMs();
 
-  // Fail-closed: insert, men om redan finns -> 400
   try {
     await env.DB
       .prepare('INSERT INTO partners (partnerId, name, pinHash, isActive, createdAt) VALUES (?, ?, NULL, 1, ?)')
@@ -252,7 +291,6 @@ async function adminInvitePartner(req, env) {
 
   if (!partnerId || !Number.isFinite(ttlMinutes)) return { status: 400, body: { ok: false, error: 'bad_request' } };
 
-  // Partner must exist
   const p = await env.DB
     .prepare('SELECT partnerId FROM partners WHERE partnerId = ?')
     .bind(partnerId)
@@ -273,9 +311,7 @@ async function adminInvitePartner(req, env) {
 }
 
 /* ============================================================
- * BLOCK 6.1 — Admin GET: partners list (NY)
- * GET /admin/partners/list
- * Output: { ok:true, partners:[{partnerId,name,isActive,createdAt,hasPin}] }
+ * BLOCK 6.1 — Admin GET: partners list
  * ============================================================ */
 async function adminPartnersList(env) {
   const out = await env.DB
@@ -289,14 +325,7 @@ async function adminPartnersList(env) {
 }
 
 /* ============================================================
- * BLOCK 6.2 — Admin GET: rewards stats (NY)
- * GET /admin/rewards/stats
- * Output:
- * {
- *   ok:true,
- *   partners:{ total, active },
- *   rewards:{ total, active, inStock, outOfStock, cpTotal, finalTotal }
- * }
+ * BLOCK 6.2 — Admin GET: rewards stats
  * ============================================================ */
 async function adminRewardsStats(env) {
   const partnersTotal = await env.DB.prepare('SELECT COUNT(1) AS n FROM partners').first();
@@ -331,9 +360,7 @@ async function adminRewardsStats(env) {
 }
 
 /* ============================================================
- * BLOCK 6.3 — Admin GET: rewards list (NY, optional men nyttig)
- * GET /admin/rewards/list?partnerId=<optional>
- * Output: { ok:true, rewards:[...] }
+ * BLOCK 6.3 — Admin GET: rewards list
  * ============================================================ */
 async function adminRewardsList(env, url) {
   const partnerId = asText(url.searchParams.get('partnerId'));
@@ -381,7 +408,6 @@ async function partnerSetPin(req, env) {
   const partnerId = asText(inv.partnerId);
   if (!partnerId) return { status: 403, body: { ok: false, error: 'forbidden' } };
 
-  // Update partner pinHash + mark invite usedAt (transaction)
   const h = await pinHash(pin, env);
 
   const tx = env.DB.batch([
@@ -459,7 +485,6 @@ async function rewardsUpdate(req, env) {
   const auth = await verifyPartnerPin(partnerId, pin, env);
   if (!auth.ok) return { status: auth.code === 'not_found' ? 404 : 403, body: { ok: false, error: auth.code === 'not_found' ? 'not_found' : 'forbidden' } };
 
-  // Reward must exist and belong to partner
   const existing = await env.DB
     .prepare('SELECT rewardId, partnerId FROM rewards WHERE rewardId = ?')
     .bind(rewardId)
@@ -510,7 +535,6 @@ async function rewardsUpdate(req, env) {
 
   if (fields.length === 0) return { status: 400, body: { ok: false, error: 'bad_request' } };
 
-  // updatedAt
   fields.push('updatedAt = ?');
   binds.push(nowMs());
 
@@ -540,9 +564,12 @@ async function rewardsList(req, env, url) {
   return { status: 200, body: { ok: true, rewards: out.results || [] } };
 }
 
+/* ============================================================
+ * BLOCK 6.4 — Game: pick3 (FAIL-SOFT + tier default cp)
+ * ============================================================ */
 async function rewardsPick3(req, env, url) {
-  const tier = asText(url.searchParams.get('tier'));
-  if (!validateTier(tier)) return { status: 400, body: { ok: false, error: 'bad_request' } };
+  const tierRaw = asText(url.searchParams.get('tier'));
+  const tier = validateTier(tierRaw) ? tierRaw : 'cp'; // default cp (KRAV)
 
   const seed = asText(url.searchParams.get('seed'));
   const pool = asText(url.searchParams.get('partnerPool'));
@@ -570,14 +597,231 @@ async function rewardsPick3(req, env, url) {
   const rows = await env.DB.prepare(sql).bind(...binds).all();
   const all = rows.results || [];
 
-  if (all.length < 3) return { status: 404, body: { ok: false, error: 'not_found' } };
-
+  // FAIL-SOFT: returnera 0–3 picks
   const rng = seed ? mulberry32(seedToUint32(seed)) : (() => Math.random());
-  const picks = pick3Unique(all, rng);
-
-  if (picks.length < 3) return { status: 404, body: { ok: false, error: 'not_found' } };
+  const picks = pickUpTo3Unique(all, rng);
 
   return { status: 200, body: { ok: true, picks } };
+}
+
+/* ============================================================
+ * BLOCK 6.5 — Game: claim (stock-- + voucher create)
+ * POST /vouchers/claim
+ * Body: { gameId, checkpointIndex, rewardId }
+ * ============================================================ */
+async function vouchersClaim(req, env) {
+  await ensureVouchersTable(env);
+
+  const parsed = await readJson(req);
+  if (!parsed.ok || !isPlainObject(parsed.value)) return { status: 400, body: { ok: false, error: 'bad_request' } };
+
+  const b = parsed.value;
+
+  const gameId = asText(b.gameId);
+  const checkpointIndex = intOrNaN(b.checkpointIndex);
+  const rewardId = asText(b.rewardId);
+
+  if (!gameId || gameId.length > 120) return { status: 400, body: { ok: false, error: 'bad_request' } };
+  if (!Number.isFinite(checkpointIndex) || checkpointIndex < 0 || checkpointIndex > 999) return { status: 400, body: { ok: false, error: 'bad_request' } };
+  if (!rewardId || rewardId.length > 80) return { status: 400, body: { ok: false, error: 'bad_request' } };
+
+  // Hämta reward + partner info
+  const r = await env.DB.prepare(`
+      SELECT r.rewardId, r.partnerId, p.name AS partnerName, r.title, r.ttlMinutes, r.tier, r.isActive, r.stock
+      FROM rewards r
+      JOIN partners p ON p.partnerId = r.partnerId
+      WHERE r.rewardId = ?
+    `).bind(rewardId).first();
+
+  if (!r) return { status: 404, body: { ok: false, error: 'not_found' } };
+  if (Number(r.isActive) !== 1) return { status: 404, body: { ok: false, error: 'not_found' } };
+
+  const stockNow = Number(r.stock);
+  if (!Number.isFinite(stockNow) || stockNow <= 0) {
+    return { status: 409, body: { ok: false, error: 'out_of_stock' } };
+  }
+
+  const ts = nowMs();
+  const ttlMinutes = clampInt(r.ttlMinutes, 1, 60 * 24 * 30);
+  if (!Number.isFinite(ttlMinutes)) return { status: 400, body: { ok: false, error: 'bad_request' } };
+
+  const expiresAt = ts + ttlMinutes * 60 * 1000;
+  const voucherId = safeUuid();
+
+  // Best-effort atomik:
+  // 1) UPDATE stock med guard stock>0
+  // 2) INSERT voucher
+  // Om insert failar: försök återställa stock (+1) (fail-soft)
+  try {
+    const up = await env.DB.prepare(`
+        UPDATE rewards
+        SET stock = stock - 1, updatedAt = ?
+        WHERE rewardId = ? AND isActive = 1 AND stock > 0
+      `).bind(ts, rewardId).run();
+
+    const changes = Number(up?.meta?.changes) || 0;
+    if (changes !== 1) {
+      return { status: 409, body: { ok: false, error: 'out_of_stock' } };
+    }
+
+    await env.DB.prepare(`
+        INSERT INTO vouchers (voucherId, partnerId, rewardId, status, createdAt, expiresAt, redeemedAt, gameId, checkpointIndex)
+        VALUES (?, ?, ?, 'valid', ?, ?, NULL, ?, ?)
+      `).bind(
+      voucherId,
+      asText(r.partnerId),
+      rewardId,
+      ts,
+      expiresAt,
+      gameId,
+      checkpointIndex
+    ).run();
+
+    return {
+      status: 200,
+      body: {
+        ok: true,
+        voucherId,
+        partnerId: asText(r.partnerId),
+        partnerName: asText(r.partnerName),
+        rewardId,
+        rewardTitle: asText(r.title),
+        expiresAt,
+        status: 'valid'
+      }
+    };
+  } catch (_) {
+    // försök kompensera stock (best effort)
+    try {
+      await env.DB.prepare(`
+          UPDATE rewards SET stock = stock + 1, updatedAt = ?
+          WHERE rewardId = ?
+        `).bind(nowMs(), rewardId).run();
+    } catch (_)2 {}
+    return { status: 500, body: { ok: false, error: 'server_error' } };
+  }
+}
+
+/* ============================================================
+ * BLOCK 6.6 — Verify: GET voucher
+ * GET /vouchers/:voucherId
+ * ============================================================ */
+async function vouchersGet(env, voucherId) {
+  await ensureVouchersTable(env);
+
+  const vid = asText(voucherId);
+  if (!vid) return { status: 400, body: { ok: false, error: 'bad_request' } };
+
+  const v = await env.DB.prepare(`
+      SELECT voucherId, partnerId, rewardId, status, createdAt, expiresAt, redeemedAt, gameId, checkpointIndex
+      FROM vouchers WHERE voucherId = ?
+    `).bind(vid).first();
+
+  if (!v) return { status: 404, body: { ok: false, error: 'not_found' } };
+
+  // status-derivation: expired om passerat och inte redeemed
+  const now = nowMs();
+  let status = asText(v.status) || 'valid';
+  const exp = Number(v.expiresAt) || 0;
+  const redAt = v.redeemedAt !== null && v.redeemedAt !== undefined ? Number(v.redeemedAt) : 0;
+
+  if (status !== 'redeemed' && exp > 0 && now > exp) {
+    status = 'expired';
+    // best-effort persist
+    try {
+      await env.DB.prepare(`UPDATE vouchers SET status = 'expired' WHERE voucherId = ? AND status != 'redeemed'`).bind(vid).run();
+    } catch (_) {}
+  }
+
+  return {
+    status: 200,
+    body: {
+      ok: true,
+      voucher: {
+        voucherId: asText(v.voucherId),
+        partnerId: asText(v.partnerId),
+        rewardId: asText(v.rewardId),
+        status: status === 'redeemed' ? 'redeemed' : status === 'expired' ? 'expired' : 'valid',
+        expiresAt: exp,
+        createdAt: Number(v.createdAt) || 0,
+        redeemedAt: redAt || 0,
+        gameId: asText(v.gameId),
+        checkpointIndex: Number(v.checkpointIndex) || 0
+      }
+    }
+  };
+}
+
+/* ============================================================
+ * BLOCK 6.7 — Verify: redeem
+ * POST /vouchers/redeem { voucherId, partnerId, pin }
+ * ============================================================ */
+async function vouchersRedeem(req, env) {
+  await ensureVouchersTable(env);
+
+  const parsed = await readJson(req);
+  if (!parsed.ok || !isPlainObject(parsed.value)) return { status: 400, body: { ok: false, error: 'bad_request' } };
+
+  const b = parsed.value;
+  const voucherId = asText(b.voucherId);
+  const partnerId = asText(b.partnerId);
+  const pin = asText(b.pin);
+
+  if (!voucherId) return { status: 400, body: { ok: false, error: 'bad_request' } };
+  if (!partnerId || !pin) return { status: 400, body: { ok: false, error: 'bad_request' } };
+
+  // auth partner pin
+  const auth = await verifyPartnerPin(partnerId, pin, env);
+  if (!auth.ok) return { status: auth.code === 'not_found' ? 404 : 403, body: { ok: false, error: auth.code === 'not_found' ? 'not_found' : 'forbidden' } };
+
+  // read voucher
+  const v = await env.DB.prepare(`
+      SELECT voucherId, partnerId, rewardId, status, createdAt, expiresAt, redeemedAt
+      FROM vouchers WHERE voucherId = ?
+    `).bind(voucherId).first();
+
+  if (!v) return { status: 404, body: { ok: false, error: 'not_found' } };
+
+  // partner match
+  if (asText(v.partnerId) !== partnerId) return { status: 403, body: { ok: false, error: 'forbidden' } };
+
+  const now = nowMs();
+  const exp = Number(v.expiresAt) || 0;
+
+  // already redeemed
+  if (asText(v.status) === 'redeemed' || (v.redeemedAt !== null && v.redeemedAt !== undefined && Number(v.redeemedAt) > 0)) {
+    return { status: 409, body: { ok: false, error: 'already_redeemed' } };
+  }
+
+  // expired
+  if (exp > 0 && now > exp) {
+    // best-effort persist expired
+    try {
+      await env.DB.prepare(`UPDATE vouchers SET status = 'expired' WHERE voucherId = ? AND status != 'redeemed'`).bind(voucherId).run();
+    } catch (_) {}
+    return { status: 410, body: { ok: false, error: 'expired' } };
+  }
+
+  // only valid can redeem
+  if (asText(v.status) !== 'valid') {
+    return { status: 403, body: { ok: false, error: 'forbidden' } };
+  }
+
+  // redeem
+  try {
+    const up = await env.DB.prepare(`
+        UPDATE vouchers
+        SET status = 'redeemed', redeemedAt = ?
+        WHERE voucherId = ? AND status = 'valid'
+      `).bind(now, voucherId).run();
+
+    const changes = Number(up?.meta?.changes) || 0;
+    if (changes !== 1) return { status: 409, body: { ok: false, error: 'already_redeemed' } };
+
+    return { status: 200, body: { ok: true, status: 'redeemed', redeemedAt: now } };
+  } catch (_) {
+    return { status: 500, body: { ok: false, error: 'server_error' } };
+  }
 }
 
 /* ============================================================
@@ -590,6 +834,9 @@ function route(req) {
   return { url, path: path || '/', method };
 }
 
+/* ============================================================
+ * BLOCK 8 — Fetch
+ * ============================================================ */
 export default {
   async fetch(req, env) {
     const allowed = parseOrigins(env);
@@ -622,21 +869,18 @@ export default {
         return json(out.body, out.status, cors);
       }
 
-      // NEW: list partners
       if (path === '/admin/partners/list' && method === 'GET') {
         if (!requireAdmin(req, env)) return json({ ok: false, error: 'forbidden' }, 403, cors);
         const out = await adminPartnersList(env);
         return json(out.body, out.status, cors);
       }
 
-      // NEW: rewards stats
       if (path === '/admin/rewards/stats' && method === 'GET') {
         if (!requireAdmin(req, env)) return json({ ok: false, error: 'forbidden' }, 403, cors);
         const out = await adminRewardsStats(env);
         return json(out.body, out.status, cors);
       }
 
-      // NEW: rewards list (optional)
       if (path === '/admin/rewards/list' && method === 'GET') {
         if (!requireAdmin(req, env)) return json({ ok: false, error: 'forbidden' }, 403, cors);
         const out = await adminRewardsList(env, url);
@@ -668,11 +912,33 @@ export default {
       }
 
       // ======================================================
-      // Game pick3
+      // Game: pick3 + claim
       // ======================================================
       if (path === '/rewards/pick3' && method === 'GET') {
         const out = await rewardsPick3(req, env, url);
         return json(out.body, out.status, cors);
+      }
+
+      if (path === '/vouchers/claim' && method === 'POST') {
+        const out = await vouchersClaim(req, env);
+        return json(out.body, out.status, cors);
+      }
+
+      // ======================================================
+      // Verify: GET /vouchers/:id + POST /vouchers/redeem
+      // ======================================================
+      if (path === '/vouchers/redeem' && method === 'POST') {
+        const out = await vouchersRedeem(req, env);
+        return json(out.body, out.status, cors);
+      }
+
+      // Dynamic GET /vouchers/:id
+      if (method === 'GET') {
+        const m = /^\/vouchers\/([^/]+)$/.exec(path);
+        if (m && m[1]) {
+          const out = await vouchersGet(env, m[1]);
+          return json(out.body, out.status, cors);
+        }
       }
 
       return json({ ok: false, error: 'not_found' }, 404, cors);
