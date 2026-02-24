@@ -1359,7 +1359,7 @@ function onPublishToLibrary() {
     payloadJSON
   };
 
-  const ok = upsertLibraryEntry(entry);
+  const ok = upsertLibraryEntryLocal(entry);
   if (!ok) {
     setExportMessage('Kunde inte publicera (storage write fail).', 'danger');
     return;
