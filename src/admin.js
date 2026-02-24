@@ -1546,28 +1546,36 @@ function renderQRPanel() {
 
 /* ============================================================
    BLOCK 16 — Boot
+   PATCH:
+   - Kör load först
+   - Skapa Radera-knapp baserat på URL ?load=
+   - Render efter att events är bundna
 ============================================================ */
 (function bootAdmin() {
   'use strict';
 
-  if (window.__FAS12_AO5_ADMIN_INIT__) return; // HOHOOK: init-guard-admin
+  if (window.__FAS12_AO5_ADMIN_INIT__) return; // HOOK: init-guard-admin
   window.__FAS12_AO5_ADMIN_INIT__ = true;
 
-  // Ladda från library om ?load= finns
+  // 1) Försök ladda från library om ?load= finns (visar status om saknas)
   tryLoadFromLibraryOnBoot();
 
-  // Skapa Radera-knapp om vi är i “load”-läge
+  // 2) Skapa Radera-knapp om URL har ?load= (source of truth)
   createDeleteButtonIfLoaded();
 
+  // 3) UI setup
   ensureExportPanel();
   bindMapEvents();
   bindEvents();
 
+  // 4) Init labels
   if (elActiveCpLabel) elActiveCpLabel.textContent = 'CP 1';
   if (elMapHint) elMapHint.textContent = 'Aktiv CP 1 — klicka på kartan för att sätta plats.';
 
+  // 5) Render
   renderAllFULL({ broadcastMap: true, rerenderQR: true });
   renderErrorsAndPill();
 
+  // 6) Map status
   if (!isMapReady()) showStatus('Karta ej redo. (Leaflet/CDN?)', 'warn');
 })();
