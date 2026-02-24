@@ -1,39 +1,37 @@
 /* ============================================================
    FIL: src/admin-export.js  (HEL FIL)
-   AO 2/5 — Split admin.js: Export + QR (UI-only)
-   Policy: XSS-safe, fail-closed, inga nya storage keys
+   AO 2/5 — Export + QR (flytt från admin.js)
+   Policy: UI-only, XSS-safe, fail-closed, inga nya storage keys
 ============================================================ */
 
 export function initAdminExport(api) {
   const {
-    getDraft,                 // () => draft
-    clampInt,                 // (n,min,max) => int
-    normalizeCode,            // (s) => normalized code
-    getDraftJSON,             // ({pretty}) => json string
-    hasBlockingErrors,        // () => boolean
-    copyToClipboard,          // (text) => Promise<{ok:boolean}>
-    showStatus,               // (msg,type) => void
-    setPillState,             // (kind) => void
-    scheduleSave,             // () => void
-    renderAllFULL,            // (opts) => void
-    onFillRandomCodes,        // () => number changed (muterar draft i admin.js)
-    onPublishToLibrary,       // () => void
+    getDraft,
+    clampInt,
+    normalizeCode,
+    getDraftJSON,
+    hasBlockingErrors,
+    copyToClipboard,
+    showStatus,
+    setPillState,
+    scheduleSave,
+    renderAllFULL,
+    onFillRandomCodes,     // () => number changed
+    onPublishToLibrary,    // () => void
+    elPreviewList,         // DOM node
   } = api || {};
 
   const MAX_INLINE_QS_CHARS = 1400;
 
-  // DOM hooks (finns i admin.html)
   const elQrSlot = document.getElementById('qrSlot');
   const elQrError = document.getElementById('qrError');
-  const elPreviewList = document.getElementById('previewList');
 
-  let qrTimer = null;
-
-  // Export panel DOM
   let elExportRoot = null;
   let elExportMsg = null;
   let elExportLink = null;
   let elExportJSON = null;
+
+  let qrTimer = null;
 
   function setExportMessage(msg, type = 'info') {
     if (!elExportMsg) return;
@@ -55,19 +53,19 @@ export function initAdminExport(api) {
 
   function buildParticipantLinkOrFail() {
     const payloadJSON = getDraftJSON({ pretty: false });
-    const encodedLen = encodeURIComponent(payloadJSON).length;
+    const encoded = encodeURIComponent(payloadJSON);
 
-    if (encodedLen > MAX_INLINE_QS_CHARS) {
-      return { ok: false, reason: 'too-large', encodedLength: encodedLen };
+    if (encoded.length > MAX_INLINE_QS_CHARS) {
+      return { ok: false, reason: 'too-large', encodedLength: encoded.length };
     }
 
-    // admin ligger under /pages/ → party.html ligger också under /pages/
+    // Behåll exakt samma beteende som tidigare admin.js:
+    // payload param får already-encoded sträng (safeDecodePayload i party-map.js klarar dubbel decode)
     const url = new URL('party.html', window.location.href);
     url.searchParams.set('mode', 'party');
-    // Viktigt: sätt rå JSON, URLSearchParams kodar EN gång
-    url.searchParams.set('payload', payloadJSON);
+    url.searchParams.set('payload', encoded);
 
-    return { ok: true, url: url.toString() };
+    return { ok: true, url: url.toString(), payloadEncoded: encoded };
   }
 
   async function onCopyJSON() {
@@ -112,7 +110,7 @@ export function initAdminExport(api) {
   }
 
   function onFillCodesClick() {
-    const changed = onFillRandomCodes();
+    const changed = Number(onFillRandomCodes?.() || 0);
     if (changed <= 0) { setExportMessage('Inga tomma koder att fylla (alla har redan kod).', 'info'); return; }
 
     setPillState('dirty');
@@ -183,7 +181,7 @@ export function initAdminExport(api) {
     btnPub.type = 'button';
     btnPub.className = 'btn btn-primary miniBtn';
     btnPub.textContent = 'PUBLICERA SOM SPELKORT';
-    btnPub.addEventListener('click', () => onPublishToLibrary());
+    btnPub.addEventListener('click', () => onPublishToLibrary?.());
 
     row.appendChild(btnJson);
     row.appendChild(btnLink);
@@ -246,11 +244,11 @@ export function initAdminExport(api) {
 
     elExportRoot = card;
 
-    // Förifyll JSON vid första mount
+    // Förifyll
     try { if (elExportJSON) elExportJSON.value = getDraftJSON({ pretty: true }); } catch (_) {}
   }
 
-  // ===== QR per checkpoint =====
+  // ===== QR =====
   function setQrError(msg) {
     if (!elQrError) return;
     elQrError.textContent = msg || '';
@@ -293,6 +291,7 @@ export function initAdminExport(api) {
     if (!built.ok) { setQrError('Payload för stor att dela som länk. Använd KOPIERA JSON istället.'); return; }
 
     const baseUrl = new URL(built.url);
+    const payloadEncoded = built.payloadEncoded;
 
     const d = getDraft();
     const count = clampInt(d?.checkpointCount ?? 0, 1, 20);
@@ -302,7 +301,9 @@ export function initAdminExport(api) {
       const cpNo = i + 1;
 
       const u = new URL(baseUrl.toString());
+      u.searchParams.set('payload', payloadEncoded);
       u.searchParams.set('cp', String(cpNo));
+
       const code = normalizeCode(cp?.code || '');
       if (code) u.searchParams.set('code', code);
 
