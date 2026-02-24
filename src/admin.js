@@ -151,16 +151,6 @@ function writeDraft(d) {
    BLOCK 5.5 — Library (flyttad till src/admin-library.js)
    Policy: admin.js sätter storageWritable=false vid read/write-fel
 ============================================================ */
-function readLibraryLocal() {
-  const res = readLibrary();
-  if (!res.ok) {
-    storageWritable = false;
-    showStatus('LocalStorage är låst. Kan inte läsa biblioteket.', 'warn');
-    return [];
-  }
-  return res.list;
-}
-
 function findLibraryEntryLocal(id) {
   const res = findLibraryEntry(id);
   if (!res.ok) {
@@ -342,10 +332,6 @@ function tryLoadFromLibraryOnBoot() {
 
 /* ============================================================
    BLOCK 6.9 — Topbar: Radera-knapp (endast vid ?load=)
-   PATCH:
-   - Source of truth = URL ?load=
-   - Radera via admin-library delete (ingen direkt read/write här)
-   - Hård redirect utan query efter radering
 ============================================================ */
 function createDeleteButtonIfLoaded() {
   const urlLoadId = qsGet('load'); // HOOK: delete-source-id
@@ -453,6 +439,7 @@ function renderErrors(errors) {
    BLOCK 8 — NICE: Random code generator
 ============================================================ */
 const CODE_CHARS = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
+
 function randomCode(len = 5) {
   const n = clampInt(len, 4, 12);
   let out = '';
@@ -543,6 +530,9 @@ function setActiveCp(index, { centerMap = true } = {}) {
 let draft = readDraft(); // HOOK: draft-state
 let dirty = false;       // HOOK: dirty-state
 let saveTimer = null;    // HOOK: autosave-timer
+
+// Export-modul initas senare (för att undvika TDZ/cirklar)
+let exportUI = null;     // HOOK: export-ui
 
 function setPillState(kind) {
   if (!elSavePill) return;
@@ -918,13 +908,13 @@ function renderAllFULL({ broadcastMap = true, rerenderQR = true } = {}) {
   renderPreview();
   renderErrorsAndPill();
   if (broadcastMap) broadcastDraftToMap();
-  if (rerenderQR && exportUI) exportUI.renderQRPanelDebounced();
+  if (rerenderQR && exportUI && typeof exportUI.renderQRPanelDebounced === 'function') exportUI.renderQRPanelDebounced();
 }
 
 function renderAllLIGHT({ rerenderQR = false } = {}) {
   renderPreview();
   renderErrorsAndPill();
-  if (rerenderQR && exportUI) exportUI.renderQRPanelDebounced();
+  if (rerenderQR && exportUI && typeof exportUI.renderQRPanelDebounced === 'function') exportUI.renderQRPanelDebounced();
 }
 
 /* ============================================================
@@ -1130,28 +1120,11 @@ function getDraftJSON({ pretty = false } = {}) {
 }
 
 /* ============================================================
-   BLOCK 14 (NY) — Export + QR module wiring (AO 2/5)
-============================================================ */
-const exportUI = initAdminExport({
-  getDraft: () => draft,
-  clampInt,
-  normalizeCode,
-  getDraftJSON,
-  hasBlockingErrors,
-  copyToClipboard,
-  showStatus,
-  setPillState,
-  scheduleSave,
-  renderAllFULL,
-  onFillRandomCodes: () => fillRandomCodesForEmpty({ len: 5 }),
-  onPublishToLibrary,
-  elPreviewList,
-});
-
-/* ============================================================
-   BLOCK 14.5 — Publish (anropas från export-modulen)
+   BLOCK 14 — Export + QR module wiring (AO 2/5)
 ============================================================ */
 function onPublishToLibrary() {
+  if (!exportUI) return;
+
   exportUI.ensureExportPanel();
 
   if (!storageWritable) {
@@ -1191,7 +1164,6 @@ function onPublishToLibrary() {
   exportUI.setExportMessage('Publicerad! Du hittar den som spelkort på startsidan.', 'info');
   showStatus('Publicerad som spelkort.', 'info');
 
-  // visa admin-load-länk i exportpanelen (om den finns)
   try {
     const u = new URL(window.location.href);
     u.searchParams.set('load', entryId);
@@ -1199,13 +1171,35 @@ function onPublishToLibrary() {
   } catch (_) {}
 }
 
+function initExportModule() {
+  exportUI = initAdminExport({
+    // state
+    getDraft: () => draft,
+
+    // helpers
+    clampInt,
+    normalizeCode,
+    getDraftJSON,
+    hasBlockingErrors,
+
+    // ops
+    copyToClipboard,
+    showStatus,
+    setPillState,
+    scheduleSave,
+    renderAllFULL,
+
+    // hooks/actions
+    onFillRandomCodes: () => fillRandomCodesForEmpty({ len: 5 }),
+    onPublishToLibrary,
+
+    // mount context
+    elPreviewList,
+  });
+}
+
 /* ============================================================
    BLOCK 16 — Boot
-   PATCH:
-   - new=1 från index = skapa NY skattjakt (rensa utkast + städa URL)
-   - Kör load först
-   - Skapa Radera-knapp baserat på URL ?load=
-   - Render efter att events är bundna
 ============================================================ */
 (function bootAdmin() {
   'use strict';
@@ -1238,8 +1232,10 @@ function onPublishToLibrary() {
   // 2) Skapa Radera-knapp om URL har ?load=
   createDeleteButtonIfLoaded();
 
-  // 3) UI setup
-  exportUI.ensureExportPanel();
+  // 3) Init export-modul (AO 2/5) + UI events
+  initExportModule();
+  if (exportUI) exportUI.ensureExportPanel();
+
   bindMapEvents();
   bindEvents();
 
