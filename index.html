@@ -1,6 +1,7 @@
 <!-- ============================================================
      FIL: index.html  (HEL FIL)
-     PATCH: UI-fix — ta bort dubbel header (Admin/MVP) + fixa trasiga taggar
+     AO 4/6 — Index-länkar: Dashboard + Partner + “spårbar” navigation
+     PATCH: Topbar badges: Admin, Dashboard, Partner, MVP (i ordning) + mobil wrap
      Policy: UI-only, XSS-safe, fail-closed, subpath-safe
 ============================================================ -->
 <!doctype html>
@@ -32,7 +33,8 @@
         </div>
       </div>
 
-      <div class="topbar__right">
+      <!-- AO 4/6: wrap-safe badges (KRAV 1/2) -->
+      <div class="topbar__right" style="display:flex; flex-wrap:wrap; gap:8px; justify-content:flex-end; align-items:center;">
         <a id="adminLink"
            class="badge"
            href="pages/admin.html?new=1"
@@ -41,7 +43,24 @@
         </a>
         <!-- HOOK: admin-link -->
 
-        <span class="badge badge-success">MVP</span>
+        <a id="dashboardLink"
+           class="badge"
+           href="pages/dashboard.html"
+           aria-label="Öppna dashboard för partners och invites">
+          Dashboard
+        </a>
+        <!-- HOOK: dashboard-link -->
+
+        <a id="partnerLink"
+           class="badge"
+           href="pages/partner.html"
+           aria-label="Öppna partner-sidan för butikstester">
+          Partner
+        </a>
+        <!-- HOOK: partner-link -->
+
+        <span class="badge badge-success" aria-label="MVP-status badge">MVP</span>
+        <!-- HOOK: mvp-badge -->
       </div>
     </div>
   </header>
