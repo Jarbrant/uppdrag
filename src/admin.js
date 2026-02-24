@@ -1,15 +1,19 @@
 /* ============================================================
-   FIL: src/admin.js  (HEL FIL)
-   PATCH (FAS 2.2) — Radera spel från library (PARTY_LIBRARY_V1) vid ?load=
-                    + Topbar-knapp “Radera” med confirm
-                    + Save-pill: “Sparat” (grön) / “Osparat” / “Fel”
-   AO 2/5 — Flytta Export + QR till src/admin-export.js (kortare admin.js)
+   FIL: src/admin.js  (HEL FIL) — PATCH
+   AO 3/5 + AO 4/5 + AO 5/5
+
+   - AO 3/5: Flyttar checkpoint-editor render + input events till src/admin-checkpoints.js
+   - AO 4/5: Flyttar boot + bindEvents-flöde till src/admin-boot.js (admin.js = state + API)
+   - AO 5/5: Tydliga gränser, deterministisk init, inga dubletter (i denna baseline finns inga dubletter)
+
    Policy: UI-only, XSS-safe, fail-closed, inga nya storage keys
 ============================================================ */
 
 import { copyToClipboard } from './util.js';
 import { readLibrary, findLibraryEntry, upsertLibraryEntry, deleteLibraryEntry } from './admin-library.js';
 import { initAdminExport } from './admin-export.js';
+import { initAdminCheckpoints } from './admin-checkpoints.js';
+import { bootAdmin } from './admin-boot.js';
 
 /* ============================================================
    BLOCK 1 — Storage key + draft shape (state/draft)
@@ -383,6 +387,11 @@ function createDeleteButtonIfLoaded() {
   headerRight.insertBefore(btn, elSavePill || null);
 }
 
+function clearLoadedLibraryContext() {
+  loadedLibraryId = '';
+  loadedLibraryName = '';
+}
+
 /* ============================================================
    BLOCK 7 — Validation (fail-closed)
 ============================================================ */
@@ -490,39 +499,12 @@ function fillRandomCodesForEmpty({ len = 5 } = {}) {
 }
 
 /* ============================================================
-   BLOCK 9 — Aktiv checkpoint (för kart-flöde)
+   BLOCK 9 — State: active checkpoint index (UI använder checkpointsUI)
 ============================================================ */
 let activeCpIndex = 0; // HOOK: active-cp-index
 
-function clampActiveIndex() {
-  const max = Math.max(0, (draft?.checkpointCount || 1) - 1);
-  activeCpIndex = clampInt(activeCpIndex, 0, max);
-}
-
-function setActiveCp(index, { centerMap = true } = {}) {
-  clampActiveIndex();
-  const max = Math.max(0, (draft?.checkpointCount || 1) - 1);
-  activeCpIndex = clampInt(index, 0, max);
-
-  if (elActiveCpLabel) elActiveCpLabel.textContent = `CP ${activeCpIndex + 1}`;
-  if (elMapHint) elMapHint.textContent = `Aktiv CP ${activeCpIndex + 1} — klicka på kartan för att sätta plats.`;
-
-  try {
-    document.querySelectorAll('[data-cp-row]').forEach((el) => {
-      const i = Number(el.getAttribute('data-cp-row'));
-      el.classList.toggle('is-active', i === activeCpIndex);
-      el.setAttribute('aria-current', i === activeCpIndex ? 'true' : 'false');
-    });
-  } catch (_) {}
-
-  if (centerMap) {
-    const cp = draft?.checkpoints?.[activeCpIndex];
-    const api = window.__ADMIN_MAP_API__;
-    if (api && typeof api.setViewIfNeeded === 'function' && cp) {
-      try { api.setViewIfNeeded(cp.lat, cp.lng, 15); } catch (_) {}
-    }
-  }
-}
+function getActiveCpIndex() { return activeCpIndex; }
+function setActiveCpIndex(i) { activeCpIndex = clampInt(i, 0, 999); }
 
 /* ============================================================
    BLOCK 10 — Render (FULL vs LIGHT) + Save-pill state
@@ -531,8 +513,11 @@ let draft = readDraft(); // HOOK: draft-state
 let dirty = false;       // HOOK: dirty-state
 let saveTimer = null;    // HOOK: autosave-timer
 
-// Export-modul initas senare (för att undvika TDZ/cirklar)
+// Export-modul initas deterministiskt en gång
 let exportUI = null;     // HOOK: export-ui
+
+// Checkpoints-modul initas deterministiskt en gång
+let checkpointsUI = null; // HOOK: checkpoints-ui
 
 function setPillState(kind) {
   if (!elSavePill) return;
@@ -646,267 +631,50 @@ function broadcastDraftToMap() {
   }
 }
 
-function renderCheckpointEditorFULL() {
-  if (!elCluesWrap) return;
-  clampActiveIndex();
+function ensureCheckpointsModuleOnce() {
+  if (checkpointsUI) return;
 
-  elCluesWrap.innerHTML = '';
+  checkpointsUI = initAdminCheckpoints({
+    // state
+    getDraft: () => draft,
+    setDraft: (next) => { draft = next; },
+    getActiveCpIndex: () => activeCpIndex,
+    setActiveCpIndex: (i) => { activeCpIndex = clampInt(i, 0, 999); },
 
-  for (let i = 0; i < draft.checkpointCount; i++) {
-    const cp = draft.checkpoints[i] || {};
-    const isLast = i === (draft.checkpointCount - 1);
+    // helpers
+    clampInt,
+    safeText,
+    normalizeCode,
+    enforceFinalOnlyOnLast,
 
-    const row = document.createElement('div');
-    row.className = 'clueRow';
-    row.setAttribute('data-cp-row', String(i));
-    row.tabIndex = 0;
-    row.setAttribute('role', 'button');
-    row.setAttribute('aria-label', `Välj checkpoint ${i + 1}`);
+    // ops
+    markDirtyLIGHT,
+    scheduleSave,
+    renderPreview,
+    renderErrorsAndPill,
+    broadcastDraftToMap,
+    showStatus,
 
-    function isEditableTarget(evt) {
-      const t = evt?.target;
-      const tag = (t?.tagName || '').toUpperCase();
-      return (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || t?.isContentEditable === true);
-    }
+    // map
+    isMapReady,
+    getMapApi: () => window.__ADMIN_MAP_API__,
 
-    row.addEventListener('click', (e) => {
-      if (isEditableTarget(e)) return;
-      setActiveCp(i, { centerMap: true });
-    });
-
-    row.addEventListener('keydown', (e) => {
-      if (isEditableTarget(e)) return;
-      if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault();
-        setActiveCp(i, { centerMap: true });
-      }
-    });
-
-    if (i === activeCpIndex) row.classList.add('is-active');
-
-    const meta = document.createElement('div');
-    meta.className = 'clueMeta';
-
-    const idx = document.createElement('div');
-    idx.className = 'clueIdx';
-    idx.textContent = `CP ${i + 1}`;
-
-    const coord = document.createElement('div');
-    coord.className = 'muted small';
-    coord.setAttribute('data-cp-coord', String(i));
-    const lat = Number.isFinite(Number(cp.lat)) ? Number(cp.lat).toFixed(5) : '—';
-    const lng = Number.isFinite(Number(cp.lng)) ? Number(cp.lng).toFixed(5) : '—';
-    coord.textContent = `(${lat}, ${lng})`;
-
-    meta.appendChild(idx);
-    meta.appendChild(coord);
-
-    const clueInput = document.createElement('input');
-    clueInput.className = 'input clueInput';
-    clueInput.type = 'text';
-    clueInput.autocomplete = 'off';
-    clueInput.placeholder = isLast && cp.isFinal ? 'Skattkista: ledtråd…' : 'Skriv ledtråd…';
-    clueInput.value = safeText(cp.clue || draft.clues[i] || '');
-    clueInput.setAttribute('data-cp-index', String(i));
-    clueInput.addEventListener('focus', () => setActiveCp(i, { centerMap: false }));
-    clueInput.addEventListener('input', (e) => {
-      const k = clampInt(e.target.getAttribute('data-cp-index'), 0, 99);
-      draft.checkpoints[k].clue = safeText(e.target.value);
-      markDirtyLIGHT(true, { rerenderQR: false });
-    });
-
-    const grid = document.createElement('div');
-    grid.style.display = 'grid';
-    grid.style.gridTemplateColumns = '1fr 1fr 1fr';
-    grid.style.gap = '8px';
-
-    function labeled(labelText, inputEl) {
-      const wrap = document.createElement('div');
-      wrap.style.display = 'grid';
-      wrap.style.gap = '6px';
-      const lab = document.createElement('div');
-      lab.className = 'muted small';
-      lab.textContent = labelText;
-      wrap.appendChild(lab);
-      wrap.appendChild(inputEl);
-      return wrap;
-    }
-
-    const points = document.createElement('input');
-    points.className = 'input';
-    points.type = 'number';
-    points.inputMode = 'numeric';
-    points.min = '0';
-    points.max = '1000';
-    points.step = '1';
-    points.placeholder = `${draft.pointsPerCheckpoint}`;
-    points.value = (cp.points === null || cp.points === undefined) ? '' : String(cp.points);
-    points.setAttribute('data-cp-points', String(i));
-    points.addEventListener('focus', () => setActiveCp(i, { centerMap: false }));
-    points.addEventListener('input', (e) => {
-      const k = clampInt(e.target.getAttribute('data-cp-points'), 0, 99);
-      const v = safeText(e.target.value).trim();
-      draft.checkpoints[k].points = v === '' ? null : clampInt(v, 0, 1000);
-      markDirtyLIGHT(true, { rerenderQR: false });
-    });
-
-    const code = document.createElement('input');
-    code.className = 'input';
-    code.type = 'text';
-    code.autocomplete = 'off';
-    code.placeholder = 'ex: HJBH6';
-    code.value = safeText(cp.code || '');
-    code.setAttribute('data-cp-code', String(i));
-    code.addEventListener('focus', () => setActiveCp(i, { centerMap: false }));
-    code.addEventListener('input', (e) => {
-      const k = clampInt(e.target.getAttribute('data-cp-code'), 0, 99);
-      draft.checkpoints[k].code = normalizeCode(e.target.value);
-      markDirtyLIGHT(true, { rerenderQR: true });
-    });
-
-    const radius = document.createElement('input');
-    radius.className = 'input';
-    radius.type = 'number';
-    radius.inputMode = 'numeric';
-    radius.min = '5';
-    radius.max = '5000';
-    radius.step = '1';
-    radius.placeholder = '25';
-    radius.value = String(clampInt(cp.radius ?? 25, 5, 5000));
-    radius.setAttribute('data-cp-radius', String(i));
-    radius.addEventListener('focus', () => setActiveCp(i, { centerMap: false }));
-    radius.addEventListener('input', (e) => {
-      const k = clampInt(e.target.getAttribute('data-cp-radius'), 0, 99);
-      draft.checkpoints[k].radius = clampInt(e.target.value, 5, 5000);
-      markDirtyLIGHT(true, { rerenderQR: false });
-    });
-
-    grid.appendChild(labeled('Poäng', points));
-    grid.appendChild(labeled('Kod', code));
-    grid.appendChild(labeled('Radie (m)', radius));
-
-    const codeRow = document.createElement('div');
-    codeRow.style.display = 'flex';
-    codeRow.style.alignItems = 'center';
-    codeRow.style.justifyContent = 'space-between';
-    codeRow.style.gap = '10px';
-    codeRow.style.marginTop = '6px';
-
-    const codeHint = document.createElement('div');
-    codeHint.className = 'muted small';
-    codeHint.textContent = 'Kod är valfri (kan genereras).';
-
-    const actionsWrap = document.createElement('div');
-    actionsWrap.style.display = 'flex';
-    actionsWrap.style.gap = '8px';
-    actionsWrap.style.flexWrap = 'wrap';
-    actionsWrap.style.justifyContent = 'flex-end';
-
-    const btnRnd = document.createElement('button');
-    btnRnd.type = 'button';
-    btnRnd.className = 'btn btn-ghost miniBtn';
-    btnRnd.textContent = 'Slumpkod';
-    btnRnd.setAttribute('data-cp-rnd', String(i));
-    btnRnd.addEventListener('click', (ev) => {
-      ev.preventDefault();
-      ev.stopPropagation();
-      const k = clampInt(btnRnd.getAttribute('data-cp-rnd'), 0, 99);
-      setActiveCp(k, { centerMap: false });
-
-      const cur = normalizeCode(draft.checkpoints[k]?.code || '');
-      if (cur) { showStatus(`CP ${k + 1} har redan en kod.`, 'warn'); return; }
-
-      const used = usedCodesSet();
-      const next = generateUniqueCode(used, 5);
-      draft.checkpoints[k].code = next;
-
-      const input = document.querySelector(`input[data-cp-code="${k}"]`);
-      if (input) input.value = next;
-
-      markDirtyLIGHT(true, { rerenderQR: true });
-      showStatus(`Kod skapad för CP ${k + 1}.`, 'info');
-    });
-
-    const btnSaveCp = document.createElement('button');
-    btnSaveCp.type = 'button';
-    btnSaveCp.className = 'btn btn-primary miniBtn';
-    btnSaveCp.textContent = 'Spara';
-    btnSaveCp.setAttribute('data-cp-save', String(i));
-    btnSaveCp.addEventListener('click', (ev) => {
-      ev.preventDefault();
-      ev.stopPropagation();
-      saveNowOrWarn();
-    });
-
-    actionsWrap.appendChild(btnRnd);
-    actionsWrap.appendChild(btnSaveCp);
-
-    codeRow.appendChild(codeHint);
-    codeRow.appendChild(actionsWrap);
-
-    const finalRow = document.createElement('div');
-    finalRow.style.display = 'flex';
-    finalRow.style.alignItems = 'center';
-    finalRow.style.justifyContent = 'space-between';
-    finalRow.style.gap = '10px';
-    finalRow.style.marginTop = '6px';
-
-    const finalLeft = document.createElement('div');
-    finalLeft.className = 'muted small';
-    finalLeft.textContent = isLast ? 'Final (Skattkista)' : 'Final kan bara vara sista checkpoint';
-
-    const finalToggleWrap = document.createElement('label');
-    finalToggleWrap.style.display = 'inline-flex';
-    finalToggleWrap.style.alignItems = 'center';
-    finalToggleWrap.style.gap = '8px';
-    finalToggleWrap.style.userSelect = 'none';
-
-    const finalToggle = document.createElement('input');
-    finalToggle.type = 'checkbox';
-    finalToggle.checked = (isLast && cp.isFinal === true);
-    finalToggle.disabled = !isLast;
-    finalToggle.setAttribute('data-cp-final', String(i));
-    finalToggle.setAttribute('aria-label', 'Markera som Skattkista (final)');
-    finalToggle.addEventListener('click', (ev) => ev.stopPropagation());
-
-    const finalText = document.createElement('span');
-    finalText.className = 'muted small';
-    finalText.textContent = 'Skattkista';
-
-    finalToggleWrap.appendChild(finalToggle);
-    finalToggleWrap.appendChild(finalText);
-
-    finalToggle.addEventListener('change', (e) => {
-      const k = clampInt(e.target.getAttribute('data-cp-final'), 0, 99);
-      const isLastNow = k === (draft.checkpointCount - 1);
-      if (!isLastNow) return;
-      draft.checkpoints[k].isFinal = !!e.target.checked;
-      enforceFinalOnlyOnLast(draft);
-      markDirtyLIGHT(true, { rerenderQR: false });
-      renderPreview();
-    });
-
-    finalRow.appendChild(finalLeft);
-    finalRow.appendChild(finalToggleWrap);
-
-    row.appendChild(meta);
-    row.appendChild(clueInput);
-    row.appendChild(grid);
-    row.appendChild(codeRow);
-    row.appendChild(finalRow);
-
-    elCluesWrap.appendChild(row);
-  }
-
-  setActiveCp(activeCpIndex, { centerMap: false });
+    // dom hooks
+    elCluesWrap,
+    elActiveCpLabel,
+    elMapHint
+  });
 }
 
 function renderAllFULL({ broadcastMap = true, rerenderQR = true } = {}) {
-  clampActiveIndex();
+  ensureCheckpointsModuleOnce();
+  checkpointsUI?.clampActiveIndex?.();
+
   renderHeaderInputs();
-  renderCheckpointEditorFULL();
+  checkpointsUI?.renderCheckpointEditorFULL?.();
   renderPreview();
   renderErrorsAndPill();
+
   if (broadcastMap) broadcastDraftToMap();
   if (rerenderQR && exportUI && typeof exportUI.renderQRPanelDebounced === 'function') exportUI.renderQRPanelDebounced();
 }
@@ -948,41 +716,13 @@ function isMapReady() {
   return !!(api && typeof api.isReady === 'function' && api.isReady());
 }
 
-function updateCoordText(index) {
-  const cp = draft.checkpoints[index] || {};
-  const lat = Number.isFinite(Number(cp.lat)) ? Number(cp.lat).toFixed(5) : '—';
-  const lng = Number.isFinite(Number(cp.lng)) ? Number(cp.lng).toFixed(5) : '—';
-  const node = document.querySelector(`[data-cp-coord="${index}"]`);
-  if (node) node.textContent = `(${lat}, ${lng})`;
-}
-
-function setActiveCpPositionFromMap(lat, lng) {
-  if (!isMapReady()) { showStatus('Kartan är inte redo. Kan inte sätta position.', 'warn'); return; }
-  clampActiveIndex();
-
-  const cp = draft.checkpoints[activeCpIndex];
-  if (!cp) { showStatus('Ingen aktiv checkpoint. Välj checkpoint först.', 'warn'); return; }
-
-  cp.lat = Number(lat);
-  cp.lng = Number(lng);
-
-  dirty = true;
-  setPillState('dirty');
-  scheduleSave();
-
-  updateCoordText(activeCpIndex);
-  broadcastDraftToMap();
-
-  showStatus(`Plats satt för CP ${activeCpIndex + 1}.`, 'info');
-  renderErrorsAndPill();
-}
-
 function bindMapEvents() {
+  ensureCheckpointsModuleOnce();
   window.addEventListener('admin:map-click', (e) => {
     const lat = e?.detail?.lat;
     const lng = e?.detail?.lng;
     if (!Number.isFinite(Number(lat)) || !Number.isFinite(Number(lng))) return;
-    setActiveCpPositionFromMap(lat, lng);
+    checkpointsUI?.setActiveCpPositionFromMap?.(lat, lng);
   });
 }
 
@@ -990,6 +730,8 @@ function bindMapEvents() {
    BLOCK 13 — Events (form)
 ============================================================ */
 function bindEvents() {
+  ensureCheckpointsModuleOnce();
+
   if (elBack) {
     elBack.addEventListener('click', () => {
       if (window.history.length > 1) window.history.back();
@@ -1007,7 +749,6 @@ function bindEvents() {
   if (elCount) {
     elCount.addEventListener('input', (e) => {
       syncCountToStructures(draft, e.target.value);
-      clampActiveIndex();
       renderAllFULL({ broadcastMap: true, rerenderQR: true });
       dirty = true;
       setPillState('dirty');
@@ -1037,7 +778,6 @@ function bindEvents() {
   if (elRemoveCp) {
     elRemoveCp.addEventListener('click', () => {
       syncCountToStructures(draft, draft.checkpointCount - 1);
-      clampActiveIndex();
       dirty = true;
       setPillState('dirty');
       renderAllFULL({ broadcastMap: true, rerenderQR: true });
@@ -1172,6 +912,7 @@ function onPublishToLibrary() {
 }
 
 function initExportModule() {
+  if (exportUI) return; // deterministisk init (AO 5/5)
   exportUI = initAdminExport({
     // state
     getDraft: () => draft,
@@ -1198,55 +939,59 @@ function initExportModule() {
   });
 }
 
+function getExportUI() {
+  return exportUI;
+}
+
 /* ============================================================
-   BLOCK 16 — Boot
+   BLOCK 16 — Boot (AO 4/5: flyttad till admin-boot.js)
 ============================================================ */
-(function bootAdmin() {
+(function bootAdminMain() {
   'use strict';
 
-  if (window.__FAS12_AO5_ADMIN_INIT__) return; // HOOK: init-guard-admin
-  window.__FAS12_AO5_ADMIN_INIT__ = true;
+  bootAdmin({
+    // url
+    qsGet,
 
-  // 0) FORCE NEW: om admin öppnas med ?new=1 → starta ny skattjakt
-  const forceNew = qsGet('new') === '1';
-  if (forceNew) {
-    try { localStorage.removeItem(DRAFT_KEY); } catch (_) {}
-    loadedLibraryId = '';
-    loadedLibraryName = '';
-    draft = defaultDraft();
-    dirty = true;
+    // ui
+    showStatus,
+    isMapReady,
+    elActiveCpLabel,
+    elMapHint,
 
-    showStatus('Nytt utkast skapat.', 'info');
+    // state getters/setters
+    getDraft: () => draft,
+    setDraft: (next) => { draft = next; },
+    defaultDraft,
 
-    // städa URL så man inte fastnar i new=1
-    try {
-      const u = new URL(window.location.href);
-      u.searchParams.delete('new');
-      window.history.replaceState({}, '', u.toString());
-    } catch (_) {}
-  }
+    getDirty: () => dirty,
+    setDirty: (v) => { dirty = !!v; },
 
-  // 1) Försök ladda från library om ?load= finns
-  tryLoadFromLibraryOnBoot();
+    getActiveCpIndex,
+    setActiveCpIndex: (i) => { activeCpIndex = clampInt(i, 0, 999); },
 
-  // 2) Skapa Radera-knapp om URL har ?load=
-  createDeleteButtonIfLoaded();
+    // draft ops
+    readDraft,
+    writeDraft,
+    removeDraftKey: () => { try { localStorage.removeItem(DRAFT_KEY); } catch (_) {} },
 
-  // 3) Init export-modul (AO 2/5) + UI events
-  initExportModule();
-  if (exportUI) exportUI.ensureExportPanel();
+    // loaded context ops
+    clearLoadedLibraryContext,
 
-  bindMapEvents();
-  bindEvents();
+    // library boot
+    tryLoadFromLibraryOnBoot,
+    createDeleteButtonIfLoaded,
 
-  // 4) Init labels
-  if (elActiveCpLabel) elActiveCpLabel.textContent = 'CP 1';
-  if (elMapHint) elMapHint.textContent = 'Aktiv CP 1 — klicka på kartan för att sätta plats.';
+    // export boot
+    initExportModule,
+    getExportUI,
 
-  // 5) Render
-  renderAllFULL({ broadcastMap: true, rerenderQR: true });
-  renderErrorsAndPill();
+    // binds
+    bindMapEvents,
+    bindEvents,
 
-  // 6) Map status
-  if (!isMapReady()) showStatus('Karta ej redo. (Leaflet/CDN?)', 'warn');
+    // render
+    renderAllFULL,
+    renderErrorsAndPill
+  });
 })();
