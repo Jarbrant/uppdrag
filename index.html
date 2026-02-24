@@ -194,521 +194,528 @@
   <script type="module" src="./src/boot.js"></script>
 
   <!-- ==========================================================
-       BLOCK 6 — Index controller
-  =========================================================== -->
-  <script type="module">
-    import { qsGet } from './src/util.js';
-    import { renderErrorCard, toast } from './src/ui.js';
+     BLOCK 6 — Index controller (PATCH + uppdelad)
+=========================================================== -->
+<script type="module">
+  import { qsGet } from './src/util.js';
+  import { renderErrorCard, toast } from './src/ui.js';
 
-    (function () {
-      'use strict';
+  (function () {
+    'use strict';
 
-      if (window.__AO11_INDEX_INIT__) return;
-      window.__AO11_INDEX_INIT__ = true;
+    if (window.__AO11_INDEX_INIT__) return;
+    window.__AO11_INDEX_INIT__ = true;
 
-      const PARTY_LIBRARY_KEY = 'PARTY_LIBRARY_V1';
-      const partyLibraryWrap = document.getElementById('partyLibraryWrap');
+    /* ==========================================================
+       BLOCK 6.1 — Konstanter + DOM hooks
+    =========================================================== */
+    const PARTY_LIBRARY_KEY = 'PARTY_LIBRARY_V1';
+    const MAX_INLINE_QS_CHARS = 1400; // samma policy som admin
 
-      const selectedModeLabel = document.getElementById('selectedModeLabel');
-      const startBtn = document.getElementById('startBtn');
-      const startHint = document.getElementById('startHint');
-      const errorSlot = document.getElementById('errorSlot');
+    const partyLibraryWrap = document.getElementById('partyLibraryWrap');
+    const selectedModeLabel = document.getElementById('selectedModeLabel');
+    const startBtn = document.getElementById('startBtn');
+    const startHint = document.getElementById('startHint');
+    const errorSlot = document.getElementById('errorSlot');
 
-      // Invite modal hooks
-      const inviteOverlay = document.getElementById('inviteOverlay');
-      const inviteCloseBtn = document.getElementById('inviteCloseBtn');
-      const inviteQrImg = document.getElementById('inviteQrImg');
-      const inviteLinkInput = document.getElementById('inviteLinkInput');
-      const inviteCopyBtn = document.getElementById('inviteCopyBtn');
-      const inviteShareBtn = document.getElementById('inviteShareBtn');
-      const inviteMsg = document.getElementById('inviteMsg');
-      const inviteNameInput = document.getElementById('inviteNameInput');
-      const inviteAddBtn = document.getElementById('inviteAddBtn');
-      const inviteList = document.getElementById('inviteList');
+    // Invite modal hooks
+    const inviteOverlay = document.getElementById('inviteOverlay');
+    const inviteCloseBtn = document.getElementById('inviteCloseBtn');
+    const inviteQrImg = document.getElementById('inviteQrImg');
+    const inviteLinkInput = document.getElementById('inviteLinkInput');
+    const inviteCopyBtn = document.getElementById('inviteCopyBtn');
+    const inviteShareBtn = document.getElementById('inviteShareBtn');
+    const inviteMsg = document.getElementById('inviteMsg');
+    const inviteNameInput = document.getElementById('inviteNameInput');
+    const inviteAddBtn = document.getElementById('inviteAddBtn');
+    const inviteList = document.getElementById('inviteList');
 
-      // UI-only: inga nya storage keys — listan är bara i minnet
-      const invitePlayers = [];
+    // UI-only: inga nya storage keys — listan är bara i minnet
+    const invitePlayers = [];
 
-      const MAX_INLINE_QS_CHARS = 1400; // samma “för stor”-policy som admin
+    /* ==========================================================
+       BLOCK 6.2 — Grundhelpers (URL + JSON + storage read)
+    =========================================================== */
+    function currentBaseUrl() {
+      const u = new URL(window.location.href);
+      const p = u.pathname;
+      u.pathname = p.endsWith('/') ? p : p.substring(0, p.lastIndexOf('/') + 1);
+      u.search = '';
+      u.hash = '';
+      return u;
+    }
 
-      function currentBaseUrl() {
-        const u = new URL(window.location.href);
-        const p = u.pathname;
-        u.pathname = p.endsWith('/') ? p : p.substring(0, p.lastIndexOf('/') + 1);
-        u.search = '';
-        u.hash = '';
-        return u;
+    function safeJSONParse(str, fallback = null) {
+      try { return JSON.parse(str); } catch (_) { return fallback; }
+    }
+
+    function readPartyLibraryRaw() {
+      try {
+        const raw = localStorage.getItem(PARTY_LIBRARY_KEY);
+        if (!raw) return [];
+        const v = safeJSONParse(raw, []);
+        if (!Array.isArray(v)) return [];
+        return v.filter((x) => x && typeof x === 'object' && typeof x.id === 'string');
+      } catch (_) {
+        return [];
       }
+    }
 
-      function safeJSONParse(str, fallback = null) {
-        try { return JSON.parse(str); } catch (_) { return fallback; }
-      }
+    function readPartyLibraryForList() {
+      const v = readPartyLibraryRaw();
+      return v.map((x) => ({
+        id: String(x.id),
+        name: String(x.name || 'Skattjakt'),
+        checkpointCount: Number(x.checkpointCount || 0),
+        updatedAt: Number(x.updatedAt || 0)
+      }));
+    }
 
-      function readPartyLibraryRaw() {
-        try {
-          const raw = localStorage.getItem(PARTY_LIBRARY_KEY);
-          if (!raw) return [];
-          const v = safeJSONParse(raw, []);
-          if (!Array.isArray(v)) return [];
-          return v.filter((x) => x && typeof x === 'object' && typeof x.id === 'string');
-        } catch (_) {
-          return [];
-        }
-      }
+    function findLibraryEntry(id) {
+      const list = readPartyLibraryRaw();
+      return list.find((x) => x && String(x.id) === String(id)) || null;
+    }
 
-      function readPartyLibraryForList() {
-        const v = readPartyLibraryRaw();
-        return v.map((x) => ({
-          id: String(x.id),
-          name: String(x.name || 'Skattjakt'),
-          checkpointCount: Number(x.checkpointCount || 0),
-          updatedAt: Number(x.updatedAt || 0)
-        }));
-      }
+    /* ==========================================================
+       BLOCK 6.3 — Invite modal: UI helpers
+    =========================================================== */
+    function qrImgUrlFor(text) {
+      const size = 220;
+      const enc = encodeURIComponent(text);
+      return `https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${enc}`;
+    }
 
-      function findLibraryEntry(id) {
-        const list = readPartyLibraryRaw();
-        return list.find((x) => x && String(x.id) === String(id)) || null;
-      }
+    function setInviteMsg(msg) {
+      if (!inviteMsg) return;
+      inviteMsg.textContent = msg || '';
+    }
 
-      // =========================
-      // Invite modal helpers
-      // =========================
-      function qrImgUrlFor(text) {
-        const size = 220;
-        const enc = encodeURIComponent(text);
-        return `https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${enc}`;
-      }
+    function renderInvitePlayers() {
+      if (!inviteList) return;
+      inviteList.innerHTML = '';
 
-      function setInviteMsg(msg) {
-        if (!inviteMsg) return;
-        inviteMsg.textContent = msg || '';
-      }
-
-      function renderInvitePlayers() {
-        if (!inviteList) return;
-        inviteList.innerHTML = '';
-
-        if (!invitePlayers.length) {
-          const li = document.createElement('li');
-          li.className = 'muted small';
-          li.textContent = 'Inga spelare tillagda ännu.';
-          inviteList.appendChild(li);
-          return;
-        }
-
-        invitePlayers.forEach((name, idx) => {
-          const li = document.createElement('li');
-          li.style.display = 'flex';
-          li.style.alignItems = 'center';
-          li.style.justifyContent = 'space-between';
-          li.style.gap = '10px';
-          li.style.padding = '10px';
-          li.style.border = '1px solid rgba(255,255,255,.10)';
-          li.style.borderRadius = '12px';
-          li.style.background = 'rgba(255,255,255,.04)';
-
-          const left = document.createElement('div');
-          left.textContent = name;
-
-          const btn = document.createElement('button');
-          btn.type = 'button';
-          btn.className = 'btn btn-ghost miniBtn';
-          btn.textContent = 'Ta bort';
-          btn.addEventListener('click', () => {
-            invitePlayers.splice(idx, 1);
-            renderInvitePlayers();
-          });
-
-          li.appendChild(left);
-          li.appendChild(btn);
-          inviteList.appendChild(li);
-        });
-      }
-
-      function buildPartyInviteLinkFromPayload(payloadJSON) {
-        // Deltagarvyn ska startas via payload (som admin export gör)
-        const encoded = encodeURIComponent(String(payloadJSON || ''));
-        if (!encoded || encoded.length > MAX_INLINE_QS_CHARS) {
-          return { ok: false, reason: 'too-large', len: encoded.length || 0 };
-        }
-
-        const base = currentBaseUrl();
-        const u = new URL('party.html', base.toString());
-        u.searchParams.set('mode', 'party');
-        u.searchParams.set('payload', encoded);
-        return { ok: true, url: u.toString() };
-      }
-
-      function openInviteModalForLibraryId(libraryId, titleName) {
-        if (!inviteOverlay) return;
-
-        const entry = findLibraryEntry(libraryId);
-        const payloadJSON = entry && typeof entry.payloadJSON === 'string' ? entry.payloadJSON : '';
-
-        if (!payloadJSON) {
-          setInviteMsg('Hittade ingen delbar data. Öppna i Admin och använd “Kopiera JSON”.');
-          if (inviteLinkInput) inviteLinkInput.value = '';
-          if (inviteQrImg) inviteQrImg.removeAttribute('src');
-        } else {
-          const built = buildPartyInviteLinkFromPayload(payloadJSON);
-          if (!built.ok) {
-            setInviteMsg('Den här kartan är för stor för länk/QR. Öppna i Admin och använd “Kopiera JSON”.');
-            if (inviteLinkInput) inviteLinkInput.value = '';
-            if (inviteQrImg) inviteQrImg.removeAttribute('src');
-          } else {
-            if (inviteLinkInput) inviteLinkInput.value = built.url;
-            if (inviteQrImg) inviteQrImg.src = qrImgUrlFor(built.url);
-            setInviteMsg('');
-          }
-        }
-
-        // Sätt titel om vi kan
-        try {
-          const t = document.getElementById('inviteTitle');
-          if (t) t.textContent = `Bjud in till: ${String(titleName || 'Skattjakt')}`;
-        } catch (_) {}
-
-        renderInvitePlayers();
-
-        inviteOverlay.style.display = 'block';
-        inviteOverlay.setAttribute('aria-hidden', 'false');
-        try { (inviteNameInput || inviteCloseBtn || inviteOverlay).focus(); } catch (_) {}
-      }
-
-      function closeInviteModal() {
-        if (!inviteOverlay) return;
-        inviteOverlay.style.display = 'none';
-        inviteOverlay.setAttribute('aria-hidden', 'true');
-        setInviteMsg('');
-      }
-
-      if (inviteCloseBtn) inviteCloseBtn.addEventListener('click', closeInviteModal);
-
-      if (inviteOverlay) {
-        inviteOverlay.addEventListener('click', (e) => {
-          if (e.target === inviteOverlay) closeInviteModal();
-        });
-      }
-
-      window.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape') closeInviteModal();
-      });
-
-      async function copyText(text, fallbackInput) {
-        try {
-          if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
-            await navigator.clipboard.writeText(text);
-            return true;
-          }
-        } catch (_) {}
-        if (fallbackInput) {
-          try {
-            fallbackInput.focus();
-            fallbackInput.select();
-            fallbackInput.setSelectionRange(0, String(fallbackInput.value || '').length);
-          } catch (_) {}
-        }
-        return false;
-      }
-
-      if (inviteCopyBtn) {
-        inviteCopyBtn.addEventListener('click', async () => {
-          const link = (inviteLinkInput && inviteLinkInput.value) ? inviteLinkInput.value : '';
-          if (!link) { setInviteMsg('Ingen länk att kopiera.'); return; }
-          const ok = await copyText(link, inviteLinkInput);
-          setInviteMsg(ok ? 'Länk kopierad.' : 'Kopiering nekades. Markera länken och kopiera manuellt.');
-        });
-      }
-
-      if (inviteShareBtn) {
-        inviteShareBtn.addEventListener('click', async () => {
-          const link = (inviteLinkInput && inviteLinkInput.value) ? inviteLinkInput.value : '';
-          if (!link) { setInviteMsg('Ingen länk att dela.'); return; }
-          try {
-            if (navigator.share) {
-              await navigator.share({ title: 'Skattjakt', text: 'Häng med på Skattjakt!', url: link });
-              setInviteMsg('Delat.');
-              return;
-            }
-          } catch (_) {}
-          setInviteMsg('Dela stöds inte här. Kopiera länken istället.');
-        });
-      }
-
-      function addPlayerFromInput() {
-        if (!inviteNameInput) return;
-        const name = String(inviteNameInput.value || '').trim();
-        if (name.length < 1) { setInviteMsg('Skriv ett namn.'); return; }
-        if (name.length > 30) { setInviteMsg('Namn är för långt (max 30).'); return; }
-        invitePlayers.push(name);
-        inviteNameInput.value = '';
-        setInviteMsg('Tillagd.');
-        renderInvitePlayers();
-      }
-
-      if (inviteAddBtn) inviteAddBtn.addEventListener('click', addPlayerFromInput);
-      if (inviteNameInput) {
-        inviteNameInput.addEventListener('keydown', (e) => {
-          if (e.key === 'Enter') { e.preventDefault(); addPlayerFromInput(); }
-        });
-      }
-
-      // =========================
-      // Render “Mina skattjakter”
-      // =========================
-      function renderPartyLibraryRow() {
-        if (!partyLibraryWrap) return;
-
-        const list = readPartyLibraryForList();
-        if (!list.length) {
-          partyLibraryWrap.innerHTML = '';
-          return;
-        }
-
-        list.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-
-        const section = document.createElement('section');
-        section.className = 'card';
-        section.setAttribute('aria-label', 'Mina skattjakter');
-
-        const head = document.createElement('div');
-        head.className = 'card__head';
-
-        const meta = document.createElement('div');
-        meta.className = 'card__meta';
-
-        const h = document.createElement('h2');
-        h.className = 'h2';
-        h.style.margin = '0';
-        h.textContent = 'Mina skattjakter';
-
-        const p = document.createElement('p');
-        p.className = 'muted small';
-        p.style.margin = '6px 0 0 0';
-        p.textContent = 'Publicerade från Admin på denna enhet. “Min karta” = redigera. “Skattjakt” = bjud in.';
-
-        meta.appendChild(h);
-        meta.appendChild(p);
-        head.appendChild(meta);
-
-        const grid = document.createElement('div');
-        grid.className = 'grid grid--modes';
-        grid.style.marginTop = '12px';
-
-        const base = currentBaseUrl();
-        const adminBase = new URL('pages/admin.html', base.toString());
-
-        function goToAdminLoad(id) {
-          const u = new URL(adminBase.toString());
-          u.searchParams.set('load', String(id));
-          window.location.assign(u.toString());
-        }
-
-        for (const item of list) {
-          const card = document.createElement('div');
-          card.className = 'card card--mode';
-          card.setAttribute('role', 'listitem');
-          card.setAttribute('tabindex', '0');
-          card.style.display = 'block';
-
-          // Valfritt: tryck på själva kortet öppnar Admin
-          card.addEventListener('click', (e) => {
-            const t = e && e.target;
-            const tag = (t && t.tagName) ? String(t.tagName).toUpperCase() : '';
-            // Klick på knapparna ska inte trigga kort-klick
-            if (tag === 'BUTTON') return;
-            goToAdminLoad(item.id);
-          });
-          card.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
-              e.preventDefault();
-              goToAdminLoad(item.id);
-            }
-          });
-
-          const top = document.createElement('div');
-          top.className = 'card__top';
-
-          const icon = document.createElement('div');
-          icon.className = 'card__icon';
-          icon.setAttribute('aria-hidden', 'true');
-          icon.textContent = '🎯';
-
-          const meta2 = document.createElement('div');
-          meta2.className = 'card__meta';
-
-          const title = document.createElement('h3');
-          title.className = 'card__title';
-          title.textContent = item.name;
-
-          const desc = document.createElement('p');
-          desc.className = 'card__desc muted';
-          desc.textContent = item.checkpointCount
-            ? `${item.checkpointCount} checkpoints • öppna i admin`
-            : 'Öppna i admin';
-
-          meta2.appendChild(title);
-          meta2.appendChild(desc);
-
-          top.appendChild(icon);
-          top.appendChild(meta2);
-
-          const bottom = document.createElement('div');
-          bottom.className = 'card__bottom';
-
-          // “Skattjakt” → modal (bjud in)
-          const btnInvite = document.createElement('button');
-          btnInvite.type = 'button';
-          btnInvite.className = 'badge';
-          btnInvite.textContent = 'Skattjakt';
-          btnInvite.setAttribute('aria-label', 'Bjud in till denna skattjakt');
-          btnInvite.addEventListener('click', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            openInviteModalForLibraryId(item.id, item.name);
-          });
-
-          // “Min karta” → admin redigera
-          const btnEdit = document.createElement('button');
-          btnEdit.type = 'button';
-          btnEdit.className = 'badge badge-success';
-          btnEdit.textContent = 'Min karta';
-          btnEdit.setAttribute('aria-label', 'Öppna i admin och redigera');
-          btnEdit.addEventListener('click', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            goToAdminLoad(item.id);
-          });
-
-          bottom.appendChild(btnInvite);
-          bottom.appendChild(btnEdit);
-
-          card.appendChild(top);
-          card.appendChild(bottom);
-
-          grid.appendChild(card);
-        }
-
-        section.appendChild(head);
-        section.appendChild(grid);
-
-        partyLibraryWrap.innerHTML = '';
-        partyLibraryWrap.appendChild(section);
-      }
-
-      // =========================
-      // err= → error card
-      // =========================
-      const err = qsGet('err');
-      const rid = qsGet('rid');
-      if (err && errorSlot) {
-        const msg = rid
-          ? `Start kunde inte genomföras. Felkod: ${err} (rid: ${rid})`
-          : `Start kunde inte genomföras. Felkod: ${err}`;
-
-        const card = renderErrorCard(msg, [
-          {
-            label: 'Rensa fel',
-            variant: 'ghost',
-            onClick: () => {
-              const url = new URL(window.location.href);
-              url.searchParams.delete('err');
-              url.searchParams.delete('rid');
-              window.history.replaceState({}, '', url.toString());
-              errorSlot.innerHTML = '';
-            }
-          }
-        ]);
-
-        errorSlot.innerHTML = '';
-        errorSlot.appendChild(card);
-      }
-
-      // Render library
-      renderPartyLibraryRow();
-
-      // =========================
-      // Autostart feedback (boot.js tar över)
-      // =========================
-      const qsMode = qsGet('mode');
-      const qsId = qsGet('id');
-      if (qsMode && qsId) {
-        try { toast('Startar…', 'info', { ttlMs: 900 }); } catch (_) {}
-        if (startHint) startHint.textContent = 'Startar…';
-        if (startBtn) {
-          startBtn.disabled = true;
-          startBtn.textContent = 'Startar…';
-        }
+      if (!invitePlayers.length) {
+        const li = document.createElement('li');
+        li.className = 'muted small';
+        li.textContent = 'Inga spelare tillagda ännu.';
+        inviteList.appendChild(li);
         return;
       }
 
-      // =========================
-      // Mode selection + Start
-      // =========================
-      let selectedMode = '';
+      invitePlayers.forEach((name, idx) => {
+        const li = document.createElement('li');
+        li.style.display = 'flex';
+        li.style.alignItems = 'center';
+        li.style.justifyContent = 'space-between';
+        li.style.gap = '10px';
+        li.style.padding = '10px';
+        li.style.border = '1px solid rgba(255,255,255,.10)';
+        li.style.borderRadius = '12px';
+        li.style.background = 'rgba(255,255,255,.04)';
 
-      function setSelectedMode(nextMode) {
-        selectedMode = (nextMode || '').trim();
+        const left = document.createElement('div');
+        left.textContent = name;
 
-        if (selectedModeLabel) {
-          selectedModeLabel.textContent =
-            selectedMode === 'zone' ? 'Naturjakt (zon)' :
-            selectedMode === 'party' ? 'Skattjakt (party)' :
-            'Inget valt';
-        }
-
-        if (startBtn) startBtn.disabled = !selectedMode;
-
-        if (startHint) {
-          startHint.textContent = selectedMode
-            ? 'Tryck Starta för att öppna demo via QR-länk.'
-            : 'Välj ett läge för att aktivera Starta.';
-        }
-
-        document.querySelectorAll('[data-mode-card]').forEach((el) => {
-          const isActive = el.getAttribute('data-mode-card') === selectedMode;
-          el.classList.toggle('is-selected', isActive);
-          el.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btn btn-ghost miniBtn';
+        btn.textContent = 'Ta bort';
+        btn.addEventListener('click', () => {
+          invitePlayers.splice(idx, 1);
+          renderInvitePlayers();
         });
+
+        li.appendChild(left);
+        li.appendChild(btn);
+        inviteList.appendChild(li);
+      });
+    }
+
+    /* ==========================================================
+       BLOCK 6.4 — Invite link builder (PATCH: rätt path + ingen dubbelkodning)
+       - Rätt sida: pages/party.html
+       - payload sätts som råtext, URLSearchParams kodar EN gång
+       - storlek checkas på ENKEL kodning
+    =========================================================== */
+    function buildPartyInviteLinkFromPayload(payloadJSON) {
+      const raw = String(payloadJSON || '');
+      const onceEncodedLen = encodeURIComponent(raw).length;
+
+      if (!raw || onceEncodedLen > MAX_INLINE_QS_CHARS) {
+        return { ok: false, reason: 'too-large', len: onceEncodedLen || 0 };
       }
 
-      document.querySelectorAll('[data-mode-card]').forEach((card) => {
-        card.addEventListener('click', () => {
-          const m = (card.getAttribute('data-mode-card') || '').trim();
-          setSelectedMode(m);
+      const base = currentBaseUrl();
+      const u = new URL('pages/party.html', base.toString());
+      u.searchParams.set('mode', 'party');
+      u.searchParams.set('payload', raw); // EN gång kodning via URLSearchParams
+      return { ok: true, url: u.toString() };
+    }
+
+    /* ==========================================================
+       BLOCK 6.5 — Invite modal: open/close + actions (copy/share/add player)
+    =========================================================== */
+    function openInviteModalForLibraryId(libraryId, titleName) {
+      if (!inviteOverlay) return;
+
+      const entry = findLibraryEntry(libraryId);
+      const payloadJSON = entry && typeof entry.payloadJSON === 'string' ? entry.payloadJSON : '';
+
+      if (!payloadJSON) {
+        setInviteMsg('Hittade ingen delbar data. Öppna i Admin och använd “Kopiera JSON”.');
+        if (inviteLinkInput) inviteLinkInput.value = '';
+        if (inviteQrImg) inviteQrImg.removeAttribute('src');
+      } else {
+        const built = buildPartyInviteLinkFromPayload(payloadJSON);
+        if (!built.ok) {
+          setInviteMsg('Den här kartan är för stor för länk/QR. Öppna i Admin och använd “Kopiera JSON”.');
+          if (inviteLinkInput) inviteLinkInput.value = '';
+          if (inviteQrImg) inviteQrImg.removeAttribute('src');
+        } else {
+          if (inviteLinkInput) inviteLinkInput.value = built.url;
+          if (inviteQrImg) inviteQrImg.src = qrImgUrlFor(built.url);
+          setInviteMsg('');
+        }
+      }
+
+      // titel
+      try {
+        const t = document.getElementById('inviteTitle');
+        if (t) t.textContent = `Bjud in till: ${String(titleName || 'Skattjakt')}`;
+      } catch (_) {}
+
+      renderInvitePlayers();
+
+      inviteOverlay.style.display = 'block';
+      inviteOverlay.setAttribute('aria-hidden', 'false');
+      try { (inviteNameInput || inviteCloseBtn || inviteOverlay).focus(); } catch (_) {}
+    }
+
+    function closeInviteModal() {
+      if (!inviteOverlay) return;
+      inviteOverlay.style.display = 'none';
+      inviteOverlay.setAttribute('aria-hidden', 'true');
+      setInviteMsg('');
+    }
+
+    if (inviteCloseBtn) inviteCloseBtn.addEventListener('click', closeInviteModal);
+
+    if (inviteOverlay) {
+      inviteOverlay.addEventListener('click', (e) => {
+        if (e.target === inviteOverlay) closeInviteModal();
+      });
+    }
+
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') closeInviteModal();
+    });
+
+    async function copyText(text, fallbackInput) {
+      try {
+        if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+          await navigator.clipboard.writeText(text);
+          return true;
+        }
+      } catch (_) {}
+      if (fallbackInput) {
+        try {
+          fallbackInput.focus();
+          fallbackInput.select();
+          fallbackInput.setSelectionRange(0, String(fallbackInput.value || '').length);
+        } catch (_) {}
+      }
+      return false;
+    }
+
+    if (inviteCopyBtn) {
+      inviteCopyBtn.addEventListener('click', async () => {
+        const link = (inviteLinkInput && inviteLinkInput.value) ? inviteLinkInput.value : '';
+        if (!link) { setInviteMsg('Ingen länk att kopiera.'); return; }
+        const ok = await copyText(link, inviteLinkInput);
+        setInviteMsg(ok ? 'Länk kopierad.' : 'Kopiering nekades. Markera länken och kopiera manuellt.');
+      });
+    }
+
+    if (inviteShareBtn) {
+      inviteShareBtn.addEventListener('click', async () => {
+        const link = (inviteLinkInput && inviteLinkInput.value) ? inviteLinkInput.value : '';
+        if (!link) { setInviteMsg('Ingen länk att dela.'); return; }
+        try {
+          if (navigator.share) {
+            await navigator.share({ title: 'Skattjakt', text: 'Häng med på Skattjakt!', url: link });
+            setInviteMsg('Delat.');
+            return;
+          }
+        } catch (_) {}
+        setInviteMsg('Dela stöds inte här. Kopiera länken istället.');
+      });
+    }
+
+    function addPlayerFromInput() {
+      if (!inviteNameInput) return;
+      const name = String(inviteNameInput.value || '').trim();
+      if (name.length < 1) { setInviteMsg('Skriv ett namn.'); return; }
+      if (name.length > 30) { setInviteMsg('Namn är för långt (max 30).'); return; }
+      invitePlayers.push(name);
+      inviteNameInput.value = '';
+      setInviteMsg('Tillagd.');
+      renderInvitePlayers();
+    }
+
+    if (inviteAddBtn) inviteAddBtn.addEventListener('click', addPlayerFromInput);
+    if (inviteNameInput) {
+      inviteNameInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); addPlayerFromInput(); }
+      });
+    }
+
+    /* ==========================================================
+       BLOCK 6.6 — Mina skattjakter: render + actions
+    =========================================================== */
+    function renderPartyLibraryRow() {
+      if (!partyLibraryWrap) return;
+
+      const list = readPartyLibraryForList();
+      if (!list.length) {
+        partyLibraryWrap.innerHTML = '';
+        return;
+      }
+
+      list.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+
+      const section = document.createElement('section');
+      section.className = 'card';
+      section.setAttribute('aria-label', 'Mina skattjakter');
+
+      const head = document.createElement('div');
+      head.className = 'card__head';
+
+      const meta = document.createElement('div');
+      meta.className = 'card__meta';
+
+      const h = document.createElement('h2');
+      h.className = 'h2';
+      h.style.margin = '0';
+      h.textContent = 'Mina skattjakter';
+
+      const p = document.createElement('p');
+      p.className = 'muted small';
+      p.style.margin = '6px 0 0 0';
+      p.textContent = 'Publicerade från Admin på denna enhet. “Min karta” = redigera. “Skattjakt” = bjud in.';
+
+      meta.appendChild(h);
+      meta.appendChild(p);
+      head.appendChild(meta);
+
+      const grid = document.createElement('div');
+      grid.className = 'grid grid--modes';
+      grid.style.marginTop = '12px';
+
+      const base = currentBaseUrl();
+      const adminBase = new URL('pages/admin.html', base.toString());
+
+      function goToAdminLoad(id) {
+        const u = new URL(adminBase.toString());
+        u.searchParams.set('load', String(id));
+        window.location.assign(u.toString());
+      }
+
+      for (const item of list) {
+        const card = document.createElement('div');
+        card.className = 'card card--mode';
+        card.setAttribute('role', 'listitem');
+        card.setAttribute('tabindex', '0');
+        card.style.display = 'block';
+
+        // Klick på kortet öppnar Admin (valfritt men praktiskt)
+        card.addEventListener('click', (e) => {
+          const t = e && e.target;
+          const tag = (t && t.tagName) ? String(t.tagName).toUpperCase() : '';
+          if (tag === 'BUTTON') return;
+          goToAdminLoad(item.id);
         });
         card.addEventListener('keydown', (e) => {
           if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault();
-            const m = (card.getAttribute('data-mode-card') || '').trim();
-            setSelectedMode(m);
+            goToAdminLoad(item.id);
           }
         });
-      });
 
-      if (startBtn) {
-        startBtn.addEventListener('click', () => {
-          if (!selectedMode) return;
+        const top = document.createElement('div');
+        top.className = 'card__top';
 
-          const id = selectedMode === 'zone' ? 'skogsrundan'
-                   : selectedMode === 'party' ? 'kalas_demo'
-                   : '';
-          if (!id) return;
+        const icon = document.createElement('div');
+        icon.className = 'card__icon';
+        icon.setAttribute('aria-hidden', 'true');
+        icon.textContent = '🎯';
 
-          startBtn.disabled = true;
-          startBtn.textContent = 'Startar…';
-          if (startHint) startHint.textContent = 'Startar…';
-          try { toast('Startar…', 'info', { ttlMs: 900 }); } catch (_) {}
+        const meta2 = document.createElement('div');
+        meta2.className = 'card__meta';
 
-          const base = currentBaseUrl();
-          base.searchParams.set('mode', selectedMode);
-          base.searchParams.set('id', id);
+        const title = document.createElement('h3');
+        title.className = 'card__title';
+        title.textContent = item.name;
 
-          window.location.assign(base.toString());
+        const desc = document.createElement('p');
+        desc.className = 'card__desc muted';
+        desc.textContent = item.checkpointCount
+          ? `${item.checkpointCount} checkpoints • öppna i admin`
+          : 'Öppna i admin';
+
+        meta2.appendChild(title);
+        meta2.appendChild(desc);
+
+        top.appendChild(icon);
+        top.appendChild(meta2);
+
+        const bottom = document.createElement('div');
+        bottom.className = 'card__bottom';
+
+        const btnInvite = document.createElement('button');
+        btnInvite.type = 'button';
+        btnInvite.className = 'badge';
+        btnInvite.textContent = 'Skattjakt';
+        btnInvite.setAttribute('aria-label', 'Bjud in till denna skattjakt');
+        btnInvite.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          openInviteModalForLibraryId(item.id, item.name);
         });
+
+        const btnEdit = document.createElement('button');
+        btnEdit.type = 'button';
+        btnEdit.className = 'badge badge-success';
+        btnEdit.textContent = 'Min karta';
+        btnEdit.setAttribute('aria-label', 'Öppna i admin och redigera');
+        btnEdit.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          goToAdminLoad(item.id);
+        });
+
+        bottom.appendChild(btnInvite);
+        bottom.appendChild(btnEdit);
+
+        card.appendChild(top);
+        card.appendChild(bottom);
+
+        grid.appendChild(card);
       }
-    })();
-  </script>
-</body>
-</html>
+
+      section.appendChild(head);
+      section.appendChild(grid);
+
+      partyLibraryWrap.innerHTML = '';
+      partyLibraryWrap.appendChild(section);
+    }
+
+    /* ==========================================================
+       BLOCK 6.7 — Boot: err-card + library + autostart + mode/start
+    =========================================================== */
+    // err= → error card
+    const err = qsGet('err');
+    const rid = qsGet('rid');
+    if (err && errorSlot) {
+      const msg = rid
+        ? `Start kunde inte genomföras. Felkod: ${err} (rid: ${rid})`
+        : `Start kunde inte genomföras. Felkod: ${err}`;
+
+      const card = renderErrorCard(msg, [
+        {
+          label: 'Rensa fel',
+          variant: 'ghost',
+          onClick: () => {
+            const url = new URL(window.location.href);
+            url.searchParams.delete('err');
+            url.searchParams.delete('rid');
+            window.history.replaceState({}, '', url.toString());
+            errorSlot.innerHTML = '';
+          }
+        }
+      ]);
+
+      errorSlot.innerHTML = '';
+      errorSlot.appendChild(card);
+    }
+
+    // Render library
+    renderPartyLibraryRow();
+
+    // Autostart feedback (boot.js tar över)
+    const qsMode = qsGet('mode');
+    const qsId = qsGet('id');
+    if (qsMode && qsId) {
+      try { toast('Startar…', 'info', { ttlMs: 900 }); } catch (_) {}
+      if (startHint) startHint.textContent = 'Startar…';
+      if (startBtn) {
+        startBtn.disabled = true;
+        startBtn.textContent = 'Startar…';
+      }
+      return;
+    }
+
+    // Mode selection + Start
+    let selectedMode = '';
+
+    function setSelectedMode(nextMode) {
+      selectedMode = (nextMode || '').trim();
+
+      if (selectedModeLabel) {
+        selectedModeLabel.textContent =
+          selectedMode === 'zone' ? 'Naturjakt (zon)' :
+          selectedMode === 'party' ? 'Skattjakt (party)' :
+          'Inget valt';
+      }
+
+      if (startBtn) startBtn.disabled = !selectedMode;
+
+      if (startHint) {
+        startHint.textContent = selectedMode
+          ? 'Tryck Starta för att öppna demo via QR-länk.'
+          : 'Välj ett läge för att aktivera Starta.';
+      }
+
+      document.querySelectorAll('[data-mode-card]').forEach((el) => {
+        const isActive = el.getAttribute('data-mode-card') === selectedMode;
+        el.classList.toggle('is-selected', isActive);
+        el.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+      });
+    }
+
+    document.querySelectorAll('[data-mode-card]').forEach((card) => {
+      card.addEventListener('click', () => {
+        const m = (card.getAttribute('data-mode-card') || '').trim();
+        setSelectedMode(m);
+      });
+      card.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          const m = (card.getAttribute('data-mode-card') || '').trim();
+          setSelectedMode(m);
+        }
+      });
+    });
+
+    if (startBtn) {
+      startBtn.addEventListener('click', () => {
+        if (!selectedMode) return;
+
+        const id = selectedMode === 'zone' ? 'skogsrundan'
+                 : selectedMode === 'party' ? 'kalas_demo'
+                 : '';
+        if (!id) return;
+
+        startBtn.disabled = true;
+        startBtn.textContent = 'Startar…';
+        if (startHint) startHint.textContent = 'Startar…';
+        try { toast('Startar…', 'info', { ttlMs: 900 }); } catch (_) {}
+
+        const base = currentBaseUrl();
+        base.searchParams.set('mode', selectedMode);
+        base.searchParams.set('id', id);
+
+        window.location.assign(base.toString());
+      });
+    }
+  })();
+</script>
