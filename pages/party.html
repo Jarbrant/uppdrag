@@ -4,6 +4,8 @@
      AO 5/8 (FAS 1.5) — Clear + reveal circle + nästa aktiv
      AO 6/8 (FAS 2.0) — Fog-of-war “papper/sepia”-look
      AO 7/8 (FAS 2.0) — Grid-läge (alternativ vy): Toggle Karta/Grid + grid container
+     AO 1/3 (FAS 1.0) — Loot-val “Välj 1 av 3” (UI hooks + Mina belöningar panel)
+     AO 3/3 (FAS 1.0) — Voucher/QR UI: voucher-modal + hooks
      Policy: UI-only, Leaflet via CDN (OK)
 ============================================================ -->
 <!doctype html>
@@ -174,15 +176,121 @@
           </div>
         </section>
 
+        <!-- ======================================================
+             AO 1/3 + AO 3/3 — Mina belöningar (vouchers i session)
+        ======================================================= -->
+        <section class="card paperCard" aria-label="Mina belöningar">
+          <div class="card__head">
+            <div class="card__meta">
+              <h2 class="h2" style="margin:0">Mina belöningar</h2>
+              <p class="muted small" style="margin:6px 0 0 0">
+                Välj belöning efter checkpoint. Visa QR i butik för inlösen.
+              </p>
+            </div>
+          </div>
+
+          <div id="rewardsPanel" class="rewardsPanel">
+            <div id="rewardsEmpty" class="muted small">Inga belöningar ännu.</div>
+            <ul id="rewardsList" class="rewardsList" aria-label="Lista med belöningar"></ul>
+            <!-- HOOK: rewards-list -->
+          </div>
+        </section>
+
         <div class="muted small footerNote">
-          Deltagarvy (AO 7/8). Toggle Karta/Grid. UI-state i party-map.js.
+          Deltagarvy. Toggle Karta/Grid. UI-state i party-map.js.
         </div>
       </div>
     </main>
+
+    <!-- ========================================================
+         AO 1/3 — Loot modal (dold som standard)
+    ========================================================= -->
+    <div id="lootOverlay" class="lootOverlay is-hidden" aria-hidden="true"> <!-- HOOK: loot-overlay -->
+      <div class="lootBackdrop" data-close="1"></div>
+
+      <section
+        id="lootModal"
+        class="lootModal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="lootTitle"
+        aria-describedby="lootDesc"
+      >
+        <header class="lootHead">
+          <div class="lootHead__meta">
+            <h3 id="lootTitle" class="h3" style="margin:0">Välj en belöning</h3>
+            <p id="lootDesc" class="muted small" style="margin:6px 0 0 0">Du får 1 av 3</p>
+          </div>
+        </header>
+
+        <div id="lootCards" class="lootCards" role="list" aria-label="Belöningsval">
+          <!-- cards renderas av JS -->
+        </div>
+
+        <div class="lootActions">
+          <button id="lootSkipBtn" class="btn btn-ghost" type="button">Hoppa över</button>
+          <!-- HOOK: loot-skip -->
+        </div>
+      </section>
+    </div>
+
+    <!-- ========================================================
+         AO 3/3 — Voucher modal (QR + länk + status)
+    ========================================================= -->
+    <div id="voucherOverlay" class="voucherOverlay is-hidden" aria-hidden="true"> <!-- HOOK: voucher-overlay -->
+      <div class="voucherBackdrop" data-close="1"></div>
+
+      <section
+        id="voucherModal"
+        class="voucherModal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="voucherTitle"
+      >
+        <header class="voucherHead">
+          <div class="voucherHead__meta">
+            <h3 id="voucherTitle" class="h3" style="margin:0">Din belöning</h3>
+            <p id="voucherMeta" class="muted small" style="margin:6px 0 0 0">—</p>
+            <!-- HOOK: voucher-meta -->
+          </div>
+
+          <div class="voucherHead__side">
+            <span id="voucherStatusBadge" class="badge badge--neutral">—</span>
+            <!-- HOOK: voucher-status-badge -->
+          </div>
+        </header>
+
+        <div class="voucherBody">
+          <div class="qrWrap" aria-label="QR kod">
+            <img id="voucherQrImg" class="qrImg" alt="QR-kod" />
+            <!-- HOOK: voucher-qr-img -->
+            <div class="muted small mono" id="voucherCodeText">—</div>
+            <!-- HOOK: voucher-code -->
+          </div>
+
+          <div class="voucherControls">
+            <label class="label2" for="voucherLinkInput">Länk</label>
+            <input id="voucherLinkInput" class="input" type="text" readonly />
+            <!-- HOOK: voucher-link-input -->
+
+            <div class="voucherBtns">
+              <button id="voucherCopyBtn" class="btn btn-ghost" type="button">Kopiera</button>
+              <button id="voucherShareBtn" class="btn btn-ghost" type="button">Dela</button>
+              <button id="voucherRefreshBtn" class="btn btn-ghost" type="button">Uppdatera status</button>
+              <button id="voucherCloseBtn" class="btn btn-primary" type="button">Stäng</button>
+            </div>
+
+            <div id="voucherHint" class="muted small" style="margin-top:8px"></div>
+            <!-- HOOK: voucher-hint -->
+          </div>
+        </div>
+      </section>
+    </div>
+
   </div>
 
   <!-- ==========================================================
-       BLOCK 6 — Page-only inline styles (minimal)
+       BLOCK 6 — Page-only inline styles (minimal + AO modals)
   =========================================================== -->
   <style>
     .row { display:flex; align-items:center; gap: var(--sp-3); }
@@ -236,7 +344,7 @@
       border-radius: 14px;
     }
 
-    /* AO 7/8 toggle + grid (light styles here, main polish can be moved to main.css later) */
+    /* AO 7/8 toggle + grid */
     .viewToggle { margin-top: 12px; display:flex; gap: 10px; flex-wrap: wrap; }
     .viewTab.is-active { border-color: rgba(110,231,255,.40); background: rgba(110,231,255,.10); }
     .is-hidden { display:none !important; }
@@ -259,6 +367,143 @@
     .gridCell.is-active { border-color: rgba(110,231,255,.55); background: rgba(110,231,255,.10); }
     .gridCell.is-cleared { border-color: rgba(74,222,128,.45); background: rgba(74,222,128,.10); }
     .gridCell.is-locked { border-style: dashed; }
+
+    /* ==========================================================
+       AO 1/3 + AO 3/3 — Rewards list
+    =========================================================== */
+    .rewardsPanel { margin-top: 12px; display:grid; gap: 10px; }
+    .rewardsList { margin:0; padding:0; list-style:none; display:grid; gap: 10px; }
+    .rewardItem {
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,.05);
+      border-radius: 14px;
+      padding: 12px 12px;
+      display:flex;
+      align-items:flex-start;
+      justify-content:space-between;
+      gap: 12px;
+    }
+    .rewardItem__meta { min-width:0; display:grid; gap: 4px; }
+    .rewardPartner { font-weight: 900; }
+    .rewardTitle { font-weight: 900; }
+    .rewardRight { display:flex; flex-direction:column; align-items:flex-end; gap: 8px; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+    .badge {
+      display:inline-flex; align-items:center; justify-content:center;
+      padding: 7px 10px; border-radius: 999px;
+      border: 1px solid rgba(255,255,255,.16);
+      background: rgba(255,255,255,.05);
+      font-weight: 900; font-size: 12px; letter-spacing: .08em;
+      min-width: 92px;
+    }
+    .badge--valid { border-color: rgba(74,222,128,.45); background: rgba(74,222,128,.10); }
+    .badge--redeemed { border-color: rgba(110,231,255,.45); background: rgba(110,231,255,.10); }
+    .badge--expired { border-color: rgba(251,113,133,.45); background: rgba(251,113,133,.10); }
+    .badge--neutral { border-color: rgba(255,255,255,.16); background: rgba(255,255,255,.05); }
+
+    /* ==========================================================
+       AO 1/3 — Loot modal
+    =========================================================== */
+    .lootOverlay {
+      position: fixed; inset: 0; z-index: 2500;
+      display:flex; align-items:flex-end; justify-content:center;
+      padding: 12px;
+    }
+    .lootBackdrop {
+      position:absolute; inset:0;
+      background: rgba(0,0,0,.55);
+      backdrop-filter: blur(6px);
+    }
+    .lootModal {
+      position: relative;
+      width: 100%; max-width: 720px;
+      border: 1px solid var(--border);
+      background: rgba(16, 26, 47, .92);
+      border-radius: 16px;
+      box-shadow: 0 20px 50px rgba(0,0,0,.45);
+      padding: 14px;
+      display:grid;
+      gap: 12px;
+    }
+    .lootHead { display:flex; align-items:flex-start; justify-content:space-between; gap: 12px; }
+    .lootCards { display:grid; gap: 10px; grid-template-columns: 1fr; }
+    @media (min-width: 720px) {
+      .lootOverlay { align-items:center; padding: 16px; }
+      .lootCards { grid-template-columns: repeat(3, 1fr); }
+    }
+    .lootCardBtn {
+      width: 100%;
+      text-align:left;
+      border: 1px solid rgba(255,255,255,.14);
+      background: rgba(255,255,255,.06);
+      border-radius: 16px;
+      padding: 12px;
+      min-height: 92px;
+      cursor: pointer;
+      display:grid;
+      gap: 6px;
+    }
+    .lootCardBtn:focus-visible { box-shadow: var(--focus); }
+    .lootCardTitle { font-weight: 900; display:flex; align-items:center; gap: 8px; }
+    .lootCardPartner { font-weight: 900; opacity: .92; }
+    .lootCardShort { opacity: .88; }
+    .lootFinalPill {
+      display:inline-flex; align-items:center; justify-content:center;
+      padding: 4px 8px; border-radius: 999px;
+      border: 1px solid rgba(255,214,150,.28);
+      background: rgba(255,214,150,.12);
+      font-weight: 900; font-size: 11px; letter-spacing: .10em;
+    }
+    .lootActions { display:flex; justify-content:flex-end; gap: 10px; }
+
+    /* ==========================================================
+       AO 3/3 — Voucher modal
+    =========================================================== */
+    .voucherOverlay {
+      position: fixed; inset: 0; z-index: 2600;
+      display:flex; align-items:flex-end; justify-content:center;
+      padding: 12px;
+    }
+    .voucherBackdrop {
+      position:absolute; inset:0;
+      background: rgba(0,0,0,.55);
+      backdrop-filter: blur(6px);
+    }
+    .voucherModal {
+      position: relative;
+      width: 100%; max-width: 760px;
+      border: 1px solid var(--border);
+      background: rgba(16, 26, 47, .94);
+      border-radius: 16px;
+      box-shadow: 0 20px 50px rgba(0,0,0,.45);
+      padding: 14px;
+      display:grid;
+      gap: 12px;
+    }
+    .voucherHead { display:flex; align-items:flex-start; justify-content:space-between; gap: 12px; }
+    .voucherBody { display:grid; gap: 12px; }
+    @media (min-width: 720px) {
+      .voucherOverlay { align-items:center; padding: 16px; }
+      .voucherBody { grid-template-columns: 260px 1fr; align-items:start; }
+    }
+    .qrWrap {
+      border: 1px solid rgba(255,255,255,.10);
+      background: rgba(255,255,255,.03);
+      border-radius: 16px;
+      padding: 12px;
+      display:grid;
+      gap: 10px;
+      justify-items:center;
+    }
+    .qrImg {
+      width: 220px; height: 220px;
+      border-radius: 12px;
+      background: rgba(255,255,255,.04);
+      border: 1px solid rgba(255,255,255,.10);
+      object-fit: cover;
+    }
+    .voucherControls { display:grid; gap: 10px; }
+    .voucherBtns { display:flex; flex-wrap:wrap; gap: 10px; justify-content:flex-end; }
   </style>
 
   <!-- ==========================================================
