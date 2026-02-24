@@ -1,17 +1,21 @@
 /* ============================================================
  * FIL: worker/index.js (HEL FIL)
- * AO 1/6 — Worker + D1: Partners + Invites + Rewards + pick3
- * AO 5/6 — Claim voucher (stock--) + vouchers i D1 + verify endpoints
- * AO 6/6 — Stats + riktig admin-lista (partners/rewards/vouchers)
+ * AO-LOGIN-01 (1/2) — Admin login + token (Bearer)
  *
  * Bindings (env):
  *   - DB (D1 binding)
- *   - ADMIN_KEY (secret)
  *   - PIN_SALT (secret, för pinHash)
  *   - CORS_ORIGINS (comma-separated origins, fail-closed)
  *
+ * NEW Admin auth (Bearer token):
+ *   - ADMIN_USER (t.ex. "anders")
+ *   - ADMIN_PASS_HASH (sha256 hex av lösenordet)
+ *   - ADMIN_TOKEN_SECRET (hemlig sträng för HMAC-signering)
+ *   - ADMIN_TOKEN_TTL_MIN (default 60)
+ *
  * Endpoints:
- *   Admin (X-ADMIN-KEY):
+ *   Admin (Bearer):
+ *     POST /admin/login                 { username, password } -> { ok:true, adminToken, expiresAt }
  *     POST /admin/partners/create
  *     POST /admin/partners/invite
  *     GET  /admin/partners/list
@@ -39,6 +43,11 @@
  *   - Fail-closed: validera input, 400/403/404/409/410/500
  *   - CORS: endast origins i CORS_ORIGINS, annars 403 (fail-closed)
  *   - Inga persondata (inga pinHash i svar)
+ *
+ * ÄNDRINGSLOGG (≤8):
+ * 1) NY: /admin/login (username+password) -> HMAC-signad token + expiresAt
+ * 2) NY: Bearer-verifiering för ALLA /admin/* endpoints (403 om saknas/ogiltig/utgången)
+ * 3) CORS: allow-headers inkluderar Authorization
  * ============================================================ */
 
 /* ============================================================
@@ -102,7 +111,7 @@ function corsHeadersFor(req, allowed) {
     return {
       'access-control-allow-origin': '*',
       'access-control-allow-methods': 'GET,POST,OPTIONS',
-      'access-control-allow-headers': 'content-type,x-admin-key',
+      'access-control-allow-headers': 'content-type,authorization',
       'access-control-max-age': '86400',
       'access-control-allow-credentials': 'false'
     };
@@ -112,7 +121,7 @@ function corsHeadersFor(req, allowed) {
   return {
     'access-control-allow-origin': origin,
     'access-control-allow-methods': 'GET,POST,OPTIONS',
-    'access-control-allow-headers': 'content-type,x-admin-key',
+    'access-control-allow-headers': 'content-type,authorization',
     'access-control-max-age': '86400',
     'access-control-allow-credentials': 'false'
   };
@@ -188,14 +197,168 @@ function pick3Unique(rows, rngFn) {
 }
 
 /* ============================================================
- * BLOCK 5 — Auth helpers
+ * BLOCK 5 — Admin auth (AO-LOGIN-01): HMAC token
  * ============================================================ */
-function requireAdmin(req, env) {
-  const adminKey = asText(env.ADMIN_KEY);
-  const headerKey = asText(req.headers.get('x-admin-key'));
-  return !!adminKey && headerKey === adminKey;
+function b64urlFromBytes(bytes) {
+  let bin = '';
+  const arr = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes || []);
+  for (let i = 0; i < arr.length; i++) bin += String.fromCharCode(arr[i]);
+  const b64 = btoa(bin);
+  return b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
 }
 
+function b64urlFromString(str) {
+  return b64urlFromBytes(enc.encode((str ?? '').toString()));
+}
+
+function b64urlToBytes(b64url) {
+  const s = asText(b64url).replace(/-/g, '+').replace(/_/g, '/');
+  const pad = s.length % 4 === 0 ? '' : '='.repeat(4 - (s.length % 4));
+  const b64 = s + pad;
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+async function hmacSignBytes(secret, dataStr) {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    enc.encode(asText(secret)),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  const sig = await crypto.subtle.sign('HMAC', key, enc.encode(asText(dataStr)));
+  return new Uint8Array(sig);
+}
+
+async function timingSafeEqualBytes(a, b) {
+  const aa = a instanceof Uint8Array ? a : new Uint8Array(a || []);
+  const bb = b instanceof Uint8Array ? b : new Uint8Array(b || []);
+  if (aa.length !== bb.length) return false;
+  let diff = 0;
+  for (let i = 0; i < aa.length; i++) diff |= (aa[i] ^ bb[i]);
+  return diff === 0;
+}
+
+function adminTokenTtlMin(env) {
+  const n = clampInt(env.ADMIN_TOKEN_TTL_MIN, 5, 24 * 60);
+  return Number.isFinite(n) ? n : 60;
+}
+
+async function makeAdminToken(env, username) {
+  const secret = asText(env.ADMIN_TOKEN_SECRET);
+  if (!secret) return { ok: false, token: '' };
+
+  const iat = nowMs();
+  const exp = iat + adminTokenTtlMin(env) * 60 * 1000;
+
+  const header = { alg: 'HS256', typ: 'JWT' };
+  const payload = { sub: asText(username), iat, exp };
+
+  const p1 = b64urlFromString(JSON.stringify(header));
+  const p2 = b64urlFromString(JSON.stringify(payload));
+  const signingInput = `${p1}.${p2}`;
+
+  const sigBytes = await hmacSignBytes(secret, signingInput);
+  const sig = b64urlFromBytes(sigBytes);
+
+  return { ok: true, token: `${signingInput}.${sig}`, exp };
+}
+
+async function verifyAdminToken(env, token) {
+  const secret = asText(env.ADMIN_TOKEN_SECRET);
+  if (!secret) return { ok: false, code: 'forbidden' };
+
+  const raw = asText(token);
+  const parts = raw.split('.');
+  if (parts.length !== 3) return { ok: false, code: 'forbidden' };
+
+  const [p1, p2, sig] = parts;
+  if (!p1 || !p2 || !sig) return { ok: false, code: 'forbidden' };
+
+  // verify signature
+  const signingInput = `${p1}.${p2}`;
+  let expectedSigBytes;
+  try {
+    expectedSigBytes = await hmacSignBytes(secret, signingInput);
+  } catch (_) {
+    return { ok: false, code: 'forbidden' };
+  }
+
+  let gotSigBytes;
+  try {
+    gotSigBytes = b64urlToBytes(sig);
+  } catch (_) {
+    return { ok: false, code: 'forbidden' };
+  }
+
+  const sigOk = await timingSafeEqualBytes(expectedSigBytes, gotSigBytes);
+  if (!sigOk) return { ok: false, code: 'forbidden' };
+
+  // parse payload
+  let payload;
+  try {
+    const payloadJson = new TextDecoder().decode(b64urlToBytes(p2));
+    payload = JSON.parse(payloadJson);
+  } catch (_) {
+    return { ok: false, code: 'forbidden' };
+  }
+
+  const sub = asText(payload?.sub);
+  const iat = Number(payload?.iat);
+  const exp = Number(payload?.exp);
+
+  if (!sub || !Number.isFinite(iat) || !Number.isFinite(exp)) return { ok: false, code: 'forbidden' };
+  if (exp <= nowMs()) return { ok: false, code: 'forbidden' };
+
+  // Fail-closed: lås till env.ADMIN_USER (MVP)
+  const envUser = asText(env.ADMIN_USER);
+  if (!envUser || sub !== envUser) return { ok: false, code: 'forbidden' };
+
+  return { ok: true, sub, iat, exp };
+}
+
+function bearerFromAuthHeader(req) {
+  const h = asText(req.headers.get('authorization'));
+  if (!h) return '';
+  const m = h.match(/^Bearer\s+(.+)$/i);
+  return m ? asText(m[1]) : '';
+}
+
+async function requireAdminBearer(req, env) {
+  const token = bearerFromAuthHeader(req);
+  if (!token) return { ok: false };
+  const v = await verifyAdminToken(env, token);
+  return v.ok ? { ok: true, sub: v.sub, exp: v.exp } : { ok: false };
+}
+
+async function adminLogin(req, env) {
+  const parsed = await readJson(req);
+  if (!parsed.ok || !isPlainObject(parsed.value)) return { status: 400, body: { ok: false, error: 'bad_request' } };
+
+  const username = asText(parsed.value.username);
+  const password = asText(parsed.value.password);
+
+  const envUser = asText(env.ADMIN_USER);
+  const envPassHash = asText(env.ADMIN_PASS_HASH);
+
+  if (!username || !password || !envUser || !envPassHash) return { status: 403, body: { ok: false, error: 'forbidden' } };
+  if (username !== envUser) return { status: 403, body: { ok: false, error: 'forbidden' } };
+
+  const ph = await sha256Hex(password);
+  if (ph !== envPassHash) return { status: 403, body: { ok: false, error: 'forbidden' } };
+
+  const tok = await makeAdminToken(env, username);
+  if (!tok.ok || !tok.token) return { status: 500, body: { ok: false, error: 'server_error' } };
+
+  return { status: 200, body: { ok: true, adminToken: tok.token, expiresAt: tok.exp } };
+}
+
+/* ============================================================
+ * BLOCK 6 — Partner PIN auth
+ * ============================================================ */
 async function verifyPartnerPin(partnerId, pin, env) {
   const expected = await env.DB
     .prepare('SELECT pinHash, isActive FROM partners WHERE partnerId = ?')
@@ -215,11 +378,10 @@ async function verifyPartnerPin(partnerId, pin, env) {
 }
 
 /* ============================================================
- * BLOCK 6 — Vouchers table guard (fail-closed)
+ * BLOCK 7 — Vouchers table guard (fail-closed)
  * ============================================================ */
 async function vouchersTableOk(env) {
   try {
-    // Om tabellen saknas kastar D1
     await env.DB.prepare('SELECT voucherId FROM vouchers LIMIT 1').all();
     return true;
   } catch (_) {
@@ -233,7 +395,7 @@ function dbMissingTableResponse() {
 }
 
 /* ============================================================
- * BLOCK 7 — Endpoint handlers: Admin (POST)
+ * BLOCK 8 — Endpoint handlers: Admin (POST)
  * ============================================================ */
 async function adminCreatePartner(req, env) {
   const parsed = await readJson(req);
@@ -288,7 +450,7 @@ async function adminInvitePartner(req, env) {
 }
 
 /* ============================================================
- * BLOCK 8 — Endpoint handlers: Admin (GET) AO 6/6
+ * BLOCK 9 — Endpoint handlers: Admin (GET) AO 6/6
  * ============================================================ */
 async function adminPartnersList(env) {
   const out = await env.DB
@@ -320,7 +482,7 @@ async function adminPartnerRewards(env, partnerId) {
 }
 
 function windowHoursFromUrl(url) {
-  const wh = clampInt(url.searchParams.get('windowHours'), 1, 24 * 30); // max 30d
+  const wh = clampInt(url.searchParams.get('windowHours'), 1, 24 * 30);
   return Number.isFinite(wh) ? wh : 24;
 }
 
@@ -332,7 +494,6 @@ async function adminStatsOverview(env, url) {
   const now = nowMs();
   const since = now - wh * 60 * 60 * 1000;
 
-  // counts (expired räknas via CASE)
   const counts = await env.DB.prepare(`
     SELECT
       SUM(CASE WHEN createdAt >= ? THEN 1 ELSE 0 END) AS vouchersCreated,
@@ -341,7 +502,6 @@ async function adminStatsOverview(env, url) {
     FROM vouchers
   `).bind(since, since, since).first();
 
-  // top partners
   const topPartners = await env.DB.prepare(`
     SELECT
       v.partnerId AS partnerId,
@@ -356,7 +516,6 @@ async function adminStatsOverview(env, url) {
     LIMIT 5
   `).bind(since, since, since, since).all();
 
-  // top rewards
   const topRewards = await env.DB.prepare(`
     SELECT
       v.rewardId AS rewardId,
@@ -432,7 +591,7 @@ async function adminStatsPartner(env, partnerId, url) {
 }
 
 /* ============================================================
- * BLOCK 9 — Partner invite flow
+ * BLOCK 10 — Partner invite flow
  * ============================================================ */
 async function partnerSetPin(req, env) {
   const parsed = await readJson(req);
@@ -475,7 +634,7 @@ async function partnerSetPin(req, env) {
 }
 
 /* ============================================================
- * BLOCK 10 — Rewards CRUD (partnerId+pin)
+ * BLOCK 11 — Rewards CRUD (partnerId+pin)
  * ============================================================ */
 function validateRewardType(t) {
   const x = asText(t);
@@ -609,7 +768,7 @@ async function rewardsList(req, env, url) {
 }
 
 /* ============================================================
- * BLOCK 11 — Game: pick3 (AO 5/6 policy: fail-soft 0..3)
+ * BLOCK 12 — Game: pick3 (fail-soft 0..3)
  * ============================================================ */
 async function rewardsPick3(req, env, url) {
   const tierQ = asText(url.searchParams.get('tier'));
@@ -651,7 +810,7 @@ async function rewardsPick3(req, env, url) {
 }
 
 /* ============================================================
- * BLOCK 12 — Vouchers (AO 5/6 + verify kompatibilitet)
+ * BLOCK 13 — Vouchers (verify kompatibilitet + claim)
  * ============================================================ */
 function normalizeVoucherStatus(row) {
   const s = asText(row?.status);
@@ -676,7 +835,6 @@ async function voucherGet(req, env, voucherId) {
   const now = nowMs();
   let status = normalizeVoucherStatus(row);
 
-  // expired maintenance (lazy)
   if (status === 'valid' && Number(row.expiresAt) < now) {
     status = 'expired';
     try {
@@ -715,7 +873,6 @@ async function voucherRedeem(req, env) {
   if (!voucherId || !partnerId || !pin) return { status: 400, body: { ok: false, error: 'bad_request' } };
   if (voucherId.length > 80 || partnerId.length > 80 || pin.length > 32) return { status: 400, body: { ok: false, error: 'bad_request' } };
 
-  // auth partner pin
   const auth = await verifyPartnerPin(partnerId, pin, env);
   if (!auth.ok) return { status: auth.code === 'not_found' ? 404 : 403, body: { ok: false, error: auth.code === 'not_found' ? 'not_found' : 'forbidden' } };
 
@@ -730,7 +887,6 @@ async function voucherRedeem(req, env) {
   const now = nowMs();
   let status = normalizeVoucherStatus(row);
 
-  // expired check
   if (status === 'valid' && Number(row.expiresAt) < now) {
     try {
       await env.DB.prepare(`UPDATE vouchers SET status = 'expired' WHERE voucherId = ? AND status = 'valid'`).bind(voucherId).run();
@@ -741,7 +897,6 @@ async function voucherRedeem(req, env) {
   if (status === 'expired') return { status: 410, body: { ok: false, error: 'expired' } };
   if (status === 'redeemed') return { status: 409, body: { ok: false, error: 'already_redeemed' } };
 
-  // redeem atomiskt-ish: uppdatera bara om status=valid
   const redeemedAt = now;
   const upd = await env.DB.prepare(`
     UPDATE vouchers
@@ -749,7 +904,6 @@ async function voucherRedeem(req, env) {
     WHERE voucherId = ? AND status = 'valid'
   `).bind(redeemedAt, voucherId).run();
 
-  // om någon annan hann före
   if (!upd || Number(upd.changes) !== 1) {
     const again = await env.DB.prepare('SELECT status, expiresAt FROM vouchers WHERE voucherId = ?').bind(voucherId).first();
     const s2 = normalizeVoucherStatus(again);
@@ -761,9 +915,6 @@ async function voucherRedeem(req, env) {
   return { status: 200, body: { ok: true, status: 'redeemed', redeemedAt } };
 }
 
-/* ============================================================
- * BLOCK 13 — Claim (AO 5/6): stock-- + voucher create
- * ============================================================ */
 async function voucherClaim(req, env) {
   const tableOk = await vouchersTableOk(env);
   if (!tableOk) return dbMissingTableResponse();
@@ -780,7 +931,6 @@ async function voucherClaim(req, env) {
 
   const ts = nowMs();
 
-  // 1) försök minska stock atomiskt (WHERE stock>0 AND isActive=1)
   const upd = await env.DB.prepare(`
     UPDATE rewards
     SET stock = stock - 1, updatedAt = ?
@@ -788,7 +938,6 @@ async function voucherClaim(req, env) {
   `).bind(ts, rewardId).run();
 
   if (!upd || Number(upd.changes) !== 1) {
-    // skilj på out_of_stock vs not_found/inactive
     const ex = await env.DB.prepare('SELECT rewardId, isActive, stock FROM rewards WHERE rewardId = ?').bind(rewardId).first();
     if (!ex) return { status: 404, body: { ok: false, error: 'not_found' } };
     if (Number(ex.isActive) !== 1) return { status: 404, body: { ok: false, error: 'not_found' } };
@@ -796,7 +945,6 @@ async function voucherClaim(req, env) {
     return { status: 500, body: { ok: false, error: 'server_error' } };
   }
 
-  // 2) hämta reward + partner
   const r = await env.DB.prepare(`
     SELECT r.rewardId, r.partnerId, r.title, r.ttlMinutes, r.tier, p.name AS partnerName
     FROM rewards r
@@ -804,10 +952,7 @@ async function voucherClaim(req, env) {
     WHERE r.rewardId = ?
   `).bind(rewardId).first();
 
-  if (!r) {
-    // extrem edge: reward borta efter update (ska inte hända)
-    return { status: 500, body: { ok: false, error: 'server_error' } };
-  }
+  if (!r) return { status: 500, body: { ok: false, error: 'server_error' } };
 
   const ttlMinutes = clampInt(r.ttlMinutes, 1, 60 * 24 * 30);
   const expiresAt = ts + (Number.isFinite(ttlMinutes) ? ttlMinutes : 120) * 60 * 1000;
@@ -815,7 +960,6 @@ async function voucherClaim(req, env) {
   const voucherId = safeUuid();
   const partnerId = asText(r.partnerId);
 
-  // 3) skapa voucher
   try {
     await env.DB.prepare(`
       INSERT INTO vouchers
@@ -831,7 +975,6 @@ async function voucherClaim(req, env) {
       checkpointIndex
     ).run();
   } catch (_) {
-    // fail-closed: om insert fail → vi har redan minskat stock. (accepteras i MVP)
     return { status: 500, body: { ok: false, error: 'server_error' } };
   }
 
@@ -860,15 +1003,6 @@ function route(req) {
   return { url, path: path || '/', method };
 }
 
-function matchPrefix(path, prefix) {
-  const p = asText(path);
-  const pre = asText(prefix);
-  if (!p.startsWith(pre)) return null;
-  const rest = p.slice(pre.length);
-  if (!rest) return null;
-  return rest.startsWith('/') ? rest.slice(1) : rest;
-}
-
 export default {
   async fetch(req, env) {
     const allowed = parseOrigins(env);
@@ -887,46 +1021,55 @@ export default {
 
     try {
       // ======================================================
-      // Admin endpoints (auth)
+      // Admin login (no token required)
       // ======================================================
-      if (path === '/admin/partners/create' && method === 'POST') {
-        if (!requireAdmin(req, env)) return json({ ok: false, error: 'forbidden' }, 403, cors);
-        const out = await adminCreatePartner(req, env);
+      if (path === '/admin/login' && method === 'POST') {
+        const out = await adminLogin(req, env);
         return json(out.body, out.status, cors);
       }
 
-      if (path === '/admin/partners/invite' && method === 'POST') {
-        if (!requireAdmin(req, env)) return json({ ok: false, error: 'forbidden' }, 403, cors);
-        const out = await adminInvitePartner(req, env);
-        return json(out.body, out.status, cors);
-      }
+      // ======================================================
+      // Admin endpoints (Bearer required)
+      // ======================================================
+      if (path.startsWith('/admin/')) {
+        const auth = await requireAdminBearer(req, env);
+        if (!auth.ok) return json({ ok: false, error: 'forbidden' }, 403, cors);
 
-      if (path === '/admin/partners/list' && method === 'GET') {
-        if (!requireAdmin(req, env)) return json({ ok: false, error: 'forbidden' }, 403, cors);
-        const out = await adminPartnersList(env);
-        return json(out.body, out.status, cors);
-      }
+        if (path === '/admin/partners/create' && method === 'POST') {
+          const out = await adminCreatePartner(req, env);
+          return json(out.body, out.status, cors);
+        }
 
-      // /admin/partners/:id/rewards
-      if (path.startsWith('/admin/partners/') && path.endsWith('/rewards') && method === 'GET') {
-        if (!requireAdmin(req, env)) return json({ ok: false, error: 'forbidden' }, 403, cors);
-        const mid = path.replace('/admin/partners/', '').replace('/rewards', '');
-        const out = await adminPartnerRewards(env, mid);
-        return json(out.body, out.status, cors);
-      }
+        if (path === '/admin/partners/invite' && method === 'POST') {
+          const out = await adminInvitePartner(req, env);
+          return json(out.body, out.status, cors);
+        }
 
-      if (path === '/admin/stats/overview' && method === 'GET') {
-        if (!requireAdmin(req, env)) return json({ ok: false, error: 'forbidden' }, 403, cors);
-        const out = await adminStatsOverview(env, url);
-        return json(out.body, out.status, cors);
-      }
+        if (path === '/admin/partners/list' && method === 'GET') {
+          const out = await adminPartnersList(env);
+          return json(out.body, out.status, cors);
+        }
 
-      // /admin/stats/partner/:id
-      if (path.startsWith('/admin/stats/partner/') && method === 'GET') {
-        if (!requireAdmin(req, env)) return json({ ok: false, error: 'forbidden' }, 403, cors);
-        const pid = path.replace('/admin/stats/partner/', '');
-        const out = await adminStatsPartner(env, pid, url);
-        return json(out.body, out.status, cors);
+        // /admin/partners/:id/rewards
+        if (path.startsWith('/admin/partners/') && path.endsWith('/rewards') && method === 'GET') {
+          const mid = path.replace('/admin/partners/', '').replace('/rewards', '');
+          const out = await adminPartnerRewards(env, mid);
+          return json(out.body, out.status, cors);
+        }
+
+        if (path === '/admin/stats/overview' && method === 'GET') {
+          const out = await adminStatsOverview(env, url);
+          return json(out.body, out.status, cors);
+        }
+
+        // /admin/stats/partner/:id
+        if (path.startsWith('/admin/stats/partner/') && method === 'GET') {
+          const pid = path.replace('/admin/stats/partner/', '');
+          const out = await adminStatsPartner(env, pid, url);
+          return json(out.body, out.status, cors);
+        }
+
+        return json({ ok: false, error: 'not_found' }, 404, cors);
       }
 
       // ======================================================
@@ -986,3 +1129,15 @@ export default {
     }
   }
 };
+
+/* ============================================================
+ * TESTNOTERINGAR (snabb)
+ * 1) POST /admin/login rätt user/pass -> 200 + token
+ * 2) GET /admin/partners/list utan Authorization -> 403
+ * 3) GET /admin/partners/list med Bearer token -> 200
+ * 4) Vänta > TTL -> samma call -> 403
+ *
+ * RISK/EDGE CASES
+ * - CORS_ORIGINS måste inkludera din dashboard-origin, annars får du 403 i browsern.
+ * - ADMIN_TOKEN_SECRET måste vara satt, annars blir login 500/server_error eller admin 403.
+ * ============================================================ */
