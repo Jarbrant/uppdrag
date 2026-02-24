@@ -1,6 +1,10 @@
 <!-- ============================================================
      FIL: pages/dashboard.html  (HEL FIL)
      AO 3/6 — Admin Dashboard UI (Partners + Invites + Översikt)
+     PATCH: "Riktig dashboard" via admin GET endpoints:
+       - GET  /admin/partners/list
+       - GET  /admin/rewards/stats
+       - GET  /admin/rewards/list?partnerId=<optional>   (valfritt)
      Policy: UI-only, fail-closed, inga storage keys, XSS-safe
 ============================================================ -->
 <!doctype html>
@@ -40,6 +44,11 @@
     .kpiBox { border:1px solid rgba(255,255,255,.12); background: rgba(255,255,255,.04); border-radius: 14px; padding: 10px 12px; }
     .kpiLabel { font-size: 12px; opacity:.85; font-weight: 900; letter-spacing:.06em; }
     .kpiValue { font-size: 18px; font-weight: 900; margin-top: 4px; }
+
+    .miniTable { width:100%; border-collapse:collapse; }
+    .miniTable th, .miniTable td { padding: 8px 8px; border-bottom: 1px solid rgba(255,255,255,.10); text-align:left; font-size: 14px; }
+    .miniTable th { font-weight: 900; opacity:.9; }
+    .right { text-align:right; }
   </style>
 </head>
 
@@ -80,6 +89,9 @@
               Admin key lagras inte. Den används bara i minnet för requests.
             </p>
           </div>
+          <div class="card__side">
+            <button id="refreshAllBtn" class="btn btn-ghost" type="button">Hämta data</button>
+          </div>
         </div>
 
         <div class="stack" style="margin-top:12px">
@@ -90,7 +102,7 @@
           </div>
 
           <div class="muted small hint">
-            Tips: Du kan klistra in key, göra actions, och sedan rensa fältet.
+            Klicka “Hämta data” för att lista partners + stats. (Fail-closed om key saknas/fel.)
           </div>
         </div>
       </section>
@@ -160,42 +172,56 @@
           </div>
         </section>
 
-        <!-- Overview -->
+        <!-- Overview (REAL via stats endpoint) -->
         <section class="card paperCard" aria-label="Översikt">
           <div class="card__head">
             <div class="card__meta">
-              <h3 class="h3" style="margin:0">Översikt (MVP)</h3>
+              <h3 class="h3" style="margin:0">Översikt</h3>
               <p class="muted small" style="margin:6px 0 0 0">
-                Vi visar bara session-data i AO 3/6.
+                Hämtas från /admin/rewards/stats.
               </p>
+            </div>
+            <div class="card__side">
+              <span id="statsPill" class="badge2 badge-neutral">—</span>
             </div>
           </div>
 
           <div class="kpi" style="margin-top:12px">
             <div class="kpiBox">
-              <div class="kpiLabel">Skapade partners</div>
-              <div id="kpiPartners" class="kpiValue">0</div>
+              <div class="kpiLabel">Partners (aktiva/total)</div>
+              <div id="kpiPartners" class="kpiValue">—</div>
             </div>
             <div class="kpiBox">
-              <div class="kpiLabel">Senaste invite</div>
-              <div id="kpiLastInvite" class="kpiValue mono">—</div>
+              <div class="kpiLabel">Rewards (aktiva/total)</div>
+              <div id="kpiRewards" class="kpiValue">—</div>
+            </div>
+            <div class="kpiBox">
+              <div class="kpiLabel">Rewards med stock</div>
+              <div id="kpiInStock" class="kpiValue">—</div>
+            </div>
+            <div class="kpiBox">
+              <div class="kpiLabel">CP / FINAL</div>
+              <div id="kpiTier" class="kpiValue">—</div>
             </div>
           </div>
 
           <div class="muted small hint" style="margin-top:10px">
-            Riktig “lista alla partners + rewards” kräver extra admin GET-endpoints (eget AO).
+            Senaste invite: <span id="kpiLastInvite" class="mono">—</span>
           </div>
         </section>
       </div>
 
       <!-- ======================================================
-           BLOCK 6 — Session list (KRAV 3)
+           BLOCK 6 — Partners list (REAL via /admin/partners/list)
       ======================================================= -->
-      <section class="card paperCard" aria-label="Sessionlista" style="margin-top:12px">
+      <section class="card paperCard" aria-label="Partners" style="margin-top:12px">
         <div class="card__head">
           <div class="card__meta">
-            <h3 class="h3" style="margin:0">Partners (denna session)</h3>
-            <p class="muted small" style="margin:6px 0 0 0">Skapas via API och visas här utan persist.</p>
+            <h3 class="h3" style="margin:0">Partners</h3>
+            <p class="muted small" style="margin:6px 0 0 0">Lista från backend (admin).</p>
+          </div>
+          <div class="card__side">
+            <button id="copyLastInviteBtn" class="btn btn-ghost" type="button">Kopiera senaste invite</button>
           </div>
         </div>
 
@@ -206,7 +232,7 @@
       </section>
 
       <div class="muted small" style="margin-top:18px;text-align:center;opacity:.8">
-        Dashboard (AO 3/6) • Admin key i minnet • Ingen storage
+        Dashboard • Admin key i minnet • Ingen storage
       </div>
     </div>
   </main>
@@ -216,7 +242,7 @@
   =========================================================== -->
   <script>
     /* ==========================================================
-       BLOCK 7.1 — API base (KRAV 2)
+       BLOCK 7.1 — API base
     =========================================================== */
     const API_BASE = 'https://uppdrag.andersmenyit.workers.dev';
 
@@ -228,9 +254,11 @@
     const elStatus = $('#statusSlot');
     const elApiPill = $('#apiPill');
     const elSessionPill = $('#sessionPill');
+    const elStatsPill = $('#statsPill');
 
     const elAdminKey = $('#adminKeyInput');
     const elAdminKeyErr = $('#adminKeyErr');
+    const elRefreshAllBtn = $('#refreshAllBtn');
 
     const elPId = $('#pId');
     const elPName = $('#pName');
@@ -244,9 +272,13 @@
     const elInviteResult = $('#inviteResult');
     const elInviteUrlInput = $('#inviteUrlInput');
     const elCopyInviteBtn = $('#copyInviteBtn');
+    const elCopyLastInviteBtn = $('#copyLastInviteBtn');
     const elInviteMeta = $('#inviteMeta');
 
     const elKpiPartners = $('#kpiPartners');
+    const elKpiRewards = $('#kpiRewards');
+    const elKpiInStock = $('#kpiInStock');
+    const elKpiTier = $('#kpiTier');
     const elKpiLastInvite = $('#kpiLastInvite');
 
     const elPartnersList = $('#partnersList');
@@ -291,6 +323,18 @@
       return k;
     }
 
+    async function fetchAdminJson(path) {
+      const key = requireAdminKey();
+      if (!key) return { ok: false, status: 0, data: null };
+
+      const res = await fetch(apiUrl(path), {
+        method: 'GET',
+        headers: { 'X-ADMIN-KEY': key }
+      });
+      const data = await res.json().catch(() => null);
+      return { ok: res.ok, status: res.status, data };
+    }
+
     async function postAdmin(path, body) {
       const key = requireAdminKey();
       if (!key) return { ok: false, status: 0, data: { ok:false, error:'forbidden' } };
@@ -309,7 +353,7 @@
     }
 
     /* ==========================================================
-       BLOCK 7.3 — Subpath-safe invite URL (KRAV 4)
+       BLOCK 7.3 — Subpath-safe invite URL
     =========================================================== */
     function currentBaseUrl() {
       try {
@@ -342,33 +386,15 @@
     }
 
     /* ==========================================================
-       BLOCK 7.4 — Session state (KRAV 3)
+       BLOCK 7.4 — State (ingen storage)
     =========================================================== */
     const state = {
       sessionId: Math.random().toString(36).slice(2, 8),
-      partners: [], // { partnerId, name, invites:[{token,url,expiresAt}] }
-      lastInviteUrl: ''
+      partners: [],        // backend partners list
+      lastInviteUrl: ''    // bara minne
     };
 
-    function findPartner(pid) {
-      const id = asText(pid);
-      return state.partners.find((p) => asText(p.partnerId) === id) || null;
-    }
-
-    function upsertPartner(pid, name) {
-      const id = asText(pid);
-      const nm = asText(name);
-      let p = findPartner(id);
-      if (!p) {
-        p = { partnerId: id, name: nm, invites: [] };
-        state.partners.push(p);
-      } else {
-        if (nm) p.name = nm;
-      }
-      return p;
-    }
-
-    function refreshPartnerDropdown() {
+    function renderDropdown() {
       if (!elInvitePartnerId) return;
       const current = elInvitePartnerId.value || '';
       elInvitePartnerId.innerHTML = '<option value="">— välj partner —</option>';
@@ -379,26 +405,31 @@
         opt.textContent = asText(p.partnerId) + (p.name ? (' • ' + p.name) : '');
         elInvitePartnerId.appendChild(opt);
       }
-
       if (current) elInvitePartnerId.value = current;
     }
 
-    function renderOverview() {
-      setText(elKpiPartners, String(state.partners.length));
-      setText(elKpiLastInvite, state.lastInviteUrl ? state.lastInviteUrl : '—');
-      setText(elSessionPill, 'session: ' + state.sessionId);
+    function pill(el, cls, txt) {
+      if (!el) return;
+      el.className = 'badge2 ' + (cls || 'badge-neutral');
+      setText(el, txt || '—');
+    }
+
+    function fmtDt(ms) {
+      const n = Number(ms);
+      if (!Number.isFinite(n) || n <= 0) return '';
+      try { return new Date(n).toLocaleString('sv-SE'); } catch (_) { return ''; }
     }
 
     function renderPartnersList() {
       if (!elPartnersList) return;
       elPartnersList.innerHTML = '';
 
-      if (state.partners.length === 0) {
-        setText(elPartnersHint, 'Inga partners skapade i denna session ännu.');
-        renderOverview();
-        refreshPartnerDropdown();
+      if (!Array.isArray(state.partners) || state.partners.length === 0) {
+        setText(elPartnersHint, 'Inga partners laddade ännu. Skriv admin key och klicka “Hämta data”.');
+        renderDropdown();
         return;
       }
+
       setText(elPartnersHint, '');
 
       for (const p of state.partners) {
@@ -415,57 +446,145 @@
         const sub = document.createElement('div');
         sub.className = 'itemSub';
 
-        const badge = document.createElement('span');
-        badge.className = 'badge2 badge-ok';
-        badge.textContent = 'SESSION';
+        const row = document.createElement('div');
+        row.className = 'row';
 
-        sub.appendChild(badge);
+        const left = document.createElement('div');
+        left.className = 'stack';
+        left.style.gap = '6px';
 
-        // latest invite
-        const last = (Array.isArray(p.invites) && p.invites.length > 0) ? p.invites[p.invites.length - 1] : null;
-        if (last && last.url) {
-          const urlLine = document.createElement('div');
-          urlLine.className = 'muted small mono';
-          urlLine.textContent = last.url;
-          sub.appendChild(urlLine);
+        const badges = document.createElement('div');
+        badges.className = 'btnRow';
+        badges.style.justifyContent = 'flex-start';
 
-          const expLine = document.createElement('div');
-          expLine.className = 'muted small';
-          expLine.textContent = last.expiresAt ? ('Går ut: ' + new Date(last.expiresAt).toLocaleString('sv-SE')) : '';
-          sub.appendChild(expLine);
-        }
+        const bActive = document.createElement('span');
+        bActive.className = 'badge2 ' + (Number(p.isActive) === 1 ? 'badge-ok' : 'badge-warn');
+        bActive.textContent = Number(p.isActive) === 1 ? 'AKTIV' : 'PAUSAD';
+
+        const bPin = document.createElement('span');
+        bPin.className = 'badge2 ' + (Number(p.hasPin) === 1 ? 'badge-ok' : 'badge-neutral');
+        bPin.textContent = Number(p.hasPin) === 1 ? 'PIN SATT' : 'PIN EJ SATT';
+
+        badges.appendChild(bActive);
+        badges.appendChild(bPin);
+
+        const created = document.createElement('div');
+        created.className = 'muted small';
+        created.textContent = p.createdAt ? ('Skapad: ' + fmtDt(p.createdAt)) : '';
+
+        left.appendChild(badges);
+        if (created.textContent) left.appendChild(created);
+
+        // Optional: reward count per partner (billigt, men kan vara lite tungt om många)
+        const right = document.createElement('div');
+        right.className = 'btnRow';
+
+        const btnRewards = document.createElement('button');
+        btnRewards.type = 'button';
+        btnRewards.className = 'btn btn-ghost';
+        btnRewards.textContent = 'Hämta rewards';
+        btnRewards.addEventListener('click', async () => {
+          // /admin/rewards/list?partnerId=...
+          try {
+            toast('Hämtar rewards…', 'info');
+            const out = await fetchAdminJson('/admin/rewards/list?partnerId=' + encodeURIComponent(asText(p.partnerId)));
+            if (!out.ok || !out.data || out.data.ok !== true || !Array.isArray(out.data.rewards)) {
+              toast('Kunde inte hämta rewards', 'warn');
+              return;
+            }
+            const total = out.data.rewards.length;
+            const inStock = out.data.rewards.filter(r => Number(r.stock) > 0).length;
+            toast(`Rewards: ${total} (med stock: ${inStock})`, 'success');
+          } catch (_) {
+            toast('Nätverksfel', 'danger');
+          }
+        });
+
+        right.appendChild(btnRewards);
+
+        row.appendChild(left);
+        row.appendChild(right);
+
+        sub.appendChild(row);
 
         meta.appendChild(title);
         meta.appendChild(sub);
 
-        const right = document.createElement('div');
-        right.className = 'btnRow';
-
-        const btnCopyLast = document.createElement('button');
-        btnCopyLast.type = 'button';
-        btnCopyLast.className = 'btn btn-ghost';
-        btnCopyLast.textContent = 'Kopiera invite';
-        btnCopyLast.disabled = !(last && last.url);
-
-        btnCopyLast.addEventListener('click', async () => {
-          if (!last || !last.url) return;
-          const ok = await copyText(last.url);
-          toast(ok ? 'Kopierad' : 'Kunde inte kopiera', ok ? 'success' : 'warn');
-        });
-
-        right.appendChild(btnCopyLast);
-
         li.appendChild(meta);
-        li.appendChild(right);
         elPartnersList.appendChild(li);
       }
 
-      renderOverview();
-      refreshPartnerDropdown();
+      renderDropdown();
+    }
+
+    function renderStats(stats) {
+      if (!stats) return;
+
+      const pTot = Number(stats?.partners?.total) || 0;
+      const pAct = Number(stats?.partners?.active) || 0;
+
+      const rTot = Number(stats?.rewards?.total) || 0;
+      const rAct = Number(stats?.rewards?.active) || 0;
+      const rIn = Number(stats?.rewards?.inStock) || 0;
+      const rCp = Number(stats?.rewards?.cpTotal) || 0;
+      const rFi = Number(stats?.rewards?.finalTotal) || 0;
+
+      setText(elKpiPartners, `${pAct}/${pTot}`);
+      setText(elKpiRewards, `${rAct}/${rTot}`);
+      setText(elKpiInStock, `${rIn}`);
+      setText(elKpiTier, `${rCp} / ${rFi}`);
+      setText(elKpiLastInvite, state.lastInviteUrl ? state.lastInviteUrl : '—');
+
+      pill(elStatsPill, 'badge-ok', 'LIVE');
     }
 
     /* ==========================================================
-       BLOCK 7.5 — Actions
+       BLOCK 7.5 — Load (REAL)
+    =========================================================== */
+    async function refreshAll() {
+      clearStatus();
+      pill(elApiPill, 'badge-neutral', 'API');
+
+      const key = requireAdminKey();
+      if (!key) {
+        pill(elStatsPill, 'badge-neutral', '—');
+        return;
+      }
+
+      try {
+        toast('Hämtar partners + stats…', 'info');
+
+        const [plist, stats] = await Promise.all([
+          fetchAdminJson('/admin/partners/list'),
+          fetchAdminJson('/admin/rewards/stats')
+        ]);
+
+        if (!plist.ok || !plist.data || plist.data.ok !== true || !Array.isArray(plist.data.partners)) {
+          pill(elApiPill, 'badge-warn', 'API FEL');
+          toast('Kunde inte hämta partners', 'danger');
+          return;
+        }
+
+        state.partners = plist.data.partners;
+        renderPartnersList();
+
+        if (stats.ok && stats.data && stats.data.ok === true) {
+          renderStats(stats.data);
+          pill(elApiPill, 'badge-ok', 'API OK');
+          toast('Uppdaterad ✅', 'success');
+        } else {
+          pill(elApiPill, 'badge-warn', 'DELVIS');
+          pill(elStatsPill, 'badge-warn', 'INGA STATS');
+          toast('Partners OK, stats misslyckades', 'warn');
+        }
+      } catch (_) {
+        pill(elApiPill, 'badge-warn', 'API FEL');
+        toast('Nätverksfel', 'danger');
+      }
+    }
+
+    /* ==========================================================
+       BLOCK 7.6 — Actions
     =========================================================== */
     async function onCreatePartner() {
       clearStatus();
@@ -483,10 +602,9 @@
 
         if (out.ok && out.data && out.data.ok === true) {
           toast('Partner skapad ✅', 'success');
-          upsertPartner(partnerId, name);
           if (elPId) elPId.value = '';
           if (elPName) elPName.value = '';
-          renderPartnersList();
+          await refreshAll();
           return;
         }
 
@@ -519,18 +637,14 @@
           const expiresAt = Number(out.data.expiresAt) || 0;
           const url = buildInviteUrl(token);
 
-          // UI
           if (elInviteUrlInput) elInviteUrlInput.value = url;
-          if (elInviteMeta) setText(elInviteMeta, expiresAt ? ('Går ut: ' + new Date(expiresAt).toLocaleString('sv-SE')) : '');
+          if (elInviteMeta) setText(elInviteMeta, expiresAt ? ('Går ut: ' + fmtDt(expiresAt)) : '');
           if (elInviteResult) elInviteResult.classList.remove('isHidden');
 
-          // session state
-          const p = upsertPartner(partnerId, '');
-          p.invites.push({ token, url, expiresAt });
           state.lastInviteUrl = url;
+          setText(elKpiLastInvite, state.lastInviteUrl);
 
           toast('Invite skapad ✅', 'success');
-          renderPartnersList();
           return;
         }
 
@@ -549,22 +663,45 @@
       toast(ok ? 'Kopierad' : 'Kunde inte kopiera', ok ? 'success' : 'warn');
     }
 
+    async function onCopyLastInvite() {
+      const ok = await copyText(state.lastInviteUrl || '');
+      toast(ok ? 'Kopierad' : 'Ingen invite att kopiera', ok ? 'success' : 'warn');
+    }
+
     /* ==========================================================
-       BLOCK 7.6 — Boot
+       BLOCK 7.7 — Boot
     =========================================================== */
     (function boot() {
-      setText(elApiPill, 'API');
-      renderOverview();
+      setText(elSessionPill, 'session: ' + state.sessionId);
+      pill(elApiPill, 'badge-neutral', 'API');
+      pill(elStatsPill, 'badge-neutral', '—');
+
+      // empty placeholders
+      setText(elKpiPartners, '—');
+      setText(elKpiRewards, '—');
+      setText(elKpiInStock, '—');
+      setText(elKpiTier, '—');
+      setText(elKpiLastInvite, '—');
+
+      renderDropdown();
       renderPartnersList();
 
+      if (elRefreshAllBtn) elRefreshAllBtn.addEventListener('click', refreshAll);
       if (elCreatePartnerBtn) elCreatePartnerBtn.addEventListener('click', onCreatePartner);
       if (elCreateInviteBtn) elCreateInviteBtn.addEventListener('click', onCreateInvite);
       if (elCopyInviteBtn) elCopyInviteBtn.addEventListener('click', onCopyInvite);
+      if (elCopyLastInviteBtn) elCopyLastInviteBtn.addEventListener('click', onCopyLastInvite);
 
       // Enter shortcuts
-      if (elAdminKey) elAdminKey.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); toast('Admin key klar', 'success'); } });
-      if (elPName) elPName.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); onCreatePartner(); } });
-      if (elTtl) elTtl.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); onCreateInvite(); } });
+      if (elAdminKey) elAdminKey.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); refreshAll(); }
+      });
+      if (elPName) elPName.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); onCreatePartner(); }
+      });
+      if (elTtl) elTtl.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); onCreateInvite(); }
+      });
     })();
   </script>
 </body>
