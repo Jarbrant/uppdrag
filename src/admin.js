@@ -1,10 +1,9 @@
 /* ============================================================
    FIL: src/admin.js  (HEL FIL)
-   PATCH (FAS 2.1) — FIX: skrivbar editor (ingen re-render per bokstav)
-                    + tydliga labels (Poäng/Kod/Radius)
-                    + tydligare Final-toggle
-   PATCH (FAS 2.1) — Publicera som spelkort (PARTY_LIBRARY_V1) + load via ?load=
-   Policy: UI-only, XSS-safe, fail-closed
+   PATCH (FAS 2.2) — Radera spel från library (PARTY_LIBRARY_V1) vid ?load=
+                    + Topbar-knapp “Radera” med confirm
+                    + Save-pill: “Sparat” (grön) / “Osparat” / “Fel”
+   Policy: UI-only, XSS-safe, fail-closed, inga nya storage keys
 ============================================================ */
 
 import { copyToClipboard } from './util.js';
@@ -64,6 +63,12 @@ function showStatus(message, type = 'info') {
   div.textContent = message;
   elStatusSlot.appendChild(div);
 }
+
+/* ============================================================
+   BLOCK 3.5 — Loaded library context (för Radera-knapp)
+============================================================ */
+let loadedLibraryId = '';     // HOOK: loaded-library-id
+let loadedLibraryName = '';   // HOOK: loaded-library-name
 
 /* ============================================================
    BLOCK 4 — Defaults + helpers
@@ -165,7 +170,7 @@ function writeLibrary(list) {
     return true;
   } catch (_) {
     storageWritable = false;
-    showStatus('Kunde inte publicera (localStorage write fail).', 'warn');
+    showStatus('Kunde inte skriva till bibliotek (localStorage write fail).', 'warn');
     return false;
   }
 }
@@ -321,11 +326,64 @@ function tryLoadFromLibraryOnBoot() {
     return false;
   }
 
+  loadedLibraryId = String(entry.id);
+  loadedLibraryName = safeText(entry.name || '').trim();
+
   draft = migrateDraft(payloadToDraft(payload));
   dirty = true;
-  writeDraft(draft); // försök sätta draft direkt
+  writeDraft(draft);
   showStatus(`Laddade: ${entry.name}`, 'info');
   return true;
+}
+
+/* ============================================================
+   BLOCK 6.9 — Topbar: Radera-knapp (endast vid ?load=)
+============================================================ */
+function createDeleteButtonIfLoaded() {
+  if (!loadedLibraryId) return;
+
+  const headerRight = document.querySelector('.headerRight');
+  if (!headerRight) return;
+
+  if (document.getElementById('deleteGameBtn')) return; // redan skapad
+
+  const btn = document.createElement('button');
+  btn.id = 'deleteGameBtn';
+  btn.type = 'button';
+  btn.className = 'btn btn-ghost miniBtn';
+  btn.textContent = 'Radera';
+  btn.setAttribute('aria-label', 'Radera denna skattjakt');
+
+  btn.addEventListener('click', () => {
+    if (!storageWritable) {
+      showStatus('LocalStorage är låst. Kan inte radera på denna enhet.', 'warn');
+      return;
+    }
+
+    const name = loadedLibraryName || 'denna skattjakt';
+    const ok = window.confirm(`Vill du verkligen radera "${name}"?`);
+    if (!ok) return;
+
+    const list = readLibrary();
+    const next = Array.isArray(list) ? list.filter((x) => x && x.id !== loadedLibraryId) : [];
+
+    const wrote = writeLibrary(next);
+    if (!wrote) {
+      showStatus('Kunde inte radera (storage write fail).', 'warn');
+      return;
+    }
+
+    // Rensa draft också (minskar förvirring)
+    try { localStorage.removeItem(DRAFT_KEY); } catch (_) {}
+
+    showStatus('Raderad.', 'info');
+
+    // Tillbaka till admin utan load
+    try { window.location.assign('admin.html'); } catch (_) { window.location.assign(window.location.pathname); }
+  });
+
+  // Lägg före pillen
+  headerRight.insertBefore(btn, elSavePill || null);
 }
 
 /* ============================================================
@@ -469,33 +527,68 @@ function setActiveCp(index, { centerMap = true } = {}) {
 }
 
 /* ============================================================
-   BLOCK 10 — Render (FULL vs LIGHT)
+   BLOCK 10 — Render (FULL vs LIGHT) + Save-pill state
 ============================================================ */
 let draft = readDraft(); // HOOK: draft-state
 let dirty = false;       // HOOK: dirty-state
 let saveTimer = null;    // HOOK: autosave-timer
 let qrTimer = null;
 
-function setPill(text, ok = true) {
+function setPillState(kind) {
   if (!elSavePill) return;
-  elSavePill.textContent = text;
-  elSavePill.style.opacity = ok ? '1' : '0.8';
+
+  // reset
+  elSavePill.style.color = '';
+  elSavePill.style.borderColor = '';
+  elSavePill.style.background = '';
+
+  if (kind === 'saved') {
+    elSavePill.textContent = 'Sparat';
+    elSavePill.style.color = 'rgba(34,197,94,.95)'; // grön text
+    elSavePill.style.borderColor = 'rgba(34,197,94,.35)';
+    elSavePill.style.background = 'rgba(34,197,94,.08)';
+    return;
+  }
+
+  if (kind === 'dirty') {
+    elSavePill.textContent = 'Osparat';
+    return;
+  }
+
+  if (kind === 'error') {
+    elSavePill.textContent = 'Fel';
+    elSavePill.style.color = 'rgba(251,113,133,.95)';
+    elSavePill.style.borderColor = 'rgba(251,113,133,.35)';
+    elSavePill.style.background = 'rgba(251,113,133,.08)';
+    return;
+  }
+
+  if (kind === 'readonly') {
+    elSavePill.textContent = 'Read-only';
+    elSavePill.style.color = 'rgba(251,191,36,.95)';
+    elSavePill.style.borderColor = 'rgba(251,191,36,.35)';
+    elSavePill.style.background = 'rgba(251,191,36,.08)';
+    return;
+  }
+
+  elSavePill.textContent = 'Utkast';
 }
 
 function saveNowOrWarn() {
   if (!storageWritable) {
     showStatus('LocalStorage är låst. Kan inte spara här.', 'warn');
+    setPillState('readonly');
     return false;
   }
   const ok = writeDraft(draft);
   if (ok) {
     dirty = false;
-    setPill('Utkast sparat', true);
+    setPillState('saved');
     showStatus('Utkast sparat lokalt.', 'info');
-    setTimeout(() => { if (!dirty) setPill('Utkast', true); }, 1200);
     return true;
   }
   showStatus('Kunde inte spara utkast.', 'warn');
+  setPillState('readonly');
   return false;
 }
 
@@ -532,9 +625,24 @@ function renderErrorsAndPill() {
   renderErrors(errors);
 
   const hasErrors = !!(errors.name || errors.count || errors.points || errors.clues);
-  setPill(hasErrors ? 'Utkast (fel)' : dirty ? 'Utkast (osparat)' : 'Utkast', !hasErrors);
 
-  if (!storageWritable) showStatus('LocalStorage är låst. Utkast kan inte sparas på denna enhet.', 'warn');
+  if (!storageWritable) {
+    setPillState('readonly');
+    showStatus('LocalStorage är låst. Utkast kan inte sparas på denna enhet.', 'warn');
+    return;
+  }
+
+  if (hasErrors) {
+    setPillState('error');
+    return;
+  }
+
+  if (dirty) {
+    setPillState('dirty');
+    return;
+  }
+
+  setPillState('saved');
 }
 
 function broadcastDraftToMap() {
@@ -834,15 +942,14 @@ function scheduleSave() {
     const ok = writeDraft(draft);
     if (ok) {
       dirty = false;
-      setPill('Utkast sparat', true);
-      setTimeout(() => { if (!dirty) setPill('Utkast', true); }, 1200);
+      setPillState('saved');
     }
   }, 350);
 }
 
 function markDirtyLIGHT(triggerSave = true, { rerenderQR = false } = {}) {
   dirty = true;
-  setPill('Utkast (osparat)', true);
+  setPillState('dirty');
   if (triggerSave) scheduleSave();
   renderAllLIGHT({ rerenderQR });
 }
@@ -874,6 +981,7 @@ function setActiveCpPositionFromMap(lat, lng) {
   cp.lng = Number(lng);
 
   dirty = true;
+  setPillState('dirty');
   scheduleSave();
 
   updateCoordText(activeCpIndex);
@@ -916,6 +1024,7 @@ function bindEvents() {
       clampActiveIndex();
       renderAllFULL({ broadcastMap: true, rerenderQR: true });
       dirty = true;
+      setPillState('dirty');
       scheduleSave();
     });
   }
@@ -932,6 +1041,7 @@ function bindEvents() {
       syncCountToStructures(draft, draft.checkpointCount + 1);
       activeCpIndex = draft.checkpointCount - 1;
       dirty = true;
+      setPillState('dirty');
       renderAllFULL({ broadcastMap: true, rerenderQR: true });
       scheduleSave();
       showStatus(`Ny checkpoint skapad (CP ${activeCpIndex + 1}). Klicka på kartan för plats.`, 'info');
@@ -943,6 +1053,7 @@ function bindEvents() {
       syncCountToStructures(draft, draft.checkpointCount - 1);
       clampActiveIndex();
       dirty = true;
+      setPillState('dirty');
       renderAllFULL({ broadcastMap: true, rerenderQR: true });
       scheduleSave();
     });
@@ -955,7 +1066,7 @@ function bindEvents() {
       const hasErrors = !!(errors.name || errors.count || errors.points || errors.clues);
       if (hasErrors) {
         showStatus('Rätta felen i formuläret innan du sparar.', 'warn');
-        setPill('Utkast (fel)', false);
+        setPillState('error');
         return;
       }
       syncDerivedFields();
@@ -963,10 +1074,10 @@ function bindEvents() {
       if (ok) {
         dirty = false;
         showStatus('Utkast sparat lokalt.', 'info');
-        setPill('Utkast sparat', true);
-        setTimeout(() => { if (!dirty) setPill('Utkast', true); }, 1200);
+        setPillState('saved');
       } else {
         showStatus('Kunde inte spara utkast.', 'warn');
+        setPillState('readonly');
       }
     });
   }
@@ -984,6 +1095,7 @@ function bindEvents() {
       renderAllFULL({ broadcastMap: true, rerenderQR: true });
       scheduleSave();
       showStatus('Utkast rensat.', 'info');
+      setPillState('dirty');
     });
   }
 }
@@ -1108,7 +1220,6 @@ function ensureExportPanel() {
   btnFill.textContent = 'FYLL SLUMPKODER (tomma)';
   elBtnFillCodes = btnFill;
 
-  // NY: Publicera
   const btnPub = document.createElement('button');
   btnPub.type = 'button';
   btnPub.className = 'btn btn-primary miniBtn';
@@ -1183,12 +1294,6 @@ function ensureExportPanel() {
   if (elBtnPublish) elBtnPublish.addEventListener('click', () => { onPublishToLibrary(); });
 }
 
-function renderExportUI() {
-  if (!elExportRoot) return;
-  const json = getDraftJSON({ pretty: true });
-  if (elExportJSON) elExportJSON.value = json;
-}
-
 function buildParticipantLinkOrFail() {
   const payloadJSON = getDraftJSON({ pretty: false });
   const encoded = encodeURIComponent(payloadJSON);
@@ -1219,7 +1324,9 @@ function onPublishToLibrary() {
 
   const payloadJSON = getDraftJSON({ pretty: false });
   const name = safeText(draft.name).trim() || 'Skattjakt';
-  const entryId = uid('party');
+
+  // Om vi har laddat en karta (load=), så uppdaterar vi samma id istället för att skapa ny
+  const entryId = loadedLibraryId ? loadedLibraryId : uid('party');
 
   const entry = {
     id: entryId,
@@ -1235,10 +1342,14 @@ function onPublishToLibrary() {
     return;
   }
 
+  loadedLibraryId = entryId;
+  loadedLibraryName = name;
+  createDeleteButtonIfLoaded();
+
   setExportMessage('Publicerad! Du hittar den som spelkort på startsidan.', 'info');
   showStatus('Publicerad som spelkort.', 'info');
 
-  // Tips: visa admin-load-länk i linkfältet (så man kan öppna direkt)
+  // visa admin-load-länk
   try {
     const u = new URL(window.location.href);
     u.searchParams.set('load', entryId);
@@ -1250,6 +1361,7 @@ function onFillRandomCodes() {
   const changed = fillRandomCodesForEmpty({ len: 5 });
   if (changed <= 0) { setExportMessage('Inga tomma koder att fylla (alla har redan kod).', 'info'); return; }
   dirty = true;
+  setPillState('dirty');
   scheduleSave();
   renderAllFULL({ broadcastMap: false, rerenderQR: true });
   setExportMessage(`Fyllde ${changed} slumpkod${changed === 1 ? '' : 'er'} (endast tomma).`, 'info');
@@ -1297,7 +1409,7 @@ async function onCopyLink() {
 }
 
 /* ============================================================
-   BLOCK 15 — QR per checkpoint (NICE) — debounced
+   BLOCK 15 — QR per checkpoint — debounced
 ============================================================ */
 function setQrError(msg) {
   if (!elQrError) return;
@@ -1418,11 +1530,14 @@ function renderQRPanel() {
 (function bootAdmin() {
   'use strict';
 
-  if (window.__FAS12_AO5_ADMIN_INIT__) return; // HOOK: init-guard-admin
+  if (window.__FAS12_AO5_ADMIN_INIT__) return; // HOHOOK: init-guard-admin
   window.__FAS12_AO5_ADMIN_INIT__ = true;
 
   // Ladda från library om ?load= finns
   tryLoadFromLibraryOnBoot();
+
+  // Skapa Radera-knapp om vi är i “load”-läge
+  createDeleteButtonIfLoaded();
 
   ensureExportPanel();
   bindMapEvents();
@@ -1432,7 +1547,7 @@ function renderQRPanel() {
   if (elMapHint) elMapHint.textContent = 'Aktiv CP 1 — klicka på kartan för att sätta plats.';
 
   renderAllFULL({ broadcastMap: true, rerenderQR: true });
-  setPill('Utkast', true);
+  renderErrorsAndPill();
 
   if (!isMapReady()) showStatus('Karta ej redo. (Leaflet/CDN?)', 'warn');
 })();
