@@ -1,91 +1,1053 @@
-AO-LOGIN-02 (2/2) — Dashboard: ⚙️ login/logout (token i minnet)
-Mål
+<!-- ============================================================
+     FIL: pages/dashboard.html  (HEL FIL)
+     AO-LOGIN-02 (2/2) — Dashboard: ⚙️ login/logout (token i minnet)
+     Policy: UI-only, XSS-safe, fail-closed, subpath-safe
+============================================================ -->
+<!doctype html>
+<html lang="sv">
+<head>
+  <!-- ==========================================================
+       BLOCK 1 — Meta + CSS
+  =========================================================== -->
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Admin — Dashboard</title>
+  <meta name="description" content="Admin dashboard för partners, invites och översikt." />
+  <link rel="stylesheet" href="../styles/main.css" />
+</head>
 
-Dashboarden ska:
+<body class="theme-admin">
+  <!-- ==========================================================
+       BLOCK 2 — App Root
+  =========================================================== -->
+  <div id="app" class="app"> <!-- HOOK: app-root -->
 
-Visa ⚙️ i toppbaren
+    <!-- ========================================================
+         BLOCK 3 — Topbar
+    ========================================================= -->
+    <header class="topbar">
+      <div class="topbar__inner">
+        <div class="brand">
+          <div class="brand__mark" aria-hidden="true">◎</div>
+          <div class="brand__text">
+            <div class="brand__name">Admin</div>
+            <div class="brand__tag muted">Dashboard</div>
+          </div>
+        </div>
 
-Klick ⚙️ öppnar panel:
+        <div class="topbar__right" style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; justify-content:flex-end;">
+          <a class="badge" href="../index.html" aria-label="Tillbaka till spelet">Spel</a>
+          <span class="badge badge-success" aria-label="Du är på admin dashboard">Admin</span>
+          <a class="badge" href="./partner.html" aria-label="Öppna partner-sidan">Partner</a>
+          <span class="badge badge-success" aria-label="MVP">MVP</span>
 
-Logga in: username + password + knapp
+          <button id="gearBtn" type="button" class="badge" aria-label="Öppna login-panel" title="Login">
+            ⚙️
+          </button>
+          <!-- HOOK: gear-btn -->
+        </div>
+      </div>
+    </header>
 
-Logga ut (töm token)
+    <!-- ========================================================
+         BLOCK 4 — Main
+    ========================================================= -->
+    <main class="main">
+      <div class="container">
 
-status: “Låst / Upplåst”
+        <!-- ======================================================
+             BLOCK 4.1 — Status / Toast slot
+        ======================================================= -->
+        <div id="statusSlot" class="slot" aria-live="polite"></div> <!-- HOOK: status-slot -->
 
-“Hämta data” funkar bara när token finns
+        <!-- ======================================================
+             BLOCK 4.2 — Login Panel (overlay)
+        ======================================================= -->
+        <div id="loginOverlay" class="lootOverlay is-hidden" aria-hidden="true"> <!-- HOOK: login-overlay -->
+          <div class="lootBackdrop" data-close="1"></div>
 
-Token sparas inte i localStorage (endast minne)
+          <section
+            id="loginPanel"
+            class="lootModal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="loginTitle"
+            aria-describedby="loginDesc"
+            style="max-width: 560px;"
+          >
+            <header class="lootHead">
+              <div class="lootHead__meta">
+                <h2 id="loginTitle" class="h2" style="margin:0">⚙️ Admin login</h2>
+                <p id="loginDesc" class="muted small" style="margin:6px 0 0 0">
+                  Token sparas inte. Refresh låser igen (MVP).
+                </p>
+              </div>
+              <button id="loginCloseBtn" type="button" class="btn btn-ghost miniBtn" aria-label="Stäng login-panel">
+                Stäng
+              </button>
+            </header>
 
-Filer (max 2)
+            <div class="form" style="gap:12px;">
+              <div class="field">
+                <label class="label2" for="userInput">Username</label>
+                <input id="userInput" class="input" type="text" autocomplete="username" placeholder="t.ex. anders" />
+              </div>
 
-PATCH: pages/dashboard.html
+              <div class="field">
+                <label class="label2" for="passInput">Password</label>
+                <input id="passInput" class="input" type="password" autocomplete="current-password" placeholder="••••••••" />
+              </div>
 
-(valfritt) PATCH: styles/main.css (om du vill ha snygg panel)
+              <div style="display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end;">
+                <button id="loginBtn" type="button" class="btn btn-primary">Logga in</button>
+                <button id="logoutBtn" type="button" class="btn btn-ghost">Logga ut</button>
+              </div>
 
-Kontrakt (KRAV)
+              <div id="authStatus" class="muted small" style="min-height:18px;">
+                Status: <strong id="authStateText">Låst</strong>
+              </div>
+              <!-- HOOK: auth-status -->
+            </div>
+          </section>
+        </div>
 
-UI
+        <!-- ======================================================
+             BLOCK 5 — Actions: Hämta data (låst utan token)
+        ======================================================= -->
+        <section class="card paperCard" aria-label="Hämta data">
+          <div class="card__head">
+            <div class="card__meta">
+              <h1 class="h2" style="margin:0">Dashboard</h1>
+              <p class="muted small" style="margin:6px 0 0 0">
+                Klicka “Hämta data” för att lista partners + stats. (Fail-closed om ej inloggad.)
+              </p>
+            </div>
+            <div class="card__side">
+              <button id="fetchBtn" type="button" class="btn btn-primary" aria-label="Hämta data">
+                Hämta data
+              </button>
+            </div>
+          </div>
 
-Toppbar höger:
+          <div class="muted small" id="lockedHint" style="margin-top:10px;">
+            Logga in via ⚙️ för att använda admin-funktioner.
+          </div>
+        </section>
 
-Spel länk → ../index.html
+        <!-- ======================================================
+             BLOCK 6 — Create partner + invite (låst utan token)
+        ======================================================= -->
+        <div class="grid" style="margin-top: var(--sp-5); display:grid; gap: var(--sp-4); grid-template-columns: 1fr;">
+          <div class="grid2" style="display:grid; gap: var(--sp-4); grid-template-columns: 1fr;">
+            <section class="card paperCard" aria-label="Skapa butik">
+              <div class="card__head">
+                <div class="card__meta">
+                  <h2 class="h2" style="margin:0">Skapa butik</h2>
+                  <p class="muted small" style="margin:6px 0 0 0">Skapar partner i backend.</p>
+                </div>
+              </div>
 
-Admin badge (current)
+              <div class="form" style="margin-top:12px;">
+                <div class="field">
+                  <label class="label2" for="partnerIdInput">PartnerId</label>
+                  <input id="partnerIdInput" class="input" type="text" placeholder="t.ex butik-123" />
+                </div>
 
-Partner länk
+                <div class="field">
+                  <label class="label2" for="partnerNameInput">Namn</label>
+                  <input id="partnerNameInput" class="input" type="text" placeholder="t.ex Café Nova" />
+                </div>
 
-MVP
+                <button id="createPartnerBtn" class="btn btn-primary" type="button">Skapa</button>
+              </div>
+            </section>
 
-⚙️ (kugghjul)
+            <section class="card paperCard" aria-label="Bjud in butik">
+              <div class="card__head">
+                <div class="card__meta">
+                  <h2 class="h2" style="margin:0">Bjud in butik</h2>
+                  <p class="muted small" style="margin:6px 0 0 0">Skapar invite-token till partner.</p>
+                </div>
+              </div>
 
-⚙️ panel innehåller:
+              <div class="form" style="margin-top:12px;">
+                <div class="field">
+                  <label class="label2" for="partnerPick">PartnerId</label>
+                  <select id="partnerPick" class="input" aria-label="Välj partner">
+                    <option value="">— välj partner —</option>
+                  </select>
+                </div>
 
-username, password
+                <div class="field">
+                  <label class="label2" for="ttlInput">TTL (min)</label>
+                  <input id="ttlInput" class="input" type="number" inputmode="numeric" value="10080" />
+                </div>
 
-“Logga in”
+                <button id="createInviteBtn" class="btn btn-primary" type="button">Skapa invite</button>
 
-“Logga ut”
+                <div class="field" style="margin-top:10px;">
+                  <label class="label2" for="inviteUrlOutput">Invite-länk</label>
+                  <input id="inviteUrlOutput" class="input" type="text" readonly value="" />
+                  <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end; margin-top:10px;">
+                    <button id="copyInviteBtn" type="button" class="btn btn-ghost miniBtn">Kopiera</button>
+                  </div>
+                  <div id="inviteMsg" class="muted small" style="min-height:18px;"></div>
+                </div>
+              </div>
+            </section>
+          </div>
+        </div>
 
-statusrad
+        <!-- ======================================================
+             BLOCK 7 — Overview + Partners list
+        ======================================================= -->
+        <section class="card paperCard" aria-label="Översikt" style="margin-top: var(--sp-5);">
+          <div class="card__head">
+            <div class="card__meta">
+              <h2 class="h2" style="margin:0">Översikt</h2>
+              <p class="muted small" style="margin:6px 0 0 0">
+                Hämtas från /admin/stats/overview (windowHours).
+              </p>
+            </div>
 
-API
+            <div class="card__side" style="display:flex; gap:10px; align-items:center;">
+              <label class="muted small" for="windowPick" style="white-space:nowrap;">Fönster</label>
+              <select id="windowPick" class="input" style="min-height:40px;">
+                <option value="1">1h</option>
+                <option value="24" selected>24h</option>
+                <option value="168">168h (7d)</option>
+              </select>
+            </div>
+          </div>
 
-POST /admin/login → får token
+          <div id="overviewSlot" class="slot" style="margin-top:12px;">
+            <!-- renderas av JS -->
+          </div>
+        </section>
 
-Alla admin fetches skickar:
+        <section class="card paperCard" aria-label="Partners" style="margin-top: var(--sp-5);">
+          <div class="card__head">
+            <div class="card__meta">
+              <h2 class="h2" style="margin:0">Partners</h2>
+              <p class="muted small" style="margin:6px 0 0 0">
+                Lista från /admin/partners/list. Klicka “Visa” för rewards + partnerstats.
+              </p>
+            </div>
+          </div>
 
-Authorization: Bearer <token>
+          <div id="partnersSlot" class="slot" style="margin-top:12px;">
+            <!-- renderas av JS -->
+          </div>
+        </section>
 
-Fail-closed
+        <section class="card paperCard" aria-label="Partner detalj" style="margin-top: var(--sp-5);">
+          <div class="card__head">
+            <div class="card__meta">
+              <h2 class="h2" style="margin:0">Partner detalj</h2>
+              <p class="muted small" style="margin:6px 0 0 0">
+                Rewards + stats för vald partner.
+              </p>
+            </div>
+          </div>
 
-Ingen token → blockera “Hämta data”, “Skapa butik”, “Skapa invite”
+          <div id="partnerDetailSlot" class="slot" style="margin-top:12px;">
+            <div class="muted small">Ingen partner vald.</div>
+          </div>
+        </section>
 
-Visa tydlig text: “Logga in via ⚙️”
+      </div>
+    </main>
+  </div>
 
-DoD
+  <!-- ==========================================================
+       BLOCK 8 — JS (inline, no extra file)
+  =========================================================== -->
+  <script type="module">
+    /* ==========================================================
+       BLOCK 8.1 — Config
+    =========================================================== */
+    const API_BASE = 'https://uppdrag.andersmenyit.workers.dev'; // HOOK: api-base
 
-Man kan logga in
+    /* ==========================================================
+       BLOCK 8.2 — DOM hooks
+    =========================================================== */
+    const $ = (sel) => document.querySelector(sel);
 
-Token används
+    const elStatus = $('#statusSlot');
 
-Logga ut rensar allt
+    const elGearBtn = $('#gearBtn');
+    const elLoginOverlay = $('#loginOverlay');
+    const elLoginClose = $('#loginCloseBtn');
+    const elUser = $('#userInput');
+    const elPass = $('#passInput');
+    const elLoginBtn = $('#loginBtn');
+    const elLogoutBtn = $('#logoutBtn');
+    const elAuthStateText = $('#authStateText');
 
-Refresh → token försvinner (OK i MVP)
+    const elFetchBtn = $('#fetchBtn');
+    const elLockedHint = $('#lockedHint');
 
-KLISTRA IN (till FORGE)
+    const elPartnerId = $('#partnerIdInput');
+    const elPartnerName = $('#partnerNameInput');
+    const elCreatePartnerBtn = $('#createPartnerBtn');
 
-“Implementera AO-LOGIN-02: Patcha pages/dashboard.html så admin key UI tas bort och ersätts med ⚙️ login-panel (username+password). Anropa /admin/login, lagra token i minne, använd Authorization: Bearer för alla admin-anrop. Lås knappar när ej inloggad. Lägg till ‘Spel’ länk till ../index.html. Fail-closed, XSS-safe.”
+    const elPartnerPick = $('#partnerPick');
+    const elTtl = $('#ttlInput');
+    const elCreateInviteBtn = $('#createInviteBtn');
+    const elInviteUrl = $('#inviteUrlOutput');
+    const elCopyInviteBtn = $('#copyInviteBtn');
+    const elInviteMsg = $('#inviteMsg');
 
-En sak jag behöver från dig (för att undvika gissning)
+    const elWindowPick = $('#windowPick');
+    const elOverviewSlot = $('#overviewSlot');
+    const elPartnersSlot = $('#partnersSlot');
+    const elPartnerDetailSlot = $('#partnerDetailSlot');
 
-Vill du ha admin-användare:
+    /* ==========================================================
+       BLOCK 8.3 — State (in-memory only)
+    =========================================================== */
+    const state = {
+      adminToken: '',     // in-memory only
+      tokenExp: 0,
+      partners: []        // cached list
+    };
 
-anders (default)
-Och vill du att lösenordet ska vara:
+    /* ==========================================================
+       BLOCK 8.4 — UI helpers (XSS-safe)
+    =========================================================== */
+    function toast(msg, type = 'info', ttl = 1600) {
+      if (!elStatus) return;
+      const div = document.createElement('div');
+      div.className = `toast toast--${type === 'danger' ? 'danger' : type === 'warn' ? 'warn' : type === 'success' ? 'success' : 'info'}`;
+      div.setAttribute('role', 'status');
+      div.textContent = (msg ?? '').toString();
+      elStatus.appendChild(div);
+      setTimeout(() => { try { div.remove(); } catch (_) {} }, Math.max(500, Number(ttl) || 1600));
+    }
 
-du väljer, men jag behöver då antingen:
+    function setText(node, text) {
+      if (!node) return;
+      node.textContent = (text ?? '').toString();
+    }
 
-att du själv sätter ADMIN_PASS_HASH i Worker env, eller
+    function isAuthed() {
+      return !!state.adminToken;
+    }
 
-att du ger mig ett temporärt lösenord så jag kan säga exakt hur du hash:ar det.
+    function setAuthUi() {
+      const ok = isAuthed();
+      setText(elAuthStateText, ok ? 'Upplåst' : 'Låst');
+
+      // lås knappar
+      if (elFetchBtn) elFetchBtn.disabled = !ok;
+      if (elCreatePartnerBtn) elCreatePartnerBtn.disabled = !ok;
+      if (elCreateInviteBtn) elCreateInviteBtn.disabled = !ok;
+
+      if (elLockedHint) {
+        elLockedHint.style.display = ok ? 'none' : '';
+      }
+    }
+
+    function openLoginPanel() {
+      if (!elLoginOverlay) return;
+      elLoginOverlay.classList.remove('is-hidden');
+      elLoginOverlay.setAttribute('aria-hidden', 'false');
+      try { (elUser || elPass || elLoginClose).focus(); } catch (_) {}
+    }
+
+    function closeLoginPanel() {
+      if (!elLoginOverlay) return;
+      elLoginOverlay.classList.add('is-hidden');
+      elLoginOverlay.setAttribute('aria-hidden', 'true');
+    }
+
+    function currentBaseUrl() {
+      const u = new URL(window.location.href);
+      u.hash = '';
+      u.search = '';
+      // pages/dashboard.html -> base repo-root
+      u.pathname = u.pathname.replace(/\/pages\/[^/]+$/, '/');
+      const s = u.toString();
+      return s.endsWith('/') ? s.slice(0, -1) : s;
+    }
+
+    function buildInviteUrl(inviteToken) {
+      const base = currentBaseUrl();
+      const t = encodeURIComponent((inviteToken ?? '').toString());
+      return `${base}/pages/partner.html?invite=${t}`;
+    }
+
+    async function copyText(text, fallbackInput) {
+      const v = (text ?? '').toString();
+      if (!v) return false;
+      try {
+        if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+          await navigator.clipboard.writeText(v);
+          return true;
+        }
+      } catch (_) {}
+      if (fallbackInput) {
+        try {
+          fallbackInput.focus();
+          fallbackInput.select();
+          fallbackInput.setSelectionRange(0, String(fallbackInput.value || '').length);
+          document.execCommand('copy');
+          return true;
+        } catch (_) {}
+      }
+      return false;
+    }
+
+    /* ==========================================================
+       BLOCK 8.5 — API helpers
+    =========================================================== */
+    function authHeaders() {
+      return {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${state.adminToken}`
+      };
+    }
+
+    async function apiLogin(username, password) {
+      const url = `${API_BASE.replace(/\/$/, '')}/admin/login`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password })
+      });
+      const data = await res.json().catch(() => null);
+      return { ok: res.ok, status: res.status, data };
+    }
+
+    async function apiPartnersList() {
+      const url = `${API_BASE.replace(/\/$/, '')}/admin/partners/list`;
+      const res = await fetch(url, { method: 'GET', headers: authHeaders() });
+      const data = await res.json().catch(() => null);
+      return { ok: res.ok, status: res.status, data };
+    }
+
+    async function apiCreatePartner(partnerId, name) {
+      const url = `${API_BASE.replace(/\/$/, '')}/admin/partners/create`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({ partnerId, name })
+      });
+      const data = await res.json().catch(() => null);
+      return { ok: res.ok, status: res.status, data };
+    }
+
+    async function apiInvitePartner(partnerId, ttlMinutes) {
+      const url = `${API_BASE.replace(/\/$/, '')}/admin/partners/invite`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({ partnerId, ttlMinutes })
+      });
+      const data = await res.json().catch(() => null);
+      return { ok: res.ok, status: res.status, data };
+    }
+
+    async function apiStatsOverview(windowHours) {
+      const wh = Number(windowHours) || 24;
+      const url = `${API_BASE.replace(/\/$/, '')}/admin/stats/overview?windowHours=${encodeURIComponent(String(wh))}`;
+      const res = await fetch(url, { method: 'GET', headers: authHeaders() });
+      const data = await res.json().catch(() => null);
+      return { ok: res.ok, status: res.status, data };
+    }
+
+    async function apiPartnerRewards(partnerId) {
+      const pid = encodeURIComponent((partnerId ?? '').toString());
+      const url = `${API_BASE.replace(/\/$/, '')}/admin/partners/${pid}/rewards`;
+      const res = await fetch(url, { method: 'GET', headers: authHeaders() });
+      const data = await res.json().catch(() => null);
+      return { ok: res.ok, status: res.status, data };
+    }
+
+    async function apiPartnerStats(partnerId, windowHours) {
+      const pid = encodeURIComponent((partnerId ?? '').toString());
+      const wh = Number(windowHours) || 24;
+      const url = `${API_BASE.replace(/\/$/, '')}/admin/stats/partner/${pid}?windowHours=${encodeURIComponent(String(wh))}`;
+      const res = await fetch(url, { method: 'GET', headers: authHeaders() });
+      const data = await res.json().catch(() => null);
+      return { ok: res.ok, status: res.status, data };
+    }
+
+    function isForbidden(resp) {
+      return resp && resp.status === 403;
+    }
+
+    function handleForbiddenIfAny(resp) {
+      if (!isForbidden(resp)) return false;
+      // fail-closed: töm token och lås UI
+      state.adminToken = '';
+      state.tokenExp = 0;
+      setAuthUi();
+      toast('Session låst (403). Logga in igen via ⚙️.', 'warn', 2200);
+      return true;
+    }
+
+    /* ==========================================================
+       BLOCK 8.6 — Render: Overview
+    =========================================================== */
+    function renderOverview(data) {
+      if (!elOverviewSlot) return;
+      elOverviewSlot.innerHTML = '';
+
+      if (!data || data.ok !== true) {
+        const div = document.createElement('div');
+        div.className = 'muted small';
+        div.textContent = 'Ingen data ännu.';
+        elOverviewSlot.appendChild(div);
+        return;
+      }
+
+      const grid = document.createElement('div');
+      grid.style.display = 'grid';
+      grid.style.gridTemplateColumns = 'repeat(2, minmax(0, 1fr))';
+      grid.style.gap = '12px';
+
+      function statCard(title, value) {
+        const c = document.createElement('div');
+        c.className = 'card';
+        c.style.padding = '12px';
+
+        const t = document.createElement('div');
+        t.className = 'muted small';
+        t.textContent = title;
+
+        const v = document.createElement('div');
+        v.style.fontWeight = '900';
+        v.style.fontSize = '18px';
+        v.style.marginTop = '6px';
+        v.textContent = String(value);
+
+        c.appendChild(t);
+        c.appendChild(v);
+        return c;
+      }
+
+      grid.appendChild(statCard('Vouchers skapade', data.vouchersCreated ?? 0));
+      grid.appendChild(statCard('Vouchers inlösta', data.vouchersRedeemed ?? 0));
+      grid.appendChild(statCard('Unika gameIds', data.uniqueGames ?? 0));
+      grid.appendChild(statCard('Fönster (h)', data.windowHours ?? 24));
+
+      elOverviewSlot.appendChild(grid);
+
+      // Topplistor
+      const wrap = document.createElement('div');
+      wrap.style.marginTop = '14px';
+      wrap.style.display = 'grid';
+      wrap.style.gap = '12px';
+
+      function listBlock(title, rows, formatter) {
+        const card = document.createElement('div');
+        card.className = 'card';
+        card.style.padding = '12px';
+
+        const h = document.createElement('div');
+        h.style.fontWeight = '900';
+        h.textContent = title;
+
+        const ul = document.createElement('ul');
+        ul.style.listStyle = 'none';
+        ul.style.padding = '0';
+        ul.style.margin = '10px 0 0 0';
+        ul.style.display = 'grid';
+        ul.style.gap = '8px';
+
+        const arr = Array.isArray(rows) ? rows : [];
+        if (!arr.length) {
+          const li = document.createElement('li');
+          li.className = 'muted small';
+          li.textContent = '—';
+          ul.appendChild(li);
+        } else {
+          arr.forEach((r) => {
+            const li = document.createElement('li');
+            li.style.display = 'flex';
+            li.style.justifyContent = 'space-between';
+            li.style.gap = '10px';
+
+            const left = document.createElement('div');
+            left.textContent = formatter(r).left;
+
+            const right = document.createElement('div');
+            right.className = 'muted small';
+            right.textContent = formatter(r).right;
+
+            li.appendChild(left);
+            li.appendChild(right);
+            ul.appendChild(li);
+          });
+        }
+
+        card.appendChild(h);
+        card.appendChild(ul);
+        return card;
+      }
+
+      wrap.appendChild(listBlock('Top partners', data.topPartners, (r) => ({
+        left: `${(r?.name || r?.partnerId || '—')}`,
+        right: `skapade: ${Number(r?.created)||0} • inlösta: ${Number(r?.redeemed)||0}`
+      })));
+
+      wrap.appendChild(listBlock('Top rewards', data.topRewards, (r) => ({
+        left: `${(r?.title || r?.rewardId || '—')}`,
+        right: `skapade: ${Number(r?.created)||0} • inlösta: ${Number(r?.redeemed)||0}`
+      })));
+
+      elOverviewSlot.appendChild(wrap);
+    }
+
+    /* ==========================================================
+       BLOCK 8.7 — Render: Partners list
+    =========================================================== */
+    function renderPartners(partners) {
+      if (!elPartnersSlot) return;
+      elPartnersSlot.innerHTML = '';
+
+      const arr = Array.isArray(partners) ? partners : [];
+      if (!arr.length) {
+        const div = document.createElement('div');
+        div.className = 'muted small';
+        div.textContent = 'Inga partners.';
+        elPartnersSlot.appendChild(div);
+        return;
+      }
+
+      const ul = document.createElement('ul');
+      ul.style.listStyle = 'none';
+      ul.style.padding = '0';
+      ul.style.margin = '0';
+      ul.style.display = 'grid';
+      ul.style.gap = '10px';
+
+      arr.forEach((p) => {
+        const li = document.createElement('li');
+        li.className = 'card';
+        li.style.padding = '12px';
+        li.style.display = 'grid';
+        li.style.gap = '10px';
+
+        const top = document.createElement('div');
+        top.style.display = 'flex';
+        top.style.justifyContent = 'space-between';
+        top.style.gap = '12px';
+        top.style.alignItems = 'flex-start';
+        top.style.flexWrap = 'wrap';
+
+        const left = document.createElement('div');
+        left.style.display = 'grid';
+        left.style.gap = '4px';
+
+        const name = document.createElement('div');
+        name.style.fontWeight = '900';
+        name.textContent = (p?.name || '—').toString();
+
+        const meta = document.createElement('div');
+        meta.className = 'muted small';
+        meta.textContent = `partnerId: ${(p?.partnerId || '—').toString()}`;
+
+        left.appendChild(name);
+        left.appendChild(meta);
+
+        const right = document.createElement('div');
+        right.style.display = 'flex';
+        right.style.gap = '8px';
+        right.style.alignItems = 'center';
+        right.style.flexWrap = 'wrap';
+
+        const pinBadge = document.createElement('span');
+        pinBadge.className = 'badge';
+        pinBadge.textContent = Number(p?.hasPin) === 1 ? 'PIN: JA' : 'PIN: NEJ';
+
+        const actBadge = document.createElement('span');
+        actBadge.className = 'badge badge-success';
+        actBadge.textContent = Number(p?.isActive) === 1 ? 'AKTIV' : 'PAUSAD';
+
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btn btn-ghost miniBtn';
+        btn.textContent = 'Visa';
+        btn.addEventListener('click', () => {
+          loadPartnerDetail((p?.partnerId || '').toString());
+        });
+
+        right.appendChild(pinBadge);
+        right.appendChild(actBadge);
+        right.appendChild(btn);
+
+        top.appendChild(left);
+        top.appendChild(right);
+
+        li.appendChild(top);
+        ul.appendChild(li);
+      });
+
+      elPartnersSlot.appendChild(ul);
+    }
+
+    function renderPartnerPick(partners) {
+      if (!elPartnerPick) return;
+      elPartnerPick.innerHTML = '';
+      const opt0 = document.createElement('option');
+      opt0.value = '';
+      opt0.textContent = '— välj partner —';
+      elPartnerPick.appendChild(opt0);
+
+      const arr = Array.isArray(partners) ? partners : [];
+      arr.forEach((p) => {
+        const opt = document.createElement('option');
+        opt.value = (p?.partnerId || '').toString();
+        opt.textContent = `${(p?.name || p?.partnerId || '—').toString()} (${(p?.partnerId || '—').toString()})`;
+        elPartnerPick.appendChild(opt);
+      });
+    }
+
+    /* ==========================================================
+       BLOCK 8.8 — Render: Partner detail
+    =========================================================== */
+    function badgeForReward(r) {
+      const stock = Number(r?.stock) || 0;
+      const isActive = Number(r?.isActive) === 1;
+      if (stock <= 0) return { text: 'SLUT', cls: 'badge' };
+      if (!isActive) return { text: 'PAUSAD', cls: 'badge' };
+      return { text: 'AKTIV', cls: 'badge badge-success' };
+    }
+
+    function renderPartnerDetail(pid, stats, rewards) {
+      if (!elPartnerDetailSlot) return;
+      elPartnerDetailSlot.innerHTML = '';
+
+      if (!pid) {
+        const div = document.createElement('div');
+        div.className = 'muted small';
+        div.textContent = 'Ingen partner vald.';
+        elPartnerDetailSlot.appendChild(div);
+        return;
+      }
+
+      const head = document.createElement('div');
+      head.style.display = 'flex';
+      head.style.justifyContent = 'space-between';
+      head.style.gap = '10px';
+      head.style.flexWrap = 'wrap';
+      head.style.alignItems = 'baseline';
+
+      const h = document.createElement('div');
+      h.style.fontWeight = '900';
+      h.textContent = `Partner: ${pid}`;
+
+      const small = document.createElement('div');
+      small.className = 'muted small';
+      small.textContent = stats && stats.ok === true
+        ? `${stats.name || ''} • skapade: ${stats.created||0} • inlösta: ${stats.redeemed||0} • aktiva rewards: ${stats.activeRewards||0} • slut: ${stats.outOfStockRewards||0}`
+        : 'Stats saknas.';
+
+      head.appendChild(h);
+      head.appendChild(small);
+      elPartnerDetailSlot.appendChild(head);
+
+      const list = document.createElement('ul');
+      list.style.listStyle = 'none';
+      list.style.padding = '0';
+      list.style.margin = '12px 0 0 0';
+      list.style.display = 'grid';
+      list.style.gap = '10px';
+
+      const arr = Array.isArray(rewards) ? rewards : [];
+      if (!arr.length) {
+        const li = document.createElement('li');
+        li.className = 'muted small';
+        li.textContent = 'Inga rewards.';
+        list.appendChild(li);
+      } else {
+        arr.forEach((r) => {
+          const li = document.createElement('li');
+          li.className = 'card';
+          li.style.padding = '12px';
+          li.style.display = 'grid';
+          li.style.gap = '6px';
+
+          const t = document.createElement('div');
+          t.style.fontWeight = '900';
+          t.textContent = (r?.title || r?.rewardId || '—').toString();
+
+          const meta = document.createElement('div');
+          meta.className = 'muted small';
+          meta.textContent = `tier: ${(r?.tier || '—')} • ttl: ${(r?.ttlMinutes ?? '—')} min • stock: ${(r?.stock ?? '—')} • value: ${(r?.valueText || '—')}`;
+
+          const b = document.createElement('span');
+          const st = badgeForReward(r);
+          b.className = st.cls;
+          b.textContent = st.text;
+
+          li.appendChild(t);
+          li.appendChild(meta);
+          li.appendChild(b);
+          list.appendChild(li);
+        });
+      }
+
+      elPartnerDetailSlot.appendChild(list);
+    }
+
+    /* ==========================================================
+       BLOCK 8.9 — Actions
+    =========================================================== */
+    async function fetchAll() {
+      if (!isAuthed()) {
+        toast('Logga in via ⚙️', 'warn', 1600);
+        return;
+      }
+
+      const wh = Number(elWindowPick?.value) || 24;
+
+      toast('Hämtar data…', 'info', 900);
+
+      const pRes = await apiPartnersList();
+      if (handleForbiddenIfAny(pRes)) return;
+      if (!pRes.ok || !pRes.data || pRes.data.ok !== true) {
+        toast('Kunde inte hämta partners', 'danger', 1800);
+        return;
+      }
+
+      const partners = Array.isArray(pRes.data.partners) ? pRes.data.partners : [];
+      state.partners = partners;
+
+      renderPartners(partners);
+      renderPartnerPick(partners);
+
+      const sRes = await apiStatsOverview(wh);
+      if (handleForbiddenIfAny(sRes)) return;
+      if (!sRes.ok || !sRes.data || sRes.data.ok !== true) {
+        renderOverview(null);
+        toast('Kunde inte hämta stats', 'warn', 1600);
+      } else {
+        renderOverview(sRes.data);
+      }
+
+      toast('Klart', 'success', 900);
+    }
+
+    async function loadPartnerDetail(partnerId) {
+      const pid = (partnerId ?? '').toString().trim();
+      if (!pid) return;
+
+      if (!isAuthed()) {
+        toast('Logga in via ⚙️', 'warn', 1600);
+        return;
+      }
+
+      const wh = Number(elWindowPick?.value) || 24;
+      toast('Laddar partner…', 'info', 900);
+
+      const [rRes, stRes] = await Promise.all([
+        apiPartnerRewards(pid),
+        apiPartnerStats(pid, wh)
+      ]);
+
+      if (handleForbiddenIfAny(rRes) || handleForbiddenIfAny(stRes)) return;
+
+      const rewards = (rRes.ok && rRes.data && rRes.data.ok === true) ? (rRes.data.rewards || []) : [];
+      const stats = (stRes.ok && stRes.data && stRes.data.ok === true) ? stRes.data : null;
+
+      renderPartnerDetail(pid, stats, rewards);
+      toast('Partner laddad', 'success', 900);
+    }
+
+    async function doCreatePartner() {
+      if (!isAuthed()) return toast('Logga in via ⚙️', 'warn', 1600);
+
+      const pid = (elPartnerId?.value || '').toString().trim();
+      const name = (elPartnerName?.value || '').toString().trim();
+
+      if (!pid || !name) return toast('PartnerId + namn krävs', 'warn', 1600);
+      if (pid.length > 80 || name.length > 120) return toast('För lång text', 'warn', 1600);
+
+      const res = await apiCreatePartner(pid, name);
+      if (handleForbiddenIfAny(res)) return;
+
+      if (!res.ok || !res.data || res.data.ok !== true) {
+        toast('Kunde inte skapa partner', 'danger', 1800);
+        return;
+      }
+
+      toast('Partner skapad', 'success', 1100);
+      try { elPartnerId.value = ''; elPartnerName.value = ''; } catch (_) {}
+      fetchAll();
+    }
+
+    async function doCreateInvite() {
+      if (!isAuthed()) return toast('Logga in via ⚙️', 'warn', 1600);
+
+      const pid = (elPartnerPick?.value || '').toString().trim();
+      const ttl = Number(elTtl?.value) || 0;
+
+      if (!pid) return toast('Välj partner', 'warn', 1600);
+      if (!Number.isFinite(ttl) || ttl < 1) return toast('TTL måste vara > 0', 'warn', 1600);
+
+      const res = await apiInvitePartner(pid, ttl);
+      if (handleForbiddenIfAny(res)) return;
+
+      if (!res.ok || !res.data || res.data.ok !== true || !res.data.inviteToken) {
+        toast('Kunde inte skapa invite', 'danger', 1800);
+        return;
+      }
+
+      const url = buildInviteUrl(res.data.inviteToken);
+      if (elInviteUrl) elInviteUrl.value = url;
+      if (elInviteMsg) elInviteMsg.textContent = 'Invite skapad.';
+      toast('Invite skapad', 'success', 1100);
+    }
+
+    /* ==========================================================
+       BLOCK 8.10 — Login/logout
+    =========================================================== */
+    async function doLogin() {
+      const username = (elUser?.value || '').toString().trim();
+      const password = (elPass?.value || '').toString();
+
+      if (!username || !password) {
+        toast('Username + password krävs', 'warn', 1600);
+        return;
+      }
+
+      toast('Loggar in…', 'info', 900);
+
+      const res = await apiLogin(username, password);
+      if (!res.ok || !res.data || res.data.ok !== true || !res.data.adminToken) {
+        toast('Fel login', 'danger', 1600);
+        state.adminToken = '';
+        state.tokenExp = 0;
+        setAuthUi();
+        return;
+      }
+
+      state.adminToken = (res.data.adminToken || '').toString();
+      state.tokenExp = Number(res.data.expiresAt) || 0;
+
+      setAuthUi();
+      toast('Inloggad', 'success', 1000);
+
+      // valfritt: auto-hämta
+      fetchAll();
+      closeLoginPanel();
+    }
+
+    function doLogout() {
+      state.adminToken = '';
+      state.tokenExp = 0;
+      setAuthUi();
+      renderOverview(null);
+      renderPartners([]);
+      renderPartnerPick([]);
+      renderPartnerDetail('', null, []);
+      if (elInviteUrl) elInviteUrl.value = '';
+      if (elInviteMsg) elInviteMsg.textContent = '';
+      toast('Utloggad', 'info', 1000);
+    }
+
+    /* ==========================================================
+       BLOCK 8.11 — Events
+    =========================================================== */
+    if (elGearBtn) elGearBtn.addEventListener('click', openLoginPanel);
+    if (elLoginClose) elLoginClose.addEventListener('click', closeLoginPanel);
+
+    if (elLoginOverlay) {
+      elLoginOverlay.addEventListener('click', (e) => {
+        const t = e?.target;
+        const isBackdrop = !!(t && t.getAttribute && t.getAttribute('data-close') === '1');
+        if (isBackdrop) closeLoginPanel();
+      });
+    }
+
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') closeLoginPanel();
+      if (e.key === 'Enter' && !elLoginOverlay?.classList.contains('is-hidden')) {
+        // Enter i panel -> login (fail-closed om fält tomma)
+        doLogin();
+      }
+    });
+
+    if (elLoginBtn) elLoginBtn.addEventListener('click', doLogin);
+    if (elLogoutBtn) elLogoutBtn.addEventListener('click', doLogout);
+
+    if (elFetchBtn) elFetchBtn.addEventListener('click', fetchAll);
+    if (elCreatePartnerBtn) elCreatePartnerBtn.addEventListener('click', doCreatePartner);
+    if (elCreateInviteBtn) elCreateInviteBtn.addEventListener('click', doCreateInvite);
+
+    if (elCopyInviteBtn) {
+      elCopyInviteBtn.addEventListener('click', async () => {
+        const v = (elInviteUrl?.value || '').toString();
+        if (!v) return toast('Ingen länk att kopiera', 'warn', 1400);
+        const ok = await copyText(v, elInviteUrl);
+        if (elInviteMsg) elInviteMsg.textContent = ok ? 'Kopierat.' : 'Kopiering nekades.';
+        toast(ok ? 'Kopierat' : 'Kunde inte kopiera', ok ? 'success' : 'warn', 1000);
+      });
+    }
+
+    if (elWindowPick) {
+      elWindowPick.addEventListener('change', () => {
+        // Om inloggad: refresh overview + (partner detail om vald)
+        if (!isAuthed()) return;
+        fetchAll();
+      });
+    }
+
+    /* ==========================================================
+       BLOCK 8.12 — Boot
+    =========================================================== */
+    (function boot() {
+      setAuthUi();            // start: låst
+      renderOverview(null);
+      renderPartners([]);
+      renderPartnerPick([]);
+    })();
+  </script>
+
+  <!-- ==========================================================
+       BLOCK 9 — Minimal inline styles for overlay reuse
+       (använder samma klassnamn som lootOverlay/lootModal)
+  =========================================================== -->
+  <style>
+    /* Återanvänd “lootOverlay” look men för login */
+    .lootOverlay {
+      position: fixed;
+      inset: 0;
+      z-index: 2500;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      padding: 12px;
+    }
+    .lootBackdrop {
+      position:absolute;
+      inset:0;
+      background: rgba(0,0,0,.55);
+      backdrop-filter: blur(6px);
+    }
+    .lootModal {
+      position: relative;
+      width: 100%;
+      max-width: 720px;
+      border: 1px solid var(--border);
+      background: rgba(16, 26, 47, .92);
+      border-radius: 16px;
+      box-shadow: 0 20px 50px rgba(0,0,0,.45);
+      padding: 14px;
+      display:grid;
+      gap: 12px;
+    }
+    .lootHead { display:flex; align-items:flex-start; justify-content:space-between; gap: 12px; }
+    .is-hidden { display:none !important; }
+
+    /* fix: vita texter i inputs (din screenshot) */
+    .input { color: var(--text); }
+    .input::placeholder { color: rgba(255,255,255,.55); }
+    select.input { color: var(--text); }
+    option { color: #111; } /* browser default för dropdown-listan */
+  </style>
+</body>
+</html>
