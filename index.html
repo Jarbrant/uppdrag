@@ -1,6 +1,7 @@
 <!-- ============================================================
      FIL: index.html  (HEL FIL)
-     PATCH: Skattjakt → öppna “Bjud in”-modal med QR + länk + spelare
+     PATCH: Mina skattjakter — “Skattjakt” öppnar Bjud in-modal (QR/länk),
+            “Min karta” öppnar Admin (redigera)
      Policy: UI-only, XSS-safe, fail-closed, subpath-safe
 ============================================================ -->
 <!doctype html>
@@ -34,8 +35,6 @@
         <div class="topbar__right">
           <!-- ======================================================
                AO 5/6 (FAS 1.2) — Admin link
-               - Direkt länk (ingen nav-motor i MVP)
-               - Relativ path från /uppdrag/index.html → /uppdrag/pages/admin.html
           ======================================================= -->
           <a id="adminLink"
              class="badge"
@@ -44,7 +43,6 @@
             Admin
           </a>
           <!-- HOOK: admin-link -->
-
           <span class="badge badge-success">MVP</span>
         </div>
       </div>
@@ -63,7 +61,6 @@
 
           <!-- ======================================================
                BLOCK 3.1 — Error slot (AO-11)
-               KRAV: err= visas som Error Card på index
           ======================================================= -->
           <div id="errorSlot" class="slot"> <!-- HOOK: error-slot --></div>
 
@@ -100,8 +97,7 @@
           </div>
 
           <!-- ======================================================
-               PATCH (FAS 2.1) — Mina skattjakter (egen rad under Skattjakt)
-               Renderas av JS om PARTY_LIBRARY_V1 har poster.
+               Mina skattjakter (renderas av JS)
           ======================================================= -->
           <div id="partyLibraryWrap" class="slot" style="margin-top: var(--sp-5);">
             <!-- HOOK: party-library-wrap -->
@@ -136,11 +132,7 @@
     </main>
 
     <!-- ==========================================================
-         BLOCK 4 — Invite Modal (Skattjakt)
-         KRAV:
-         - Öppnas när man trycker “Skattjakt” (inte start)
-         - Innehåller QR + länk + “spelare”-lista (namn)
-         - UI-only: listan är bara på denna enhet (ingen “riktig inbjudan”)
+         BLOCK 4 — Invite Modal (för “Skattjakt”-knappen i Mina skattjakter)
     =========================================================== -->
     <div id="inviteOverlay"
          style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:9999; padding:16px;"
@@ -198,12 +190,11 @@
 
   <!-- ==========================================================
        BLOCK 5 — Boot routing
-       - Kör alltid; gör inget om inga params finns.
   =========================================================== -->
   <script type="module" src="./src/boot.js"></script>
 
   <!-- ==========================================================
-       BLOCK 6 — Index controller (mode-select + Start links + err-card + library + invite modal)
+       BLOCK 6 — Index controller
   =========================================================== -->
   <script type="module">
     import { qsGet } from './src/util.js';
@@ -212,34 +203,35 @@
     (function () {
       'use strict';
 
-      if (window.__AO11_INDEX_INIT__) return; // HOOK: init-guard-index
+      if (window.__AO11_INDEX_INIT__) return;
       window.__AO11_INDEX_INIT__ = true;
 
-      const PARTY_LIBRARY_KEY = 'PARTY_LIBRARY_V1'; // HOOK: party-library-key
-      const partyLibraryWrap = document.getElementById('partyLibraryWrap'); // HOOK: party-library-wrap
+      const PARTY_LIBRARY_KEY = 'PARTY_LIBRARY_V1';
+      const partyLibraryWrap = document.getElementById('partyLibraryWrap');
 
-      const selectedModeLabel = document.getElementById('selectedModeLabel'); // HOOK: selected-mode-label
-      const startBtn = document.getElementById('startBtn'); // HOOK: start-button
-      const startHint = document.getElementById('startHint'); // HOOK: hint-area
-      const errorSlot = document.getElementById('errorSlot'); // HOOK: error-slot
+      const selectedModeLabel = document.getElementById('selectedModeLabel');
+      const startBtn = document.getElementById('startBtn');
+      const startHint = document.getElementById('startHint');
+      const errorSlot = document.getElementById('errorSlot');
 
       // Invite modal hooks
-      const inviteOverlay = document.getElementById('inviteOverlay'); // HOOK: invite-overlay
-      const inviteCloseBtn = document.getElementById('inviteCloseBtn'); // HOOK: invite-close
-      const inviteQrImg = document.getElementById('inviteQrImg'); // HOOK: invite-qr
-      const inviteLinkInput = document.getElementById('inviteLinkInput'); // HOOK: invite-link
-      const inviteCopyBtn = document.getElementById('inviteCopyBtn'); // HOOK: invite-copy
-      const inviteShareBtn = document.getElementById('inviteShareBtn'); // HOOK: invite-share
-      const inviteMsg = document.getElementById('inviteMsg'); // HOOK: invite-msg
-      const inviteNameInput = document.getElementById('inviteNameInput'); // HOOK: invite-name
-      const inviteAddBtn = document.getElementById('inviteAddBtn'); // HOOK: invite-add
-      const inviteList = document.getElementById('inviteList'); // HOOK: invite-list
+      const inviteOverlay = document.getElementById('inviteOverlay');
+      const inviteCloseBtn = document.getElementById('inviteCloseBtn');
+      const inviteQrImg = document.getElementById('inviteQrImg');
+      const inviteLinkInput = document.getElementById('inviteLinkInput');
+      const inviteCopyBtn = document.getElementById('inviteCopyBtn');
+      const inviteShareBtn = document.getElementById('inviteShareBtn');
+      const inviteMsg = document.getElementById('inviteMsg');
+      const inviteNameInput = document.getElementById('inviteNameInput');
+      const inviteAddBtn = document.getElementById('inviteAddBtn');
+      const inviteList = document.getElementById('inviteList');
 
-      // UI-only: spelare-lista lever bara i minnet (ingen ny storage-key)
-      const invitePlayers = []; // HOOK: invite-players-state
+      // UI-only: inga nya storage keys — listan är bara i minnet
+      const invitePlayers = [];
+
+      const MAX_INLINE_QS_CHARS = 1400; // samma “för stor”-policy som admin
 
       function currentBaseUrl() {
-        // Om vi är på /uppdrag/index.html => base blir /uppdrag/
         const u = new URL(window.location.href);
         const p = u.pathname;
         u.pathname = p.endsWith('/') ? p : p.substring(0, p.lastIndexOf('/') + 1);
@@ -252,222 +244,36 @@
         try { return JSON.parse(str); } catch (_) { return fallback; }
       }
 
-      function readPartyLibrary() {
+      function readPartyLibraryRaw() {
         try {
           const raw = localStorage.getItem(PARTY_LIBRARY_KEY);
           if (!raw) return [];
           const v = safeJSONParse(raw, []);
           if (!Array.isArray(v)) return [];
-          return v
-            .filter((x) => x && typeof x === 'object' && typeof x.id === 'string')
-            .map((x) => ({
-              id: String(x.id),
-              name: String(x.name || 'Skattjakt'),
-              checkpointCount: Number(x.checkpointCount || 0),
-              updatedAt: Number(x.updatedAt || 0)
-            }));
+          return v.filter((x) => x && typeof x === 'object' && typeof x.id === 'string');
         } catch (_) {
           return [];
         }
       }
 
-      function renderPartyLibraryRow() {
-        if (!partyLibraryWrap) return;
-
-        const list = readPartyLibrary();
-        if (!list.length) {
-          partyLibraryWrap.innerHTML = '';
-          return;
-        }
-
-        list.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-
-        const section = document.createElement('section');
-        section.className = 'card';
-        section.setAttribute('aria-label', 'Mina skattjakter');
-
-        const head = document.createElement('div');
-        head.className = 'card__head';
-
-        const meta = document.createElement('div');
-        meta.className = 'card__meta';
-
-        const h = document.createElement('h2');
-        h.className = 'h2';
-        h.style.margin = '0';
-        h.textContent = 'Mina skattjakter';
-
-        const p = document.createElement('p');
-        p.className = 'muted small';
-        p.style.margin = '6px 0 0 0';
-        p.textContent = 'Publicerade från Admin på denna enhet. Klicka för att öppna/redigera.';
-
-        meta.appendChild(h);
-        meta.appendChild(p);
-        head.appendChild(meta);
-
-        const grid = document.createElement('div');
-        grid.className = 'grid grid--modes';
-        grid.style.marginTop = '12px';
-
-        // Länk: öppna admin med load=<id>
-        const base = currentBaseUrl();
-        const adminBase = new URL('pages/admin.html', base.toString());
-
-        for (const item of list) {
-          const a = document.createElement('a');
-          a.className = 'card card--mode';
-          a.setAttribute('role', 'listitem');
-          a.setAttribute('tabindex', '0');
-          a.style.display = 'block';
-
-          const url = new URL(adminBase.toString());
-          url.searchParams.set('load', item.id);
-          a.href = url.toString();
-
-          const top = document.createElement('div');
-          top.className = 'card__top';
-
-          const icon = document.createElement('div');
-          icon.className = 'card__icon';
-          icon.setAttribute('aria-hidden', 'true');
-          icon.textContent = '🎯';
-
-          const meta2 = document.createElement('div');
-          meta2.className = 'card__meta';
-
-          const title = document.createElement('h3');
-          title.className = 'card__title';
-          title.textContent = item.name;
-
-          const desc = document.createElement('p');
-          desc.className = 'card__desc muted';
-          desc.textContent = item.checkpointCount
-            ? `${item.checkpointCount} checkpoints • öppna i admin`
-            : 'Öppna i admin';
-
-          meta2.appendChild(title);
-          meta2.appendChild(desc);
-
-          top.appendChild(icon);
-          top.appendChild(meta2);
-
-          const bottom = document.createElement('div');
-          bottom.className = 'card__bottom';
-
-          const b1 = document.createElement('span');
-          b1.className = 'badge';
-          b1.textContent = 'Skattjakt';
-
-          const b2 = document.createElement('span');
-          b2.className = 'badge badge-success';
-          b2.textContent = 'Min karta';
-
-          bottom.appendChild(b1);
-          bottom.appendChild(b2);
-
-          a.appendChild(top);
-          a.appendChild(bottom);
-
-          a.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
-              e.preventDefault();
-              window.location.assign(a.href);
-            }
-          });
-
-          grid.appendChild(a);
-        }
-
-        section.appendChild(head);
-        section.appendChild(grid);
-
-        partyLibraryWrap.innerHTML = '';
-        partyLibraryWrap.appendChild(section);
+      function readPartyLibraryForList() {
+        const v = readPartyLibraryRaw();
+        return v.map((x) => ({
+          id: String(x.id),
+          name: String(x.name || 'Skattjakt'),
+          checkpointCount: Number(x.checkpointCount || 0),
+          updatedAt: Number(x.updatedAt || 0)
+        }));
       }
 
-      // =========================================================
-      // KRAV: err= visas som Error Card på index
-      // =========================================================
-      const err = qsGet('err'); // HOOK: qs-err
-      const rid = qsGet('rid'); // HOOK: qs-rid
-      if (err && errorSlot) {
-        const msg = rid
-          ? `Start kunde inte genomföras. Felkod: ${err} (rid: ${rid})`
-          : `Start kunde inte genomföras. Felkod: ${err}`;
-
-        const card = renderErrorCard(msg, [
-          {
-            label: 'Rensa fel',
-            variant: 'ghost',
-            onClick: () => {
-              const url = new URL(window.location.href);
-              url.searchParams.delete('err');
-              url.searchParams.delete('rid');
-              window.history.replaceState({}, '', url.toString());
-              errorSlot.innerHTML = '';
-            }
-          }
-        ]);
-
-        errorSlot.innerHTML = '';
-        errorSlot.appendChild(card);
+      function findLibraryEntry(id) {
+        const list = readPartyLibraryRaw();
+        return list.find((x) => x && String(x.id) === String(id)) || null;
       }
 
-      // =========================================================
-      // Render “Mina skattjakter”
-      // =========================================================
-      renderPartyLibraryRow();
-
-      // =========================================================
-      // Om URL redan har mode+id: visa bara lätt feedback.
-      // Boot.js routar vidare direkt.
-      // =========================================================
-      const qsMode = qsGet('mode');
-      const qsId = qsGet('id');
-      if (qsMode && qsId) {
-        try { toast('Startar…', 'info', { ttlMs: 900 }); } catch (_) {}
-        if (startHint) startHint.textContent = 'Startar…';
-        if (startBtn) {
-          startBtn.disabled = true;
-          startBtn.textContent = 'Startar…';
-        }
-        return;
-      }
-
-      // =========================================================
-      // Mode selection + Start links (samma base path)
-      // =========================================================
-      let selectedMode = '';
-
-      function setSelectedMode(nextMode) {
-        selectedMode = (nextMode || '').trim();
-
-        if (selectedModeLabel) {
-          selectedModeLabel.textContent =
-            selectedMode === 'zone' ? 'Naturjakt (zon)' :
-            selectedMode === 'party' ? 'Skattjakt (party)' :
-            'Inget valt';
-        }
-
-        if (startBtn) startBtn.disabled = !selectedMode;
-
-        if (startHint) {
-          startHint.textContent = selectedMode
-            ? 'Tryck Starta för att öppna demo via QR-länk.'
-            : 'Välj ett läge för att aktivera Starta.';
-        }
-
-        document.querySelectorAll('[data-mode-card]').forEach((el) => {
-          const isActive = el.getAttribute('data-mode-card') === selectedMode;
-          el.classList.toggle('is-selected', isActive);
-          el.setAttribute('aria-pressed', isActive ? 'true' : 'false');
-        });
-      }
-
-      // =========================================================
-      // Invite modal (Skattjakt)
-      // =========================================================
+      // =========================
+      // Invite modal helpers
+      // =========================
       function qrImgUrlFor(text) {
         const size = 220;
         const enc = encodeURIComponent(text);
@@ -520,29 +326,53 @@
         });
       }
 
-      function buildPartyInviteLink() {
-        // MVP: vi bjuder in till demo “kalas_demo”
+      function buildPartyInviteLinkFromPayload(payloadJSON) {
+        // Deltagarvyn ska startas via payload (som admin export gör)
+        const encoded = encodeURIComponent(String(payloadJSON || ''));
+        if (!encoded || encoded.length > MAX_INLINE_QS_CHARS) {
+          return { ok: false, reason: 'too-large', len: encoded.length || 0 };
+        }
+
         const base = currentBaseUrl();
         const u = new URL('party.html', base.toString());
         u.searchParams.set('mode', 'party');
-        u.searchParams.set('id', 'kalas_demo');
-        return u.toString();
+        u.searchParams.set('payload', encoded);
+        return { ok: true, url: u.toString() };
       }
 
-      function openInviteModal() {
+      function openInviteModalForLibraryId(libraryId, titleName) {
         if (!inviteOverlay) return;
 
-        const link = buildPartyInviteLink();
-        if (inviteLinkInput) inviteLinkInput.value = link;
-        if (inviteQrImg) inviteQrImg.src = qrImgUrlFor(link);
+        const entry = findLibraryEntry(libraryId);
+        const payloadJSON = entry && typeof entry.payloadJSON === 'string' ? entry.payloadJSON : '';
 
-        setInviteMsg('');
+        if (!payloadJSON) {
+          setInviteMsg('Hittade ingen delbar data. Öppna i Admin och använd “Kopiera JSON”.');
+          if (inviteLinkInput) inviteLinkInput.value = '';
+          if (inviteQrImg) inviteQrImg.removeAttribute('src');
+        } else {
+          const built = buildPartyInviteLinkFromPayload(payloadJSON);
+          if (!built.ok) {
+            setInviteMsg('Den här kartan är för stor för länk/QR. Öppna i Admin och använd “Kopiera JSON”.');
+            if (inviteLinkInput) inviteLinkInput.value = '';
+            if (inviteQrImg) inviteQrImg.removeAttribute('src');
+          } else {
+            if (inviteLinkInput) inviteLinkInput.value = built.url;
+            if (inviteQrImg) inviteQrImg.src = qrImgUrlFor(built.url);
+            setInviteMsg('');
+          }
+        }
+
+        // Sätt titel om vi kan
+        try {
+          const t = document.getElementById('inviteTitle');
+          if (t) t.textContent = `Bjud in till: ${String(titleName || 'Skattjakt')}`;
+        } catch (_) {}
+
         renderInvitePlayers();
 
         inviteOverlay.style.display = 'block';
         inviteOverlay.setAttribute('aria-hidden', 'false');
-
-        // fokus
         try { (inviteNameInput || inviteCloseBtn || inviteOverlay).focus(); } catch (_) {}
       }
 
@@ -557,7 +387,6 @@
 
       if (inviteOverlay) {
         inviteOverlay.addEventListener('click', (e) => {
-          // klick på bakgrund stänger
           if (e.target === inviteOverlay) closeInviteModal();
         });
       }
@@ -573,7 +402,6 @@
             return true;
           }
         } catch (_) {}
-        // fallback: markera input
         if (fallbackInput) {
           try {
             fallbackInput.focus();
@@ -586,7 +414,8 @@
 
       if (inviteCopyBtn) {
         inviteCopyBtn.addEventListener('click', async () => {
-          const link = (inviteLinkInput && inviteLinkInput.value) ? inviteLinkInput.value : buildPartyInviteLink();
+          const link = (inviteLinkInput && inviteLinkInput.value) ? inviteLinkInput.value : '';
+          if (!link) { setInviteMsg('Ingen länk att kopiera.'); return; }
           const ok = await copyText(link, inviteLinkInput);
           setInviteMsg(ok ? 'Länk kopierad.' : 'Kopiering nekades. Markera länken och kopiera manuellt.');
         });
@@ -594,7 +423,8 @@
 
       if (inviteShareBtn) {
         inviteShareBtn.addEventListener('click', async () => {
-          const link = (inviteLinkInput && inviteLinkInput.value) ? inviteLinkInput.value : buildPartyInviteLink();
+          const link = (inviteLinkInput && inviteLinkInput.value) ? inviteLinkInput.value : '';
+          if (!link) { setInviteMsg('Ingen länk att dela.'); return; }
           try {
             if (navigator.share) {
               await navigator.share({ title: 'Skattjakt', text: 'Häng med på Skattjakt!', url: link });
@@ -620,30 +450,239 @@
       if (inviteAddBtn) inviteAddBtn.addEventListener('click', addPlayerFromInput);
       if (inviteNameInput) {
         inviteNameInput.addEventListener('keydown', (e) => {
-          if (e.key === 'Enter') {
-            e.preventDefault();
-            addPlayerFromInput();
-          }
+          if (e.key === 'Enter') { e.preventDefault(); addPlayerFromInput(); }
         });
       }
 
-      // =========================================================
-      // Mode card clicks:
-      // - Naturjakt: bara välj
-      // - Skattjakt: välj + öppna modal (bjud in)
-      // =========================================================
+      // =========================
+      // Render “Mina skattjakter”
+      // =========================
+      function renderPartyLibraryRow() {
+        if (!partyLibraryWrap) return;
+
+        const list = readPartyLibraryForList();
+        if (!list.length) {
+          partyLibraryWrap.innerHTML = '';
+          return;
+        }
+
+        list.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+
+        const section = document.createElement('section');
+        section.className = 'card';
+        section.setAttribute('aria-label', 'Mina skattjakter');
+
+        const head = document.createElement('div');
+        head.className = 'card__head';
+
+        const meta = document.createElement('div');
+        meta.className = 'card__meta';
+
+        const h = document.createElement('h2');
+        h.className = 'h2';
+        h.style.margin = '0';
+        h.textContent = 'Mina skattjakter';
+
+        const p = document.createElement('p');
+        p.className = 'muted small';
+        p.style.margin = '6px 0 0 0';
+        p.textContent = 'Publicerade från Admin på denna enhet. “Min karta” = redigera. “Skattjakt” = bjud in.';
+
+        meta.appendChild(h);
+        meta.appendChild(p);
+        head.appendChild(meta);
+
+        const grid = document.createElement('div');
+        grid.className = 'grid grid--modes';
+        grid.style.marginTop = '12px';
+
+        const base = currentBaseUrl();
+        const adminBase = new URL('pages/admin.html', base.toString());
+
+        function goToAdminLoad(id) {
+          const u = new URL(adminBase.toString());
+          u.searchParams.set('load', String(id));
+          window.location.assign(u.toString());
+        }
+
+        for (const item of list) {
+          const card = document.createElement('div');
+          card.className = 'card card--mode';
+          card.setAttribute('role', 'listitem');
+          card.setAttribute('tabindex', '0');
+          card.style.display = 'block';
+
+          // Valfritt: tryck på själva kortet öppnar Admin
+          card.addEventListener('click', (e) => {
+            const t = e && e.target;
+            const tag = (t && t.tagName) ? String(t.tagName).toUpperCase() : '';
+            // Klick på knapparna ska inte trigga kort-klick
+            if (tag === 'BUTTON') return;
+            goToAdminLoad(item.id);
+          });
+          card.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              goToAdminLoad(item.id);
+            }
+          });
+
+          const top = document.createElement('div');
+          top.className = 'card__top';
+
+          const icon = document.createElement('div');
+          icon.className = 'card__icon';
+          icon.setAttribute('aria-hidden', 'true');
+          icon.textContent = '🎯';
+
+          const meta2 = document.createElement('div');
+          meta2.className = 'card__meta';
+
+          const title = document.createElement('h3');
+          title.className = 'card__title';
+          title.textContent = item.name;
+
+          const desc = document.createElement('p');
+          desc.className = 'card__desc muted';
+          desc.textContent = item.checkpointCount
+            ? `${item.checkpointCount} checkpoints • öppna i admin`
+            : 'Öppna i admin';
+
+          meta2.appendChild(title);
+          meta2.appendChild(desc);
+
+          top.appendChild(icon);
+          top.appendChild(meta2);
+
+          const bottom = document.createElement('div');
+          bottom.className = 'card__bottom';
+
+          // “Skattjakt” → modal (bjud in)
+          const btnInvite = document.createElement('button');
+          btnInvite.type = 'button';
+          btnInvite.className = 'badge';
+          btnInvite.textContent = 'Skattjakt';
+          btnInvite.setAttribute('aria-label', 'Bjud in till denna skattjakt');
+          btnInvite.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            openInviteModalForLibraryId(item.id, item.name);
+          });
+
+          // “Min karta” → admin redigera
+          const btnEdit = document.createElement('button');
+          btnEdit.type = 'button';
+          btnEdit.className = 'badge badge-success';
+          btnEdit.textContent = 'Min karta';
+          btnEdit.setAttribute('aria-label', 'Öppna i admin och redigera');
+          btnEdit.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            goToAdminLoad(item.id);
+          });
+
+          bottom.appendChild(btnInvite);
+          bottom.appendChild(btnEdit);
+
+          card.appendChild(top);
+          card.appendChild(bottom);
+
+          grid.appendChild(card);
+        }
+
+        section.appendChild(head);
+        section.appendChild(grid);
+
+        partyLibraryWrap.innerHTML = '';
+        partyLibraryWrap.appendChild(section);
+      }
+
+      // =========================
+      // err= → error card
+      // =========================
+      const err = qsGet('err');
+      const rid = qsGet('rid');
+      if (err && errorSlot) {
+        const msg = rid
+          ? `Start kunde inte genomföras. Felkod: ${err} (rid: ${rid})`
+          : `Start kunde inte genomföras. Felkod: ${err}`;
+
+        const card = renderErrorCard(msg, [
+          {
+            label: 'Rensa fel',
+            variant: 'ghost',
+            onClick: () => {
+              const url = new URL(window.location.href);
+              url.searchParams.delete('err');
+              url.searchParams.delete('rid');
+              window.history.replaceState({}, '', url.toString());
+              errorSlot.innerHTML = '';
+            }
+          }
+        ]);
+
+        errorSlot.innerHTML = '';
+        errorSlot.appendChild(card);
+      }
+
+      // Render library
+      renderPartyLibraryRow();
+
+      // =========================
+      // Autostart feedback (boot.js tar över)
+      // =========================
+      const qsMode = qsGet('mode');
+      const qsId = qsGet('id');
+      if (qsMode && qsId) {
+        try { toast('Startar…', 'info', { ttlMs: 900 }); } catch (_) {}
+        if (startHint) startHint.textContent = 'Startar…';
+        if (startBtn) {
+          startBtn.disabled = true;
+          startBtn.textContent = 'Startar…';
+        }
+        return;
+      }
+
+      // =========================
+      // Mode selection + Start
+      // =========================
+      let selectedMode = '';
+
+      function setSelectedMode(nextMode) {
+        selectedMode = (nextMode || '').trim();
+
+        if (selectedModeLabel) {
+          selectedModeLabel.textContent =
+            selectedMode === 'zone' ? 'Naturjakt (zon)' :
+            selectedMode === 'party' ? 'Skattjakt (party)' :
+            'Inget valt';
+        }
+
+        if (startBtn) startBtn.disabled = !selectedMode;
+
+        if (startHint) {
+          startHint.textContent = selectedMode
+            ? 'Tryck Starta för att öppna demo via QR-länk.'
+            : 'Välj ett läge för att aktivera Starta.';
+        }
+
+        document.querySelectorAll('[data-mode-card]').forEach((el) => {
+          const isActive = el.getAttribute('data-mode-card') === selectedMode;
+          el.classList.toggle('is-selected', isActive);
+          el.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+        });
+      }
+
       document.querySelectorAll('[data-mode-card]').forEach((card) => {
         card.addEventListener('click', () => {
           const m = (card.getAttribute('data-mode-card') || '').trim();
           setSelectedMode(m);
-          if (m === 'party') openInviteModal();
         });
         card.addEventListener('keydown', (e) => {
           if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault();
             const m = (card.getAttribute('data-mode-card') || '').trim();
             setSelectedMode(m);
-            if (m === 'party') openInviteModal();
           }
         });
       });
