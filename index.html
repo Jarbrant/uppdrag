@@ -1,9 +1,7 @@
 <!-- ============================================================
      FIL: index.html  (HEL FIL)
-     AO 1/15 + AO 11/15 (PATCH) + UI-polish (autostart cleanup)
-     AO 5/6 (FAS 1.2) — Admin entry link (topbar)
-     PATCH (FAS 2.1) — Mina skattjakter (spelkort) från PARTY_LIBRARY_V1
-     Mål: Visa statiska lägen + egen rad under Skattjakt med publicerade jakter
+     PATCH: Skattjakt → öppna “Bjud in”-modal med QR + länk + spelare
+     Policy: UI-only, XSS-safe, fail-closed, subpath-safe
 ============================================================ -->
 <!doctype html>
 <html lang="sv">
@@ -136,6 +134,66 @@
         </div>
       </section>
     </main>
+
+    <!-- ==========================================================
+         BLOCK 4 — Invite Modal (Skattjakt)
+         KRAV:
+         - Öppnas när man trycker “Skattjakt” (inte start)
+         - Innehåller QR + länk + “spelare”-lista (namn)
+         - UI-only: listan är bara på denna enhet (ingen “riktig inbjudan”)
+    =========================================================== -->
+    <div id="inviteOverlay"
+         style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:9999; padding:16px;"
+         aria-hidden="true">
+      <div id="inviteModal"
+           role="dialog"
+           aria-modal="true"
+           aria-labelledby="inviteTitle"
+           style="max-width:720px; margin:40px auto; background:rgba(10,18,30,.98); border:1px solid rgba(255,255,255,.10); border-radius:16px; box-shadow:0 20px 60px rgba(0,0,0,.45); overflow:hidden;">
+        <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:12px; padding:16px 16px 12px 16px;">
+          <div>
+            <div id="inviteTitle" style="font-weight:700; font-size:18px;">Bjud in till Skattjakt</div>
+            <div id="inviteSub" class="muted" style="margin-top:4px;">Dela länken eller låt andra skanna QR.</div>
+          </div>
+          <button id="inviteCloseBtn" type="button" class="btn btn-ghost miniBtn" aria-label="Stäng">
+            Stäng
+          </button>
+        </div>
+
+        <div style="padding:0 16px 16px 16px; display:grid; gap:14px;">
+          <div class="card" style="padding:12px;">
+            <div class="muted small" style="margin-bottom:8px;">QR-kod</div>
+            <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:center;">
+              <img id="inviteQrImg" alt="QR för Skattjakt" style="width:200px; height:200px; border-radius:12px; background:rgba(255,255,255,.06); display:block;" />
+              <div style="flex:1; min-width:220px; display:grid; gap:8px;">
+                <div class="muted small">Länk</div>
+                <input id="inviteLinkInput" class="input" type="text" readonly value="" />
+                <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                  <button id="inviteCopyBtn" type="button" class="btn btn-ghost miniBtn">Kopiera länk</button>
+                  <button id="inviteShareBtn" type="button" class="btn btn-ghost miniBtn">Dela</button>
+                </div>
+                <div id="inviteMsg" class="muted small" style="min-height:18px;"></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card" style="padding:12px;">
+            <div class="muted small" style="margin-bottom:8px;">Spelare (bara på denna enhet)</div>
+
+            <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+              <input id="inviteNameInput" class="input" type="text" placeholder="Skriv namn…" style="flex:1; min-width:200px;" />
+              <button id="inviteAddBtn" type="button" class="btn btn-primary miniBtn">Lägg till</button>
+            </div>
+
+            <ul id="inviteList" style="list-style:none; padding:0; margin:12px 0 0 0; display:grid; gap:8px;"></ul>
+          </div>
+
+          <div class="muted small">
+            Obs: I MVP kan vi inte “skicka” inbjudan. QR/länk är det som fungerar.
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- ==========================================================
@@ -145,7 +203,7 @@
   <script type="module" src="./src/boot.js"></script>
 
   <!-- ==========================================================
-       BLOCK 6 — Index controller (mode-select + Start links + err-card + library)
+       BLOCK 6 — Index controller (mode-select + Start links + err-card + library + invite modal)
   =========================================================== -->
   <script type="module">
     import { qsGet } from './src/util.js';
@@ -164,6 +222,21 @@
       const startBtn = document.getElementById('startBtn'); // HOOK: start-button
       const startHint = document.getElementById('startHint'); // HOOK: hint-area
       const errorSlot = document.getElementById('errorSlot'); // HOOK: error-slot
+
+      // Invite modal hooks
+      const inviteOverlay = document.getElementById('inviteOverlay'); // HOOK: invite-overlay
+      const inviteCloseBtn = document.getElementById('inviteCloseBtn'); // HOOK: invite-close
+      const inviteQrImg = document.getElementById('inviteQrImg'); // HOOK: invite-qr
+      const inviteLinkInput = document.getElementById('inviteLinkInput'); // HOOK: invite-link
+      const inviteCopyBtn = document.getElementById('inviteCopyBtn'); // HOOK: invite-copy
+      const inviteShareBtn = document.getElementById('inviteShareBtn'); // HOOK: invite-share
+      const inviteMsg = document.getElementById('inviteMsg'); // HOOK: invite-msg
+      const inviteNameInput = document.getElementById('inviteNameInput'); // HOOK: invite-name
+      const inviteAddBtn = document.getElementById('inviteAddBtn'); // HOOK: invite-add
+      const inviteList = document.getElementById('inviteList'); // HOOK: invite-list
+
+      // UI-only: spelare-lista lever bara i minnet (ingen ny storage-key)
+      const invitePlayers = []; // HOOK: invite-players-state
 
       function currentBaseUrl() {
         // Om vi är på /uppdrag/index.html => base blir /uppdrag/
@@ -392,16 +465,185 @@
         });
       }
 
+      // =========================================================
+      // Invite modal (Skattjakt)
+      // =========================================================
+      function qrImgUrlFor(text) {
+        const size = 220;
+        const enc = encodeURIComponent(text);
+        return `https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${enc}`;
+      }
+
+      function setInviteMsg(msg) {
+        if (!inviteMsg) return;
+        inviteMsg.textContent = msg || '';
+      }
+
+      function renderInvitePlayers() {
+        if (!inviteList) return;
+        inviteList.innerHTML = '';
+
+        if (!invitePlayers.length) {
+          const li = document.createElement('li');
+          li.className = 'muted small';
+          li.textContent = 'Inga spelare tillagda ännu.';
+          inviteList.appendChild(li);
+          return;
+        }
+
+        invitePlayers.forEach((name, idx) => {
+          const li = document.createElement('li');
+          li.style.display = 'flex';
+          li.style.alignItems = 'center';
+          li.style.justifyContent = 'space-between';
+          li.style.gap = '10px';
+          li.style.padding = '10px';
+          li.style.border = '1px solid rgba(255,255,255,.10)';
+          li.style.borderRadius = '12px';
+          li.style.background = 'rgba(255,255,255,.04)';
+
+          const left = document.createElement('div');
+          left.textContent = name;
+
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'btn btn-ghost miniBtn';
+          btn.textContent = 'Ta bort';
+          btn.addEventListener('click', () => {
+            invitePlayers.splice(idx, 1);
+            renderInvitePlayers();
+          });
+
+          li.appendChild(left);
+          li.appendChild(btn);
+          inviteList.appendChild(li);
+        });
+      }
+
+      function buildPartyInviteLink() {
+        // MVP: vi bjuder in till demo “kalas_demo”
+        const base = currentBaseUrl();
+        const u = new URL('party.html', base.toString());
+        u.searchParams.set('mode', 'party');
+        u.searchParams.set('id', 'kalas_demo');
+        return u.toString();
+      }
+
+      function openInviteModal() {
+        if (!inviteOverlay) return;
+
+        const link = buildPartyInviteLink();
+        if (inviteLinkInput) inviteLinkInput.value = link;
+        if (inviteQrImg) inviteQrImg.src = qrImgUrlFor(link);
+
+        setInviteMsg('');
+        renderInvitePlayers();
+
+        inviteOverlay.style.display = 'block';
+        inviteOverlay.setAttribute('aria-hidden', 'false');
+
+        // fokus
+        try { (inviteNameInput || inviteCloseBtn || inviteOverlay).focus(); } catch (_) {}
+      }
+
+      function closeInviteModal() {
+        if (!inviteOverlay) return;
+        inviteOverlay.style.display = 'none';
+        inviteOverlay.setAttribute('aria-hidden', 'true');
+        setInviteMsg('');
+      }
+
+      if (inviteCloseBtn) inviteCloseBtn.addEventListener('click', closeInviteModal);
+
+      if (inviteOverlay) {
+        inviteOverlay.addEventListener('click', (e) => {
+          // klick på bakgrund stänger
+          if (e.target === inviteOverlay) closeInviteModal();
+        });
+      }
+
+      window.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') closeInviteModal();
+      });
+
+      async function copyText(text, fallbackInput) {
+        try {
+          if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+            await navigator.clipboard.writeText(text);
+            return true;
+          }
+        } catch (_) {}
+        // fallback: markera input
+        if (fallbackInput) {
+          try {
+            fallbackInput.focus();
+            fallbackInput.select();
+            fallbackInput.setSelectionRange(0, String(fallbackInput.value || '').length);
+          } catch (_) {}
+        }
+        return false;
+      }
+
+      if (inviteCopyBtn) {
+        inviteCopyBtn.addEventListener('click', async () => {
+          const link = (inviteLinkInput && inviteLinkInput.value) ? inviteLinkInput.value : buildPartyInviteLink();
+          const ok = await copyText(link, inviteLinkInput);
+          setInviteMsg(ok ? 'Länk kopierad.' : 'Kopiering nekades. Markera länken och kopiera manuellt.');
+        });
+      }
+
+      if (inviteShareBtn) {
+        inviteShareBtn.addEventListener('click', async () => {
+          const link = (inviteLinkInput && inviteLinkInput.value) ? inviteLinkInput.value : buildPartyInviteLink();
+          try {
+            if (navigator.share) {
+              await navigator.share({ title: 'Skattjakt', text: 'Häng med på Skattjakt!', url: link });
+              setInviteMsg('Delat.');
+              return;
+            }
+          } catch (_) {}
+          setInviteMsg('Dela stöds inte här. Kopiera länken istället.');
+        });
+      }
+
+      function addPlayerFromInput() {
+        if (!inviteNameInput) return;
+        const name = String(inviteNameInput.value || '').trim();
+        if (name.length < 1) { setInviteMsg('Skriv ett namn.'); return; }
+        if (name.length > 30) { setInviteMsg('Namn är för långt (max 30).'); return; }
+        invitePlayers.push(name);
+        inviteNameInput.value = '';
+        setInviteMsg('Tillagd.');
+        renderInvitePlayers();
+      }
+
+      if (inviteAddBtn) inviteAddBtn.addEventListener('click', addPlayerFromInput);
+      if (inviteNameInput) {
+        inviteNameInput.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            addPlayerFromInput();
+          }
+        });
+      }
+
+      // =========================================================
+      // Mode card clicks:
+      // - Naturjakt: bara välj
+      // - Skattjakt: välj + öppna modal (bjud in)
+      // =========================================================
       document.querySelectorAll('[data-mode-card]').forEach((card) => {
         card.addEventListener('click', () => {
           const m = (card.getAttribute('data-mode-card') || '').trim();
           setSelectedMode(m);
+          if (m === 'party') openInviteModal();
         });
         card.addEventListener('keydown', (e) => {
           if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault();
             const m = (card.getAttribute('data-mode-card') || '').trim();
             setSelectedMode(m);
+            if (m === 'party') openInviteModal();
           }
         });
       });
