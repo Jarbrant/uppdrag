@@ -7,6 +7,7 @@
 ============================================================ */
 
 import { copyToClipboard } from './util.js';
+import { readLibrary, findLibraryEntry, upsertLibraryEntry, deleteLibraryEntry } from './admin-library.js';
 
 /* ============================================================
    BLOCK 1 — Storage key + draft shape (state/draft)
