@@ -1,1 +1,849 @@
+<!-- ============================================================
+     FIL: pages/partner.html  (HEL FIL)
+     AO 2/6 — Partner UI: Invite → PIN → Rewards + Stock
+     Policy: UI-only, mobil-first, inga nya storage keys, XSS-safe
+     API: D1 Worker (AO 1/6)
+============================================================ -->
+<!doctype html>
+<html lang="sv">
+<head>
+  <!-- ==========================================================
+       BLOCK 1 — Meta + CSS
+  =========================================================== -->
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Partner • Rewards</title>
+  <meta name="description" content="Partnerportal för rewards." />
+  <link rel="stylesheet" href="../styles/main.css" />
+  <style>
+    /* Page-local minimal (ingen ny css-fil) */
+    .row { display:flex; align-items:center; justify-content:space-between; gap: 12px; }
+    .grid2 { display:grid; gap: 12px; grid-template-columns: 1fr; }
+    @media (min-width: 860px){ .grid2{ grid-template-columns: 1fr 1fr; } }
+    .slot { margin-top: 12px; }
+    .stack { display:grid; gap: 10px; }
+    .badge2 { display:inline-flex; align-items:center; justify-content:center; padding: 6px 10px; border-radius: 999px; border:1px solid var(--border); background: rgba(255,255,255,.06); font-weight: 900; font-size: 12px; letter-spacing:.08em; }
+    .badge-ok { border-color: rgba(74,222,128,.45); background: rgba(74,222,128,.10); }
+    .badge-warn { border-color: rgba(251,191,36,.35); background: rgba(251,191,36,.10); }
+    .badge-bad { border-color: rgba(251,113,133,.45); background: rgba(251,113,133,.10); }
+    .badge-neutral { border-color: rgba(255,255,255,.16); background: rgba(255,255,255,.05); }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+    .list { margin:0; padding:0; list-style:none; display:grid; gap: 10px; }
+    .item { border: 1px solid var(--border); background: rgba(255,255,255,.05); border-radius: 14px; padding: 12px; display:flex; gap: 12px; align-items:flex-start; justify-content:space-between; }
+    .itemMeta { min-width:0; display:grid; gap: 4px; }
+    .itemTitle { font-weight: 900; }
+    .itemSub { display:flex; gap: 8px; flex-wrap:wrap; align-items:center; }
+    .itemRight { display:grid; gap: 8px; justify-items:end; }
+    .btnRow { display:flex; gap: 8px; flex-wrap:wrap; justify-content:flex-end; }
+    .inputSmall { min-height: 40px; padding: 10px 10px; border-radius: 12px; }
+    .hint { opacity:.85; }
+    .err { color: rgba(251,113,133,.95); min-height: 18px; font-size: 14px; }
+    .kpi { display:flex; gap: 10px; flex-wrap:wrap; }
+    .kpiBox { border:1px solid rgba(255,255,255,.12); background: rgba(255,255,255,.04); border-radius: 14px; padding: 10px 12px; }
+    .kpiLabel { font-size: 12px; opacity:.85; font-weight: 900; letter-spacing:.06em; }
+    .kpiValue { font-size: 18px; font-weight: 900; margin-top: 4px; }
+    .isHidden { display:none !important; }
+  </style>
+</head>
 
+<body class="theme-party">
+  <!-- ==========================================================
+       BLOCK 2 — Topbar
+  =========================================================== -->
+  <header class="topbar">
+    <div class="topbar__inner">
+      <div class="row">
+        <div>
+          <div class="muted small">Partner</div>
+          <div class="h2" style="margin:0;font-weight:900">Rewards</div>
+        </div>
+        <div class="stack" style="justify-items:end">
+          <span id="modePill" class="badge2 badge-neutral">—</span>
+          <span id="whoami" class="muted small mono">—</span>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- ==========================================================
+       BLOCK 3 — Main
+  =========================================================== -->
+  <main class="main" role="main">
+    <div class="container">
+      <div id="statusSlot" class="slot" aria-live="polite"></div>
+
+      <!-- ======================================================
+           BLOCK 4 — Invite mode
+      ======================================================= -->
+      <section id="inviteCard" class="card paperCard isHidden" aria-label="Invite">
+        <div class="card__head">
+          <div class="card__meta">
+            <h2 class="h2" style="margin:0">Välkommen partner</h2>
+            <p class="muted small" style="margin:6px 0 0 0">
+              Sätt en PIN för att kunna hantera rewards.
+            </p>
+          </div>
+        </div>
+
+        <div class="stack" style="margin-top:12px">
+          <div class="field">
+            <label class="label2" for="invitePin">PIN</label>
+            <input id="invitePin" class="input inputSmall" type="password" inputmode="numeric" placeholder="••••" autocomplete="one-time-code" />
+            <div id="inviteErr" class="err" role="alert"></div>
+          </div>
+
+          <button id="setPinBtn" class="btn btn-primary" type="button">Sätt PIN</button>
+
+          <div id="inviteSuccess" class="isHidden">
+            <div class="kpiBox" style="margin-top:6px">
+              <div class="kpiLabel">PartnerId</div>
+              <div id="invitePartnerId" class="kpiValue mono">—</div>
+            </div>
+            <button id="goLoginBtn" class="btn btn-ghost" type="button" style="margin-top:10px">
+              Fortsätt till login
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ======================================================
+           BLOCK 5 — Login mode
+      ======================================================= -->
+      <section id="loginCard" class="card paperCard isHidden" aria-label="Login">
+        <div class="card__head">
+          <div class="card__meta">
+            <h2 class="h2" style="margin:0">Logga in</h2>
+            <p class="muted small" style="margin:6px 0 0 0">
+              Skriv partnerId och PIN. Vi sparar inget (MVP-säkert).
+            </p>
+          </div>
+        </div>
+
+        <div class="stack" style="margin-top:12px">
+          <div class="field">
+            <label class="label2" for="loginPartnerId">PartnerId</label>
+            <input id="loginPartnerId" class="input inputSmall mono" type="text" placeholder="t.ex p1 eller butik-123" autocomplete="off" />
+          </div>
+
+          <div class="field">
+            <label class="label2" for="loginPin">PIN</label>
+            <input id="loginPin" class="input inputSmall" type="password" inputmode="numeric" placeholder="••••" autocomplete="off" />
+            <div id="loginErr" class="err" role="alert"></div>
+          </div>
+
+          <button id="loginBtn" class="btn btn-primary" type="button">Logga in</button>
+        </div>
+      </section>
+
+      <!-- ======================================================
+           BLOCK 6 — App mode (Rewards)
+      ======================================================= -->
+      <section id="appCard" class="card paperCard isHidden" aria-label="Rewards admin">
+        <div class="card__head">
+          <div class="card__meta">
+            <h2 class="h2" style="margin:0">Rewards</h2>
+            <p class="muted small" style="margin:6px 0 0 0">
+              Skapa och hantera rewards. Stock=0 blir “Slut” och pausas i UI.
+            </p>
+          </div>
+        </div>
+
+        <div class="kpi" style="margin-top:12px">
+          <div class="kpiBox">
+            <div class="kpiLabel">Totalt</div>
+            <div id="kpiTotal" class="kpiValue">0</div>
+          </div>
+          <div class="kpiBox">
+            <div class="kpiLabel">Aktiva</div>
+            <div id="kpiActive" class="kpiValue">0</div>
+          </div>
+          <div class="kpiBox">
+            <div class="kpiLabel">Med stock</div>
+            <div id="kpiStock" class="kpiValue">0</div>
+          </div>
+          <div class="kpiBox">
+            <div class="kpiLabel">Slut</div>
+            <div id="kpiOut" class="kpiValue">0</div>
+          </div>
+        </div>
+
+        <div class="grid2" style="margin-top:12px">
+          <!-- Create form -->
+          <section class="card paperCard" aria-label="Skapa reward">
+            <div class="card__head">
+              <div class="card__meta">
+                <h3 class="h3" style="margin:0">Skapa reward</h3>
+                <p class="muted small" style="margin:6px 0 0 0">
+                  Max 15 aktiva rewards (UI-policy).
+                </p>
+              </div>
+            </div>
+
+            <div class="stack" style="margin-top:12px">
+              <div class="field">
+                <label class="label2" for="cTitle">Title</label>
+                <input id="cTitle" class="input inputSmall" type="text" placeholder="t.ex 10% rabatt" />
+              </div>
+
+              <div class="field">
+                <label class="label2" for="cType">Type</label>
+                <select id="cType" class="input inputSmall">
+                  <option value="percent">percent</option>
+                  <option value="freebie">freebie</option>
+                  <option value="bogo">bogo</option>
+                  <option value="custom">custom</option>
+                </select>
+              </div>
+
+              <div class="field">
+                <label class="label2" for="cValueText">Value</label>
+                <input id="cValueText" class="input inputSmall" type="text" placeholder='t.ex "10%" eller "Gratis kaffe"' />
+              </div>
+
+              <div class="field">
+                <label class="label2" for="cTier">Tier</label>
+                <select id="cTier" class="input inputSmall">
+                  <option value="cp">cp</option>
+                  <option value="final">final</option>
+                </select>
+              </div>
+
+              <div class="grid2">
+                <div class="field">
+                  <label class="label2" for="cTtl">TTL (min)</label>
+                  <input id="cTtl" class="input inputSmall" type="number" min="1" max="43200" value="120" />
+                </div>
+                <div class="field">
+                  <label class="label2" for="cStock">Stock</label>
+                  <input id="cStock" class="input inputSmall" type="number" min="0" max="1000000" value="15" />
+                </div>
+              </div>
+
+              <div id="createErr" class="err" role="alert"></div>
+              <button id="createBtn" class="btn btn-primary" type="button">Skapa</button>
+            </div>
+          </section>
+
+          <!-- List -->
+          <section class="card paperCard" aria-label="Lista rewards">
+            <div class="card__head">
+              <div class="card__meta">
+                <h3 class="h3" style="margin:0">Lista</h3>
+                <p class="muted small" style="margin:6px 0 0 0">
+                  Klicka +1/-1 eller pausa. Uppdateras direkt.
+                </p>
+              </div>
+              <div class="card__side">
+                <button id="refreshBtn" class="btn btn-ghost" type="button">Uppdatera</button>
+              </div>
+            </div>
+
+            <div class="stack" style="margin-top:12px">
+              <ul id="rewardsList" class="list" aria-label="Rewards lista"></ul>
+              <div id="listHint" class="muted small hint"></div>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <div class="muted small" style="margin-top:18px;text-align:center;opacity:.8">
+        Partnerportal (AO 2/6) • Inga persondata • Ingen lagring av credentials
+      </div>
+    </div>
+  </main>
+
+  <!-- ==========================================================
+       BLOCK 7 — JS (inbyggd)
+  =========================================================== -->
+  <script>
+    /* ==========================================================
+       BLOCK 7.1 — API base (KRAV 2)
+    =========================================================== */
+    const API_BASE = 'https://uppdrag.andersmenyit.workers.dev';
+
+    /* ==========================================================
+       BLOCK 7.2 — DOM + helpers (XSS-safe via textContent)
+    =========================================================== */
+    const $ = (sel) => document.querySelector(sel);
+
+    const elStatus = $('#statusSlot');
+    const elModePill = $('#modePill');
+    const elWhoami = $('#whoami');
+
+    const elInviteCard = $('#inviteCard');
+    const elInvitePin = $('#invitePin');
+    const elInviteErr = $('#inviteErr');
+    const elSetPinBtn = $('#setPinBtn');
+    const elInviteSuccess = $('#inviteSuccess');
+    const elInvitePartnerId = $('#invitePartnerId');
+    const elGoLoginBtn = $('#goLoginBtn');
+
+    const elLoginCard = $('#loginCard');
+    const elLoginPartnerId = $('#loginPartnerId');
+    const elLoginPin = $('#loginPin');
+    const elLoginErr = $('#loginErr');
+    const elLoginBtn = $('#loginBtn');
+
+    const elAppCard = $('#appCard');
+    const elRewardsList = $('#rewardsList');
+    const elListHint = $('#listHint');
+    const elRefreshBtn = $('#refreshBtn');
+
+    const elKpiTotal = $('#kpiTotal');
+    const elKpiActive = $('#kpiActive');
+    const elKpiStock = $('#kpiStock');
+    const elKpiOut = $('#kpiOut');
+
+    const elCTitle = $('#cTitle');
+    const elCType = $('#cType');
+    const elCValueText = $('#cValueText');
+    const elCTier = $('#cTier');
+    const elCTtl = $('#cTtl');
+    const elCStock = $('#cStock');
+    const elCreateBtn = $('#createBtn');
+    const elCreateErr = $('#createErr');
+
+    function setText(el, txt) {
+      if (!el) return;
+      el.textContent = (txt ?? '').toString();
+    }
+
+    function setHtmlSafe(el, txt) {
+      // Vi använder inte innerHTML alls i denna sida.
+      setText(el, txt);
+    }
+
+    function clearStatus() {
+      if (!elStatus) return;
+      elStatus.innerHTML = '';
+    }
+
+    function toast(msg, type = 'info') {
+      if (!elStatus) return;
+      const div = document.createElement('div');
+      div.className = 'toast toast--' + (type === 'danger' ? 'danger' : type === 'warn' ? 'warn' : type === 'success' ? 'success' : 'info');
+      div.setAttribute('role', 'status');
+      div.textContent = (msg ?? '').toString();
+      elStatus.appendChild(div);
+      setTimeout(() => { try { div.remove(); } catch (_) {} }, 2200);
+    }
+
+    function qsGet(key) {
+      try {
+        const usp = new URLSearchParams(window.location.search || '');
+        return (usp.get(String(key)) || '').toString().trim();
+      } catch (_) {
+        return '';
+      }
+    }
+
+    function showMode(mode) {
+      // mode: invite|login|app
+      elInviteCard.classList.toggle('isHidden', mode !== 'invite');
+      elLoginCard.classList.toggle('isHidden', mode !== 'login');
+      elAppCard.classList.toggle('isHidden', mode !== 'app');
+
+      const label = mode === 'invite' ? 'INVITE' : mode === 'login' ? 'LOGIN' : 'REWARDS';
+      elModePill.className = 'badge2 badge-neutral';
+      setText(elModePill, label);
+    }
+
+    function validatePin(pin) {
+      const p = (pin || '').toString().trim();
+      if (!p) return 'Skriv in PIN.';
+      if (p.length < 3) return 'PIN är för kort.';
+      if (p.length > 32) return 'PIN är för lång.';
+      return '';
+    }
+
+    /* ==========================================================
+       BLOCK 7.3 — Session state (ingen storage)
+    =========================================================== */
+    const state = {
+      inviteToken: '',
+      partnerId: '',
+      pin: '',
+      rewards: []
+    };
+
+    /* ==========================================================
+       BLOCK 7.4 — API calls (KRAV 2)
+    =========================================================== */
+    function apiUrl(path) {
+      return API_BASE.replace(/\/$/, '') + path;
+    }
+
+    async function postJson(path, body) {
+      const res = await fetch(apiUrl(path), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body || {})
+      });
+      const data = await res.json().catch(() => null);
+      return { ok: res.ok, status: res.status, data };
+    }
+
+    async function getJson(path) {
+      const res = await fetch(apiUrl(path), { method: 'GET' });
+      const data = await res.json().catch(() => null);
+      return { ok: res.ok, status: res.status, data };
+    }
+
+    /* ==========================================================
+       BLOCK 7.5 — Invite flow (KRAV 1A)
+    =========================================================== */
+    async function doSetPin() {
+      setText(elInviteErr, '');
+      clearStatus();
+
+      const token = state.inviteToken;
+      if (!token) {
+        setText(elInviteErr, 'Ogiltig länk (saknar token).');
+        return;
+      }
+
+      const pin = elInvitePin ? elInvitePin.value : '';
+      const err = validatePin(pin);
+      if (err) { setText(elInviteErr, err); return; }
+
+      try {
+        toast('Sätter PIN…', 'info');
+        const out = await postJson('/partners/set-pin', { inviteToken: token, pin: pin.trim() });
+
+        if (out.ok && out.data && out.data.ok === true && out.data.partnerId) {
+          state.partnerId = (out.data.partnerId || '').toString();
+          toast('PIN satt ✅', 'success');
+          elInviteSuccess.classList.remove('isHidden');
+          setText(elInvitePartnerId, state.partnerId);
+          setText(elWhoami, 'partnerId: ' + state.partnerId);
+          return;
+        }
+
+        // Fail-closed
+        const code = (out.data && out.data.error) ? out.data.error : 'forbidden';
+        setText(elInviteErr, 'Kunde inte sätta PIN (' + code + ').');
+        toast('Misslyckades', 'danger');
+      } catch (_) {
+        setText(elInviteErr, 'Nätverksfel. Försök igen.');
+        toast('Nätverksfel', 'danger');
+      }
+    }
+
+    /* ==========================================================
+       BLOCK 7.6 — Login flow (KRAV 1B)
+    =========================================================== */
+    async function doLogin() {
+      setText(elLoginErr, '');
+      clearStatus();
+
+      const partnerId = elLoginPartnerId ? elLoginPartnerId.value.trim() : '';
+      const pin = elLoginPin ? elLoginPin.value.trim() : '';
+
+      if (!partnerId) { setText(elLoginErr, 'Skriv partnerId.'); return; }
+      const err = validatePin(pin);
+      if (err) { setText(elLoginErr, err); return; }
+
+      // Vi verifierar login genom att kalla /rewards/list (403 om fel PIN)
+      state.partnerId = partnerId;
+      state.pin = pin;
+      setText(elWhoami, 'partnerId: ' + state.partnerId);
+
+      await refreshRewards(true);
+    }
+
+    /* ==========================================================
+       BLOCK 7.7 — Rewards: UI policy (KRAV 4)
+    =========================================================== */
+    function countActiveRewards(rewards) {
+      const arr = Array.isArray(rewards) ? rewards : [];
+      let n = 0;
+      for (const r of arr) {
+        const isActive = Number(r.isActive) === 1;
+        if (isActive) n++;
+      }
+      return n;
+    }
+
+    function computeStats(rewards) {
+      const arr = Array.isArray(rewards) ? rewards : [];
+      let total = arr.length;
+      let active = 0;
+      let withStock = 0;
+      let out = 0;
+
+      for (const r of arr) {
+        const ia = Number(r.isActive) === 1;
+        const stock = Number(r.stock) || 0;
+        if (ia) active++;
+        if (stock > 0) withStock++;
+        if (stock <= 0) out++;
+      }
+      return { total, active, withStock, out };
+    }
+
+    function tierBadge(tier) {
+      const t = (tier || '').toString();
+      const b = document.createElement('span');
+      b.className = 'badge2 badge-neutral';
+      b.textContent = (t === 'final') ? 'FINAL' : 'CP';
+      return b;
+    }
+
+    function statusBadge(r) {
+      const stock = Number(r.stock) || 0;
+      const isActive = Number(r.isActive) === 1;
+
+      const b = document.createElement('span');
+
+      if (stock <= 0) {
+        b.className = 'badge2 badge-bad';
+        b.textContent = 'SLUT';
+        return b;
+      }
+      if (!isActive) {
+        b.className = 'badge2 badge-warn';
+        b.textContent = 'PAUSAD';
+        return b;
+      }
+      b.className = 'badge2 badge-ok';
+      b.textContent = 'AKTIV';
+      return b;
+    }
+
+    async function refreshRewards(showAppOnSuccess) {
+      clearStatus();
+      setText(elCreateErr, '');
+      setText(elListHint, '');
+
+      if (!state.partnerId || !state.pin) {
+        toast('Saknar partnerId/PIN', 'warn');
+        showMode('login');
+        return;
+      }
+
+      try {
+        toast('Hämtar rewards…', 'info');
+
+        const qs = new URLSearchParams();
+        qs.set('partnerId', state.partnerId);
+        qs.set('pin', state.pin);
+
+        const out = await getJson('/rewards/list?' + qs.toString());
+
+        if (!out.ok || !out.data || out.data.ok !== true || !Array.isArray(out.data.rewards)) {
+          // 403 fel pin, 404 partner saknas
+          if (out.status === 403) {
+            setText(elLoginErr, 'Fel PIN eller saknar behörighet.');
+            toast('Login misslyckades', 'danger');
+            showMode('login');
+            return;
+          }
+          if (out.status === 404) {
+            setText(elLoginErr, 'Partner hittas inte.');
+            toast('Partner saknas', 'danger');
+            showMode('login');
+            return;
+          }
+
+          toast('Kunde inte hämta rewards', 'danger');
+          setText(elListHint, 'Försök igen.');
+          return;
+        }
+
+        state.rewards = out.data.rewards;
+
+        // UI: om stock=0 -> visa SLUT och i UI behandla som inaktiv
+        // (API kan fortfarande ha isActive=1, men vi visar “Slut” och ger knapp “Pausa”)
+        renderRewardsList();
+
+        const s = computeStats(state.rewards);
+        setText(elKpiTotal, String(s.total));
+        setText(elKpiActive, String(s.active));
+        setText(elKpiStock, String(s.withStock));
+        setText(elKpiOut, String(s.out));
+
+        if (showAppOnSuccess) {
+          showMode('app');
+          toast('Inloggad ✅', 'success');
+        } else {
+          toast('Uppdaterad', 'success');
+        }
+      } catch (_) {
+        toast('Nätverksfel. Försök igen.', 'danger');
+      }
+    }
+
+    function safeNum(v, def = 0) {
+      const n = Math.floor(Number(v));
+      return Number.isFinite(n) ? n : def;
+    }
+
+    async function updateReward(rewardId, patch) {
+      // Fail-closed
+      if (!rewardId || !state.partnerId || !state.pin) return;
+
+      try {
+        const body = Object.assign({}, patch || {}, {
+          partnerId: state.partnerId,
+          pin: state.pin,
+          rewardId: rewardId
+        });
+
+        const out = await postJson('/rewards/update', body);
+
+        if (out.ok && out.data && out.data.ok === true) {
+          toast('Sparat', 'success');
+          await refreshRewards(false);
+          return;
+        }
+
+        if (out.status === 403) {
+          toast('Forbidden (PIN?)', 'danger');
+          showMode('login');
+          return;
+        }
+        if (out.status === 404) {
+          toast('Reward saknas', 'danger');
+          return;
+        }
+
+        toast('Kunde inte spara', 'danger');
+      } catch (_) {
+        toast('Nätverksfel vid spara', 'danger');
+      }
+    }
+
+    function enforceMaxActiveBeforeCreate() {
+      const active = countActiveRewards(state.rewards);
+      if (active >= 15) {
+        return 'Max 15 aktiva rewards. Pausa eller sätt stock=0 på en befintlig.';
+      }
+      return '';
+    }
+
+    function defaultTtlForTier(tier) {
+      return (tier === 'final') ? 720 : 120;
+    }
+
+    async function doCreateReward() {
+      setText(elCreateErr, '');
+      clearStatus();
+
+      if (!state.partnerId || !state.pin) {
+        setText(elCreateErr, 'Du måste logga in först.');
+        return;
+      }
+
+      // UI policy: max 15 aktiva
+      const policyErr = enforceMaxActiveBeforeCreate();
+      if (policyErr) { setText(elCreateErr, policyErr); toast('Blockerat', 'warn'); return; }
+
+      const title = elCTitle ? elCTitle.value.trim() : '';
+      const type = elCType ? elCType.value : 'custom';
+      const valueText = elCValueText ? elCValueText.value.trim() : '';
+      const tier = elCTier ? elCTier.value : 'cp';
+      const ttlMinutes = safeNum(elCTtl ? elCTtl.value : defaultTtlForTier(tier), defaultTtlForTier(tier));
+      const stock = safeNum(elCStock ? elCStock.value : 15, 15);
+
+      if (!title) return setText(elCreateErr, 'Title krävs.');
+      if (!valueText) return setText(elCreateErr, 'Value krävs.');
+      if (ttlMinutes < 1) return setText(elCreateErr, 'TTL måste vara >= 1.');
+      if (stock < 0) return setText(elCreateErr, 'Stock får inte vara negativ.');
+
+      try {
+        toast('Skapar…', 'info');
+
+        const out = await postJson('/rewards/create', {
+          partnerId: state.partnerId,
+          pin: state.pin,
+          title,
+          type,
+          valueText,
+          stock,
+          ttlMinutes,
+          tier
+        });
+
+        if (out.ok && out.data && out.data.ok === true && out.data.rewardId) {
+          toast('Skapad ✅', 'success');
+          // reset form (light)
+          if (elCTitle) elCTitle.value = '';
+          if (elCValueText) elCValueText.value = '';
+          if (elCTier) elCTier.value = 'cp';
+          if (elCTtl) elCTtl.value = String(defaultTtlForTier('cp'));
+          if (elCStock) elCStock.value = '15';
+
+          await refreshRewards(false);
+          return;
+        }
+
+        if (out.status === 403) {
+          toast('Forbidden (PIN?)', 'danger');
+          showMode('login');
+          return;
+        }
+
+        const code = (out.data && out.data.error) ? out.data.error : 'bad_request';
+        setText(elCreateErr, 'Kunde inte skapa (' + code + ').');
+        toast('Misslyckades', 'danger');
+      } catch (_) {
+        setText(elCreateErr, 'Nätverksfel. Försök igen.');
+        toast('Nätverksfel', 'danger');
+      }
+    }
+
+    function renderRewardsList() {
+      if (!elRewardsList) return;
+      elRewardsList.innerHTML = '';
+
+      const arr = Array.isArray(state.rewards) ? state.rewards : [];
+      if (arr.length === 0) {
+        setText(elListHint, 'Inga rewards ännu.');
+        return;
+      }
+
+      for (const r of arr) {
+        const li = document.createElement('li');
+        li.className = 'item';
+
+        const meta = document.createElement('div');
+        meta.className = 'itemMeta';
+
+        const title = document.createElement('div');
+        title.className = 'itemTitle';
+        title.textContent = (r.title || '').toString();
+
+        const sub = document.createElement('div');
+        sub.className = 'itemSub';
+
+        const val = document.createElement('span');
+        val.className = 'muted small';
+        val.textContent = (r.valueText || '').toString();
+
+        const stock = document.createElement('span');
+        stock.className = 'muted small mono';
+        stock.textContent = 'stock: ' + String(Number(r.stock) || 0);
+
+        sub.appendChild(val);
+        sub.appendChild(stock);
+        sub.appendChild(tierBadge(r.tier));
+        sub.appendChild(statusBadge(r));
+
+        meta.appendChild(title);
+        meta.appendChild(sub);
+
+        const right = document.createElement('div');
+        right.className = 'itemRight';
+
+        const btnRow = document.createElement('div');
+        btnRow.className = 'btnRow';
+
+        const btnPlus = document.createElement('button');
+        btnPlus.type = 'button';
+        btnPlus.className = 'btn btn-ghost';
+        btnPlus.textContent = '+1';
+
+        const btnMinus = document.createElement('button');
+        btnMinus.type = 'button';
+        btnMinus.className = 'btn btn-ghost';
+        btnMinus.textContent = '-1';
+
+        const btnToggle = document.createElement('button');
+        btnToggle.type = 'button';
+        btnToggle.className = 'btn btn-ghost';
+
+        const stockN = Number(r.stock) || 0;
+        const isActive = Number(r.isActive) === 1;
+
+        // UI-policy: om stock=0 -> “Slut” och visa som inaktiv
+        // (knapp erbjuder att återaktivera + sätta stock)
+        const effectiveActive = (stockN > 0) && isActive;
+
+        btnToggle.textContent = effectiveActive ? 'Pausa' : 'Aktivera';
+
+        btnPlus.addEventListener('click', () => {
+          const next = Math.max(0, stockN + 1);
+          // om stock går från 0 -> 1, auto-aktivera i UI
+          const patch = (next > 0) ? { stock: next, isActive: 1 } : { stock: next };
+          updateReward(r.rewardId, patch);
+        });
+
+        btnMinus.addEventListener('click', () => {
+          const next = Math.max(0, stockN - 1);
+          // om blir 0 -> pausa i UI
+          const patch = (next === 0) ? { stock: 0, isActive: 0 } : { stock: next };
+          updateReward(r.rewardId, patch);
+        });
+
+        btnToggle.addEventListener('click', () => {
+          // Toggle isActive (men om stock=0 ska UI visa Slut ändå)
+          const nextActive = effectiveActive ? 0 : 1;
+          const patch = { isActive: nextActive };
+          updateReward(r.rewardId, patch);
+        });
+
+        btnRow.appendChild(btnPlus);
+        btnRow.appendChild(btnMinus);
+        btnRow.appendChild(btnToggle);
+
+        right.appendChild(btnRow);
+
+        li.appendChild(meta);
+        li.appendChild(right);
+
+        elRewardsList.appendChild(li);
+      }
+
+      setText(elListHint, 'Tips: stock=0 → “Slut” och pausas i UI.');
+    }
+
+    /* ==========================================================
+       BLOCK 7.8 — Boot: mode switch
+    =========================================================== */
+    (function boot() {
+      state.inviteToken = qsGet('invite');
+
+      // Invite mode
+      if (state.inviteToken) {
+        showMode('invite');
+        setText(elWhoami, 'invite: ' + state.inviteToken.slice(0, 8) + '…');
+        if (!state.inviteToken || state.inviteToken.length < 10) {
+          setText(elInviteErr, 'Ogiltig länk (token saknas/är för kort).');
+          toast('Ogiltig invite-länk', 'danger');
+        }
+      } else {
+        showMode('login');
+        setText(elWhoami, '—');
+      }
+
+      // Defaults: TTL based on tier
+      if (elCTier && elCTtl) {
+        elCTier.addEventListener('change', () => {
+          const t = (elCTier.value || 'cp').toString();
+          elCTtl.value = String(defaultTtlForTier(t));
+        });
+      }
+
+      if (elSetPinBtn) elSetPinBtn.addEventListener('click', doSetPin);
+      if (elGoLoginBtn) elGoLoginBtn.addEventListener('click', () => {
+        // gå till login-mode (rensar query)
+        try {
+          const u = new URL(window.location.href);
+          u.search = '';
+          window.location.assign(u.toString());
+        } catch (_) {
+          showMode('login');
+        }
+      });
+
+      if (elLoginBtn) elLoginBtn.addEventListener('click', doLogin);
+      if (elRefreshBtn) elRefreshBtn.addEventListener('click', () => refreshRewards(false));
+      if (elCreateBtn) elCreateBtn.addEventListener('click', doCreateReward);
+
+      // Enter = submit (invite/login)
+      if (elInvitePin) elInvitePin.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); doSetPin(); } });
+      if (elLoginPin) elLoginPin.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); doLogin(); } });
+    })();
+  </script>
+</body>
+</html>
