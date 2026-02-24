@@ -5,7 +5,9 @@
    AO 7/8 (FAS 2.0) — Grid-läge (alternativ vy): Toggle Karta/Grid + grid UI-state
    AO 8/8 (FAS 2.0) — Auto-ledtråd + final “Skattkista”
    NICE-TO-HAVE PACK (FAS 2.1) — Progress persist + auto-pan + final stamp (UI-only)
+   AO 1/3 (FAS 1.0) — Loot-val “Välj 1 av 3” efter varje checkpoint
    Policy: UI-only, fail-closed, ingen engine
+   AO 1/3 policy: Inga nya storage-keys för rewards (rewards hålls i minnet)
 ============================================================ */
 
 /* ============================================================
@@ -31,6 +33,13 @@ const elViewMapBtn = $('#viewMapBtn');
 const elViewGridBtn = $('#viewGridBtn');
 const elGridWrap = $('#gridWrap');
 const elGridHint = $('#gridHint');
+
+// AO 1/3: rewards UI hooks
+const elLootOverlay = $('#lootOverlay');     // HOOK: loot-overlay
+const elLootCards = $('#lootCards');         // HOOK: loot-cards
+const elLootSkip = $('#lootSkipBtn');        // HOOK: loot-skip
+const elRewardsList = $('#rewardsList');     // HOOK: rewards-list
+const elRewardsEmpty = $('#rewardsEmpty');   // HOOK: rewards-empty
 
 /* ============================================================
    BLOCK 2 — UI helpers
@@ -512,9 +521,6 @@ function renderGrid() {
 
 /* ============================================================
    BLOCK 9 — Active checkpoint UI + NICE: auto-pan
-   PATCH:
-   - Om vald checkpoint redan är klar → hoppa till nästa spelbara
-   - Om inget finns kvar → lås UI och visa klart-läge
 ============================================================ */
 function setActiveCheckpoint(nextIndex, opts = {}) {
   const maxIdx = Math.max(0, checkpoints.length - 1);
@@ -585,9 +591,6 @@ function setActiveCheckpoint(nextIndex, opts = {}) {
 
 /* ============================================================
    BLOCK 10 — Code validation + clear/advance + final stamp
-   PATCH:
-   - Om ingen kod är satt på CP: tillåt OK utan kod och tydlig UX
-   - Lås UI tydligt när allt är klart
 ============================================================ */
 function validateCodeInput(value, expectedCode) {
   const expected = asText(expectedCode);
@@ -692,12 +695,348 @@ function onCheckpointApproved() {
 
   setActiveCheckpoint(next, { pan: true });
 }
+
+/* ============================================================
+   BLOCK 10.1 — AO 1/3 Rewards state (IN-MEMORY, inga nya storage-keys)
+============================================================ */
+const state = {
+  rewardsUnlocked: [],            // [{ partnerId, partnerName, rewardId, rewardTitle, rewardShort, tier, expiresMinutes, cpIndex, status }]
+  lootOptionsByCheckpoint: {}     // { [cpIndex]: [rewardId, rewardId, rewardId] }  (determinism i sessionen)
+};
+
+// AO 1/3 demo catalog (12–20 rewards)
+const partnerRewardsCatalog = [
+  { partnerId: 'p1', partnerName: 'Café Nova',      rewardId: 'r1',  rewardTitle: 'Gratis saft',         rewardShort: 'En liten saft i kassan.',      tier: 'cp',    expiresMinutes: 60 },
+  { partnerId: 'p1', partnerName: 'Café Nova',      rewardId: 'r2',  rewardTitle: 'Kanelbulle -30%',     rewardShort: 'Rabatt på en bulle.',         tier: 'cp',    expiresMinutes: 120 },
+  { partnerId: 'p2', partnerName: 'Glasspiraten',   rewardId: 'r3',  rewardTitle: 'Strösselbonus',       rewardShort: 'Extra strössel på glassen.',  tier: 'cp',    expiresMinutes: 90 },
+  { partnerId: 'p2', partnerName: 'Glasspiraten',   rewardId: 'r4',  rewardTitle: 'Mini-glass',          rewardShort: 'En mini-glass (MVP).',        tier: 'cp',    expiresMinutes: 45 },
+  { partnerId: 'p3', partnerName: 'Bokhörnan',      rewardId: 'r5',  rewardTitle: 'Mysterie-klistermärke', rewardShort:'Välj 1 av 3 stickers.',       tier: 'cp',    expiresMinutes: 180 },
+  { partnerId: 'p3', partnerName: 'Bokhörnan',      rewardId: 'r6',  rewardTitle: 'Bokmärke',            rewardShort: 'Ett bokmärke i disken.',      tier: 'cp',    expiresMinutes: 240 },
+  { partnerId: 'p4', partnerName: 'SportZonen',     rewardId: 'r7',  rewardTitle: 'Power high-five',     rewardShort: 'Ett hemligt handslag (lol).', tier: 'cp',    expiresMinutes: 999 },
+  { partnerId: 'p4', partnerName: 'SportZonen',     rewardId: 'r8',  rewardTitle: 'Vatten -20%',         rewardShort: 'Rabatt på vattenflaska.',     tier: 'cp',    expiresMinutes: 120 },
+  { partnerId: 'p5', partnerName: 'Pizzaplaneten',  rewardId: 'r9',  rewardTitle: 'Extra topping',       rewardShort: 'En extra topping (MVP).',     tier: 'cp',    expiresMinutes: 60 },
+  { partnerId: 'p5', partnerName: 'Pizzaplaneten',  rewardId: 'r10', rewardTitle: 'Dipp',               rewardShort: 'Valfri dipp i kassan.',       tier: 'cp',    expiresMinutes: 60 },
+
+  // Final-tier (skattkista)
+  { partnerId: 'pf', partnerName: 'Skattkistan',    rewardId: 'f1',  rewardTitle: 'Stjärnmynt',          rewardShort: '1 st stjärnmynt (MVP).',      tier: 'final', expiresMinutes: 1440 },
+  { partnerId: 'pf', partnerName: 'Skattkistan',    rewardId: 'f2',  rewardTitle: 'Guldbadge',           rewardShort: 'En guldbadge i profilen.',    tier: 'final', expiresMinutes: 1440 },
+  { partnerId: 'pf', partnerName: 'Skattkistan',    rewardId: 'f3',  rewardTitle: 'Hemlig kod',          rewardShort: 'En hemlig kod (MVP).',        tier: 'final', expiresMinutes: 1440 },
+  { partnerId: 'pf', partnerName: 'Skattkistan',    rewardId: 'f4',  rewardTitle: 'Superbonus',          rewardShort: 'En extra bonus (MVP).',       tier: 'final', expiresMinutes: 1440 }
+];
+
+function byRewardId(id) {
+  const rid = asText(id);
+  if (!rid) return null;
+  return partnerRewardsCatalog.find((r) => asText(r.rewardId) === rid) || null;
+}
+
+/* ============================================================
+   BLOCK 10.2 — AO 1/3 Deterministic “random” (seed -> rng)
+   - Samma game + checkpoint ger samma 3 options (i sessionen + stabil seed)
+============================================================ */
+function seedToUint32(seedStr) {
+  // djb2 -> uint32
+  const s = (seedStr ?? '').toString();
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) {
+    h = ((h << 5) + h) + s.charCodeAt(i);
+    h = h >>> 0;
+  }
+  return h >>> 0;
+}
+
+function mulberry32(seed) {
+  let a = (seed >>> 0);
+  return function rng() {
+    a |= 0;
+    a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function pickUnique3(list, rng) {
+  const arr = Array.isArray(list) ? list.slice() : [];
+  if (arr.length <= 3) return arr.slice(0, 3);
+
+  // Fisher–Yates shuffle (partial)
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    const tmp = arr[i];
+    arr[i] = arr[j];
+    arr[j] = tmp;
+  }
+  return arr.slice(0, 3);
+}
+
+function computeLootOptionsForCheckpoint(cpIndex, tier) {
+  const idx = Number(cpIndex);
+  const t = (tier === 'final') ? 'final' : 'cp';
+
+  // determinism cache i sessionen
+  const cached = state.lootOptionsByCheckpoint[String(idx)];
+  if (Array.isArray(cached) && cached.length === 3) return cached.slice(0, 3);
+
+  // seed: id från URL eller fingerprint + cpIndex
+  const urlId = asText(qsGet('id'));
+  const gameId = urlId || payloadFingerprint || asText(elName?.textContent) || 'game';
+  const seedStr = `${gameId}::${idx}::${t}`;
+
+  let rng = null;
+  try {
+    const seed = seedToUint32(seedStr);
+    rng = mulberry32(seed);
+  } catch (_) {
+    rng = null;
+  }
+
+  // tier-filter först
+  const tierPool = partnerRewardsCatalog.filter((r) => asText(r.tier) === t);
+  const pool = (tierPool.length >= 3) ? tierPool : partnerRewardsCatalog.slice();
+
+  // fallback om seed saknas: Math.random utan crash
+  const rand = rng || (() => Math.random());
+
+  const picked = pickUnique3(pool, rand)
+    .map((r) => asText(r.rewardId))
+    .filter((x) => !!x);
+
+  // fail-closed: säkerställ 3 unika
+  const uniq = [];
+  for (const id of picked) {
+    if (!uniq.includes(id)) uniq.push(id);
+    if (uniq.length === 3) break;
+  }
+  // om något saknas, fyll deterministiskt med första som inte finns
+  if (uniq.length < 3) {
+    for (const r of pool) {
+      const id = asText(r.rewardId);
+      if (!id) continue;
+      if (uniq.includes(id)) continue;
+      uniq.push(id);
+      if (uniq.length === 3) break;
+    }
+  }
+
+  // om fortfarande inte 3 → ta från hela catalog
+  if (uniq.length < 3) {
+    for (const r of partnerRewardsCatalog) {
+      const id = asText(r.rewardId);
+      if (!id) continue;
+      if (uniq.includes(id)) continue;
+      uniq.push(id);
+      if (uniq.length === 3) break;
+    }
+  }
+
+  // cache
+  state.lootOptionsByCheckpoint[String(idx)] = uniq.slice(0, 3);
+  return uniq.slice(0, 3);
+}
+
+/* ============================================================
+   BLOCK 10.3 — AO 1/3 Rewards render (Mina belöningar)
+============================================================ */
+function renderRewardsPanel() {
+  if (!elRewardsList) return; // fail-closed: inget att rendera
+
+  // rensa
+  try { elRewardsList.innerHTML = ''; } catch (_) {}
+
+  const items = Array.isArray(state.rewardsUnlocked) ? state.rewardsUnlocked : [];
+  const hasAny = items.length > 0;
+
+  if (elRewardsEmpty) elRewardsEmpty.style.display = hasAny ? 'none' : '';
+
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i] || {};
+    const li = document.createElement('li');
+    li.className = 'rewardItem';
+
+    const meta = document.createElement('div');
+    meta.className = 'rewardItem__meta';
+
+    const partner = document.createElement('div');
+    partner.className = 'rewardPartner';
+    partner.textContent = asText(it.partnerName) || 'Partner';
+
+    const title = document.createElement('div');
+    title.className = 'rewardTitle';
+    title.textContent = asText(it.rewardTitle) || 'Belöning';
+
+    const small = document.createElement('div');
+    small.className = 'muted small';
+    small.textContent = asText(it.rewardShort) || '';
+
+    meta.appendChild(partner);
+    meta.appendChild(title);
+    if (asText(it.rewardShort)) meta.appendChild(small);
+
+    const status = document.createElement('div');
+    status.className = 'rewardStatus muted small';
+    status.textContent = 'Ej inlöst (MVP)';
+
+    li.appendChild(meta);
+    li.appendChild(status);
+    elRewardsList.appendChild(li);
+  }
+}
+
+/* ============================================================
+   BLOCK 10.4 — AO 1/3 Loot modal UI (open/close + render)
+   - Fail-closed: om DOM saknas -> ingen crash, fortsätt utan loot
+============================================================ */
+function lootDomOk() {
+  return !!(elLootOverlay && elLootCards && elLootSkip);
+}
+
+function openLootModal() {
+  if (!elLootOverlay) return false;
+  elLootOverlay.classList.remove('is-hidden');
+  elLootOverlay.setAttribute('aria-hidden', 'false');
+  return true;
+}
+
+function closeLootModal() {
+  if (!elLootOverlay) return;
+  elLootOverlay.classList.add('is-hidden');
+  elLootOverlay.setAttribute('aria-hidden', 'true');
+
+  // rensa cards
+  try { if (elLootCards) elLootCards.innerHTML = ''; } catch (_) {}
+}
+
+function renderLootCards(rewardIds, onPick) {
+  if (!elLootCards) return false;
+
+  // rensa
+  try { elLootCards.innerHTML = ''; } catch (_) {}
+
+  const ids = Array.isArray(rewardIds) ? rewardIds : [];
+  for (let i = 0; i < ids.length; i++) {
+    const rid = ids[i];
+    const r = byRewardId(rid);
+    if (!r) continue;
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'lootCardBtn';
+    btn.setAttribute('role', 'listitem');
+    btn.setAttribute('data-reward-id', asText(r.rewardId));
+
+    const partner = document.createElement('div');
+    partner.className = 'lootCardPartner';
+    partner.textContent = asText(r.partnerName) || 'Partner';
+
+    const title = document.createElement('div');
+    title.className = 'lootCardTitle';
+    title.textContent = asText(r.rewardTitle) || 'Belöning';
+
+    const short = document.createElement('div');
+    short.className = 'lootCardShort muted small';
+    short.textContent = asText(r.rewardShort) || '';
+
+    btn.appendChild(partner);
+    btn.appendChild(title);
+    if (asText(r.rewardShort)) btn.appendChild(short);
+
+    btn.addEventListener('click', () => {
+      try { onPick?.(r); } catch (_) {}
+    });
+
+    elLootCards.appendChild(btn);
+  }
+
+  return true;
+}
+
+function bindLootModalStaticEvents() {
+  if (elLootSkip) {
+    elLootSkip.addEventListener('click', () => {
+      // Skip hanteras per “session” via pending callback
+      try { window.__AO1_LOOT_SKIP__?.(); } catch (_) {}
+    });
+  }
+
+  // klick på backdrop = stäng (skip)
+  if (elLootOverlay) {
+    elLootOverlay.addEventListener('click', (e) => {
+      const t = e?.target;
+      const isBackdrop = !!(t && t.getAttribute && t.getAttribute('data-close') === '1');
+      if (!isBackdrop) return;
+      try { window.__AO1_LOOT_SKIP__?.(); } catch (_) {}
+    });
+  }
+}
+
+/* ============================================================
+   BLOCK 10.5 — AO 1/3 Trigger: efter checkpoint “Klar”
+   - När OK korrekt: visa loot, välj 1 eller hoppa över -> fortsätt som normalt
+============================================================ */
+let lootInProgress = false;
+
+function triggerLootAfterCheckpoint(cpIndex, isFinal, onDone) {
+  // fail-closed: om modal saknas -> toast och fortsätt utan loot
+  if (!lootDomOk()) {
+    toast('Belöningar kunde inte visas', 'warn', 1600);
+    try { onDone?.(); } catch (_) {}
+    return;
+  }
+
+  // skydd mot dubbelklick
+  if (lootInProgress) return;
+  lootInProgress = true;
+
+  const tier = isFinal ? 'final' : 'cp';
+  const options = computeLootOptionsForCheckpoint(cpIndex, tier);
+
+  const finish = () => {
+    lootInProgress = false;
+    closeLootModal();
+    try { onDone?.(); } catch (_) {}
+  };
+
+  // exponera skip-callback så statiska event kan trigga “session-skip”
+  window.__AO1_LOOT_SKIP__ = () => {
+    toast('Hoppar över belöning', 'info', 900);
+    finish();
+  };
+
+  const ok = openLootModal();
+  if (!ok) {
+    toast('Belöningar kunde inte visas', 'warn', 1600);
+    finish();
+    return;
+  }
+
+  renderLootCards(options, (reward) => {
+    // lägg till i state
+    const r = reward || {};
+    const item = {
+      partnerId: asText(r.partnerId),
+      partnerName: asText(r.partnerName),
+      rewardId: asText(r.rewardId),
+      rewardTitle: asText(r.rewardTitle),
+      rewardShort: asText(r.rewardShort),
+      tier: asText(r.tier),
+      expiresMinutes: Number.isFinite(Number(r.expiresMinutes)) ? Number(r.expiresMinutes) : 0,
+      cpIndex: Number(cpIndex),
+      status: 'unredeemed'
+    };
+
+    // enkel dedupe (samma reward kan annars läggas flera gånger vid glitch)
+    const exists = state.rewardsUnlocked.some((x) => asText(x?.rewardId) === item.rewardId && Number(x?.cpIndex) === item.cpIndex);
+    if (!exists) state.rewardsUnlocked.push(item);
+
+    renderRewardsPanel();
+    toast('Belöning tillagd', 'info', 1100);
+    finish();
+  });
+}
+
 /* ============================================================
    BLOCK 11 — Boot
-   PATCH:
-   - Enter i kodfältet triggar OK
-   - Om karta ej funkar → auto Grid + disable map-tab
-   - Restore progress: om activeIndex redan klar → hoppa till nästa spelbara
 ============================================================ */
 (function bootPartyMap() {
   'use strict';
@@ -713,6 +1052,7 @@ function onCheckpointApproved() {
   }
 
   bindViewToggle();
+  bindLootModalStaticEvents(); // AO 1/3
 
   const mode = qsGet('mode');
   const payloadRaw = qsGet('payload');
@@ -749,6 +1089,9 @@ function onCheckpointApproved() {
 
   checkpoints = buildCheckpointsFromPayload(payload);
   setText(elName, payload.name || 'Skattjakt');
+
+  // init rewards panel (AO 1/3)
+  renderRewardsPanel();
 
   // Map init (fail-soft)
   let mapOk = false;
@@ -836,7 +1179,13 @@ function onCheckpointApproved() {
         return;
       }
 
-      onCheckpointApproved();
+      // AO 1/3: efter “checkpoint klar” -> visa loot (fail-closed om saknas)
+      const cpIndex = Number(cp.index);
+      const isFinal = (cp.isFinal === true);
+
+      triggerLootAfterCheckpoint(cpIndex, isFinal, () => {
+        onCheckpointApproved();
+      });
     });
   }
 
