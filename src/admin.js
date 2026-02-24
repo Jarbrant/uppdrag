@@ -1547,6 +1547,7 @@ function renderQRPanel() {
 /* ============================================================
    BLOCK 16 — Boot
    PATCH:
+   - new=1 från index = skapa NY skattjakt (rensa utkast + städa URL)
    - Kör load först
    - Skapa Radera-knapp baserat på URL ?load=
    - Render efter att events är bundna
@@ -1557,7 +1558,27 @@ function renderQRPanel() {
   if (window.__FAS12_AO5_ADMIN_INIT__) return; // HOOK: init-guard-admin
   window.__FAS12_AO5_ADMIN_INIT__ = true;
 
+  // 0) FORCE NEW: om admin öppnas med ?new=1 → starta ny skattjakt
+  const forceNew = qsGet('new') === '1';
+  if (forceNew) {
+    try { localStorage.removeItem(DRAFT_KEY); } catch (_) {}
+    loadedLibraryId = '';
+    loadedLibraryName = '';
+    draft = defaultDraft();
+    dirty = true;
+
+    showStatus('Nytt utkast skapat.', 'info');
+
+    // städa URL så man inte fastnar i new=1
+    try {
+      const u = new URL(window.location.href);
+      u.searchParams.delete('new');
+      window.history.replaceState({}, '', u.toString());
+    } catch (_) {}
+  }
+
   // 1) Försök ladda från library om ?load= finns (visar status om saknas)
+  // OBS: om new=1 användes så finns inget load och draft är redan nollad.
   tryLoadFromLibraryOnBoot();
 
   // 2) Skapa Radera-knapp om URL har ?load= (source of truth)
