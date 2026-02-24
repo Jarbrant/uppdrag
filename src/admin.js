@@ -369,7 +369,7 @@ function createDeleteButtonIfLoaded() {
     }
 
     // Hämta posten live (minskar risk för fel namn/id)
-    const entry = findLibraryEntry(urlLoadId);
+    const entry = findLibraryEntryLocal(urlLoadId);
     const name = safeText(entry?.name || loadedLibraryName || 'denna skattjakt').trim();
 
     const ok = window.confirm(`Vill du verkligen radera "${name}"?`);
