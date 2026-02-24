@@ -338,9 +338,14 @@ function tryLoadFromLibraryOnBoot() {
 
 /* ============================================================
    BLOCK 6.9 — Topbar: Radera-knapp (endast vid ?load=)
+   PATCH:
+   - Source of truth = URL ?load= (inte cached loadedLibraryId)
+   - Om id saknas i library: tydlig varning
+   - Hård redirect utan query efter radering (tar bort ?load=)
 ============================================================ */
 function createDeleteButtonIfLoaded() {
-  if (!loadedLibraryId) return;
+  const urlLoadId = qsGet('load'); // HOOK: delete-source-id
+  if (!urlLoadId) return;
 
   const headerRight = document.querySelector('.headerRight');
   if (!headerRight) return;
@@ -360,16 +365,29 @@ function createDeleteButtonIfLoaded() {
       return;
     }
 
-    const name = loadedLibraryName || 'denna skattjakt';
+    // Hämta posten live (minskar risk för fel namn/id)
+    const entry = findLibraryEntry(urlLoadId);
+    const name = safeText(entry?.name || loadedLibraryName || 'denna skattjakt').trim();
+
     const ok = window.confirm(`Vill du verkligen radera "${name}"?`);
     if (!ok) return;
 
     const list = readLibrary();
-    const next = Array.isArray(list) ? list.filter((x) => x && x.id !== loadedLibraryId) : [];
+    const before = Array.isArray(list) ? list.length : 0;
+    const next = Array.isArray(list)
+      ? list.filter((x) => x && String(x.id) !== String(urlLoadId))
+      : [];
+    const after = next.length;
 
     const wrote = writeLibrary(next);
     if (!wrote) {
       showStatus('Kunde inte radera (storage write fail).', 'warn');
+      return;
+    }
+
+    // Om inget ändrades → id fanns inte (eller redan raderad)
+    if (before === after) {
+      showStatus('Hittade inget att radera (id saknas i biblioteket).', 'warn');
       return;
     }
 
@@ -378,14 +396,16 @@ function createDeleteButtonIfLoaded() {
 
     showStatus('Raderad.', 'info');
 
-    // Tillbaka till admin utan load
-    try { window.location.assign('admin.html'); } catch (_) { window.location.assign(window.location.pathname); }
+    // HARD redirect: ta bort ?load= så vi inte hamnar i "load-id" varning
+    const u = new URL(window.location.href);
+    u.search = '';
+    u.hash = '';
+    window.location.assign(u.toString());
   });
 
   // Lägg före pillen
   headerRight.insertBefore(btn, elSavePill || null);
 }
-
 /* ============================================================
    BLOCK 7 — Validation (fail-closed)
 ============================================================ */
