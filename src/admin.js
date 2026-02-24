@@ -3,16 +3,18 @@
    PATCH (FAS 2.2) — Radera spel från library (PARTY_LIBRARY_V1) vid ?load=
                     + Topbar-knapp “Radera” med confirm
                     + Save-pill: “Sparat” (grön) / “Osparat” / “Fel”
+   AO 2/5 — Flytta Export + QR till src/admin-export.js (kortare admin.js)
    Policy: UI-only, XSS-safe, fail-closed, inga nya storage keys
 ============================================================ */
 
 import { copyToClipboard } from './util.js';
 import { readLibrary, findLibraryEntry, upsertLibraryEntry, deleteLibraryEntry } from './admin-library.js';
+import { initAdminExport } from './admin-export.js';
 
 /* ============================================================
    BLOCK 1 — Storage key + draft shape (state/draft)
 ============================================================ */
-const DRAFT_KEY = 'PARTY_DRAFT_V1';      // HOOK: draft-storage-key (stabil)
+const DRAFT_KEY = 'PARTY_DRAFT_V1'; // HOOK: draft-storage-key (stabil)
 
 /* ============================================================
    BLOCK 2 — DOM hooks (UI)
@@ -46,8 +48,6 @@ const elPreviewList = $('#previewList');     // HOOK: preview-list
 // Layout v2
 const elActiveCpLabel = $('#activeCpLabel'); // HOOK: active-cp-label
 const elMapHint = $('#mapHint');             // HOOK: map-hint
-const elQrSlot = $('#qrSlot');               // HOOK: qr-slot
-const elQrError = $('#qrError');             // HOOK: qr-error
 
 /* ============================================================
    BLOCK 3 — Fail-closed storage guard
@@ -60,7 +60,7 @@ function showStatus(message, type = 'info') {
   const div = document.createElement('div');
   div.className = `toast toast--${type === 'danger' ? 'danger' : type === 'warn' ? 'warn' : 'info'}`;
   div.setAttribute('role', 'status');
-  div.textContent = message;
+  div.textContent = (message ?? '').toString();
   elStatusSlot.appendChild(div);
 }
 
@@ -148,7 +148,7 @@ function writeDraft(d) {
 }
 
 /* ============================================================
-   BLOCK 5.5 — Library (publicerade spelkort) (Flyttad till src/admin-library.js)
+   BLOCK 5.5 — Library (flyttad till src/admin-library.js)
    Policy: admin.js sätter storageWritable=false vid read/write-fel
 ============================================================ */
 function readLibraryLocal() {
@@ -192,6 +192,7 @@ function deleteLibraryEntryLocal(id) {
   }
   return { ok: true, changed: !!res.changed };
 }
+
 /* ============================================================
    BLOCK 6 — Migration/shape guard + sync (inkl isFinal)
 ============================================================ */
@@ -342,9 +343,9 @@ function tryLoadFromLibraryOnBoot() {
 /* ============================================================
    BLOCK 6.9 — Topbar: Radera-knapp (endast vid ?load=)
    PATCH:
-   - Source of truth = URL ?load= (inte cached loadedLibraryId)
-   - Om id saknas i library: tydlig varning
-   - Hård redirect utan query efter radering (tar bort ?load=)
+   - Source of truth = URL ?load=
+   - Radera via admin-library delete (ingen direkt read/write här)
+   - Hård redirect utan query efter radering
 ============================================================ */
 function createDeleteButtonIfLoaded() {
   const urlLoadId = qsGet('load'); // HOOK: delete-source-id
@@ -353,7 +354,7 @@ function createDeleteButtonIfLoaded() {
   const headerRight = document.querySelector('.headerRight');
   if (!headerRight) return;
 
-  if (document.getElementById('deleteGameBtn')) return; // redan skapad
+  if (document.getElementById('deleteGameBtn')) return;
 
   const btn = document.createElement('button');
   btn.id = 'deleteGameBtn';
@@ -368,47 +369,34 @@ function createDeleteButtonIfLoaded() {
       return;
     }
 
-    // Hämta posten live (minskar risk för fel namn/id)
     const entry = findLibraryEntryLocal(urlLoadId);
     const name = safeText(entry?.name || loadedLibraryName || 'denna skattjakt').trim();
 
     const ok = window.confirm(`Vill du verkligen radera "${name}"?`);
     if (!ok) return;
 
-    const list = readLibrary();
-    const before = Array.isArray(list) ? list.length : 0;
-    const next = Array.isArray(list)
-      ? list.filter((x) => x && String(x.id) !== String(urlLoadId))
-      : [];
-    const after = next.length;
-
-    const wrote = writeLibrary(next);
-    if (!wrote) {
+    const del = deleteLibraryEntryLocal(urlLoadId);
+    if (!del.ok) {
       showStatus('Kunde inte radera (storage write fail).', 'warn');
       return;
     }
-
-    // Om inget ändrades → id fanns inte (eller redan raderad)
-    if (before === after) {
+    if (!del.changed) {
       showStatus('Hittade inget att radera (id saknas i biblioteket).', 'warn');
       return;
     }
 
-    // Rensa draft också (minskar förvirring)
     try { localStorage.removeItem(DRAFT_KEY); } catch (_) {}
-
     showStatus('Raderad.', 'info');
 
-    // HARD redirect: ta bort ?load= så vi inte hamnar i "load-id" varning
     const u = new URL(window.location.href);
     u.search = '';
     u.hash = '';
     window.location.assign(u.toString());
   });
 
-  // Lägg före pillen
   headerRight.insertBefore(btn, elSavePill || null);
 }
+
 /* ============================================================
    BLOCK 7 — Validation (fail-closed)
 ============================================================ */
@@ -555,19 +543,17 @@ function setActiveCp(index, { centerMap = true } = {}) {
 let draft = readDraft(); // HOOK: draft-state
 let dirty = false;       // HOOK: dirty-state
 let saveTimer = null;    // HOOK: autosave-timer
-let qrTimer = null;
 
 function setPillState(kind) {
   if (!elSavePill) return;
 
-  // reset
   elSavePill.style.color = '';
   elSavePill.style.borderColor = '';
   elSavePill.style.background = '';
 
   if (kind === 'saved') {
     elSavePill.textContent = 'Sparat';
-    elSavePill.style.color = 'rgba(34,197,94,.95)'; // grön text
+    elSavePill.style.color = 'rgba(34,197,94,.95)';
     elSavePill.style.borderColor = 'rgba(34,197,94,.35)';
     elSavePill.style.background = 'rgba(34,197,94,.08)';
     return;
@@ -655,16 +641,8 @@ function renderErrorsAndPill() {
     return;
   }
 
-  if (hasErrors) {
-    setPillState('error');
-    return;
-  }
-
-  if (dirty) {
-    setPillState('dirty');
-    return;
-  }
-
+  if (hasErrors) { setPillState('error'); return; }
+  if (dirty) { setPillState('dirty'); return; }
   setPillState('saved');
 }
 
@@ -698,12 +676,7 @@ function renderCheckpointEditorFULL() {
     function isEditableTarget(evt) {
       const t = evt?.target;
       const tag = (t?.tagName || '').toUpperCase();
-      return (
-        tag === 'INPUT' ||
-        tag === 'TEXTAREA' ||
-        tag === 'SELECT' ||
-        t?.isContentEditable === true
-      );
+      return (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || t?.isContentEditable === true);
     }
 
     row.addEventListener('click', (e) => {
@@ -730,7 +703,7 @@ function renderCheckpointEditorFULL() {
 
     const coord = document.createElement('div');
     coord.className = 'muted small';
-    coord.setAttribute('data-cp-coord', String(i)); // HOOK: cp-coord
+    coord.setAttribute('data-cp-coord', String(i));
     const lat = Number.isFinite(Number(cp.lat)) ? Number(cp.lat).toFixed(5) : '—';
     const lng = Number.isFinite(Number(cp.lng)) ? Number(cp.lng).toFixed(5) : '—';
     coord.textContent = `(${lat}, ${lng})`;
@@ -868,7 +841,7 @@ function renderCheckpointEditorFULL() {
     btnSaveCp.type = 'button';
     btnSaveCp.className = 'btn btn-primary miniBtn';
     btnSaveCp.textContent = 'Spara';
-    btnSaveCp.setAttribute('data-cp-save', String(i)); // HOOK: cp-save
+    btnSaveCp.setAttribute('data-cp-save', String(i));
     btnSaveCp.addEventListener('click', (ev) => {
       ev.preventDefault();
       ev.stopPropagation();
@@ -945,13 +918,13 @@ function renderAllFULL({ broadcastMap = true, rerenderQR = true } = {}) {
   renderPreview();
   renderErrorsAndPill();
   if (broadcastMap) broadcastDraftToMap();
-  if (rerenderQR) renderQRPanelDebounced();
+  if (rerenderQR && exportUI) exportUI.renderQRPanelDebounced();
 }
 
 function renderAllLIGHT({ rerenderQR = false } = {}) {
   renderPreview();
   renderErrorsAndPill();
-  if (rerenderQR) renderQRPanelDebounced();
+  if (rerenderQR && exportUI) exportUI.renderQRPanelDebounced();
 }
 
 /* ============================================================
@@ -1124,20 +1097,8 @@ function bindEvents() {
 }
 
 /* ============================================================
-   BLOCK 14 — Export (KOPIERA JSON + KOPIERA LÄNK) + Fill random codes
-   + PATCH: Publicera som spelkort
+   BLOCK 13.5 — Export helpers (behövs av export-modulen)
 ============================================================ */
-const MAX_INLINE_QS_CHARS = 1400; // HOOK: max-inline-payload-policy
-
-let elExportRoot = null;
-let elExportMsg = null;
-let elExportLink = null;
-let elExportJSON = null;
-let elBtnCopyJSON = null;
-let elBtnCopyLink = null;
-let elBtnFillCodes = null;
-let elBtnPublish = null; // HOOK: publish-button
-
 function hasBlockingErrors() {
   const errors = validateDraft(draft);
   return !!(errors.name || errors.count || errors.points || errors.clues);
@@ -1168,187 +1129,44 @@ function getDraftJSON({ pretty = false } = {}) {
   return JSON.stringify(payload, null, pretty ? 2 : 0);
 }
 
-function setExportMessage(msg, type = 'info') {
-  if (!elExportMsg) return;
-  elExportMsg.textContent = msg || '';
-  elExportMsg.style.color =
-    type === 'danger' ? 'rgba(251,113,133,.95)' :
-    type === 'warn' ? 'rgba(251,191,36,.95)' :
-    'rgba(255,255,255,.85)';
-}
+/* ============================================================
+   BLOCK 14 (NY) — Export + QR module wiring (AO 2/5)
+============================================================ */
+const exportUI = initAdminExport({
+  getDraft: () => draft,
+  clampInt,
+  normalizeCode,
+  getDraftJSON,
+  hasBlockingErrors,
+  copyToClipboard,
+  showStatus,
+  setPillState,
+  scheduleSave,
+  renderAllFULL,
+  onFillRandomCodes: () => fillRandomCodesForEmpty({ len: 5 }),
+  onPublishToLibrary,
+  elPreviewList,
+});
 
-function selectAll(el) {
-  if (!el) return;
-  try {
-    el.focus();
-    if (typeof el.select === 'function') el.select();
-    if (typeof el.setSelectionRange === 'function') el.setSelectionRange(0, String(el.value || '').length);
-  } catch (_) {}
-}
-
-function ensureExportPanel() {
-  if (elExportRoot) return;
-
-  const previewCard = elPreviewList?.closest('.card') || null;
-  const mount = previewCard || document.querySelector('.container') || document.body;
-
-  const card = document.createElement('section');
-  card.className = 'card';
-  card.setAttribute('aria-label', 'Export');
-
-  const head = document.createElement('div');
-  head.className = 'card__head';
-  const meta = document.createElement('div');
-  meta.className = 'card__meta';
-
-  const h = document.createElement('h2');
-  h.className = 'h2';
-  h.style.margin = '0';
-  h.textContent = 'Export';
-
-  const p = document.createElement('p');
-  p.className = 'muted small';
-  p.style.margin = '6px 0 0 0';
-  p.textContent = 'Kopiera JSON eller kopiera en länk som startar deltagarvyn. Du kan också publicera som spelkort på startsidan.';
-
-  meta.appendChild(h);
-  meta.appendChild(p);
-  head.appendChild(meta);
-
-  const body = document.createElement('div');
-  body.style.display = 'grid';
-  body.style.gap = '10px';
-  body.style.padding = '12px 0 0 0';
-
-  const row = document.createElement('div');
-  row.style.display = 'flex';
-  row.style.gap = '10px';
-  row.style.flexWrap = 'wrap';
-
-  const btnJson = document.createElement('button');
-  btnJson.type = 'button';
-  btnJson.className = 'btn btn-ghost miniBtn';
-  btnJson.textContent = 'KOPIERA JSON';
-  elBtnCopyJSON = btnJson;
-
-  const btnLink = document.createElement('button');
-  btnLink.type = 'button';
-  btnLink.className = 'btn btn-ghost miniBtn';
-  btnLink.textContent = 'KOPIERA LÄNK';
-  elBtnCopyLink = btnLink;
-
-  const btnFill = document.createElement('button');
-  btnFill.type = 'button';
-  btnFill.className = 'btn btn-ghost miniBtn';
-  btnFill.textContent = 'FYLL SLUMPKODER (tomma)';
-  elBtnFillCodes = btnFill;
-
-  const btnPub = document.createElement('button');
-  btnPub.type = 'button';
-  btnPub.className = 'btn btn-primary miniBtn';
-  btnPub.textContent = 'PUBLICERA SOM SPELKORT';
-  elBtnPublish = btnPub;
-
-  row.appendChild(btnJson);
-  row.appendChild(btnLink);
-  row.appendChild(btnFill);
-  row.appendChild(btnPub);
-
-  const msg = document.createElement('div');
-  msg.className = 'muted small';
-  msg.style.minHeight = '18px';
-  msg.style.marginTop = '2px';
-  msg.textContent = '';
-  elExportMsg = msg;
-
-  const linkBox = document.createElement('div');
-  linkBox.style.display = 'grid';
-  linkBox.style.gap = '6px';
-
-  const linkLabel = document.createElement('div');
-  linkLabel.className = 'muted small';
-  linkLabel.textContent = 'Länk (fallback: markera och kopiera manuellt)';
-
-  const linkInput = document.createElement('input');
-  linkInput.className = 'input';
-  linkInput.type = 'text';
-  linkInput.readOnly = true;
-  linkInput.value = '';
-  linkInput.placeholder = 'Klicka KOPIERA LÄNK för att skapa + kopiera…';
-  elExportLink = linkInput;
-
-  linkBox.appendChild(linkLabel);
-  linkBox.appendChild(linkInput);
-
-  const jsonBox = document.createElement('div');
-  jsonBox.style.display = 'grid';
-  jsonBox.style.gap = '6px';
-
-  const jsonLabel = document.createElement('div');
-  jsonLabel.className = 'muted small';
-  jsonLabel.textContent = 'JSON (fallback om kopiering nekas: markera och kopiera manuellt)';
-
-  const ta = document.createElement('textarea');
-  ta.className = 'input';
-  ta.style.minHeight = '120px';
-  ta.value = '';
-  ta.readOnly = true;
-  elExportJSON = ta;
-
-  jsonBox.appendChild(jsonLabel);
-  jsonBox.appendChild(ta);
-
-  body.appendChild(row);
-  body.appendChild(msg);
-  body.appendChild(linkBox);
-  body.appendChild(jsonBox);
-
-  card.appendChild(head);
-  card.appendChild(body);
-
-  if (previewCard && previewCard.parentNode) previewCard.parentNode.insertBefore(card, previewCard.nextSibling);
-  else mount.appendChild(card);
-
-  elExportRoot = card;
-
-  if (elBtnCopyJSON) elBtnCopyJSON.addEventListener('click', async () => { await onCopyJSON(); });
-  if (elBtnCopyLink) elBtnCopyLink.addEventListener('click', async () => { await onCopyLink(); });
-  if (elBtnFillCodes) elBtnFillCodes.addEventListener('click', () => { onFillRandomCodes(); });
-  if (elBtnPublish) elBtnPublish.addEventListener('click', () => { onPublishToLibrary(); });
-}
-
-function buildParticipantLinkOrFail() {
-  const payloadJSON = getDraftJSON({ pretty: false });
-  const encoded = encodeURIComponent(payloadJSON);
-
-  if (encoded.length > MAX_INLINE_QS_CHARS) {
-    return { ok: false, reason: 'too-large', encodedLength: encoded.length };
-  }
-
-  const url = new URL('party.html', window.location.href);
-  url.searchParams.set('mode', 'party');
-  url.searchParams.set('payload', encoded);
-
-  return { ok: true, url: url.toString(), encodedLength: encoded.length, payloadEncoded: encoded };
-}
-
+/* ============================================================
+   BLOCK 14.5 — Publish (anropas från export-modulen)
+============================================================ */
 function onPublishToLibrary() {
-  ensureExportPanel();
+  exportUI.ensureExportPanel();
 
   if (!storageWritable) {
-    setExportMessage('LocalStorage är låst. Kan inte publicera på denna enhet.', 'warn');
+    exportUI.setExportMessage('LocalStorage är låst. Kan inte publicera på denna enhet.', 'warn');
     return;
   }
 
   if (hasBlockingErrors()) {
-    setExportMessage('Rätta felen i formuläret innan du publicerar.', 'warn');
+    exportUI.setExportMessage('Rätta felen i formuläret innan du publicerar.', 'warn');
     return;
   }
 
   const payloadJSON = getDraftJSON({ pretty: false });
   const name = safeText(draft.name).trim() || 'Skattjakt';
 
-  // Om vi har laddat en karta (load=), så uppdaterar vi samma id istället för att skapa ny
   const entryId = loadedLibraryId ? loadedLibraryId : uid('party');
 
   const entry = {
@@ -1361,190 +1179,24 @@ function onPublishToLibrary() {
 
   const ok = upsertLibraryEntryLocal(entry);
   if (!ok) {
-    setExportMessage('Kunde inte publicera (storage write fail).', 'danger');
+    exportUI.setExportMessage('Kunde inte publicera (storage write fail).', 'danger');
     return;
   }
 
   loadedLibraryId = entryId;
   loadedLibraryName = name;
+
   createDeleteButtonIfLoaded();
 
-  setExportMessage('Publicerad! Du hittar den som spelkort på startsidan.', 'info');
+  exportUI.setExportMessage('Publicerad! Du hittar den som spelkort på startsidan.', 'info');
   showStatus('Publicerad som spelkort.', 'info');
 
-  // visa admin-load-länk
+  // visa admin-load-länk i exportpanelen (om den finns)
   try {
     const u = new URL(window.location.href);
     u.searchParams.set('load', entryId);
-    if (elExportLink) elExportLink.value = u.toString();
+    exportUI.setExportLinkValue(u.toString());
   } catch (_) {}
-}
-
-function onFillRandomCodes() {
-  const changed = fillRandomCodesForEmpty({ len: 5 });
-  if (changed <= 0) { setExportMessage('Inga tomma koder att fylla (alla har redan kod).', 'info'); return; }
-  dirty = true;
-  setPillState('dirty');
-  scheduleSave();
-  renderAllFULL({ broadcastMap: false, rerenderQR: true });
-  setExportMessage(`Fyllde ${changed} slumpkod${changed === 1 ? '' : 'er'} (endast tomma).`, 'info');
-}
-
-async function onCopyJSON() {
-  ensureExportPanel();
-
-  const json = getDraftJSON({ pretty: true });
-  if (elExportJSON) elExportJSON.value = json;
-
-  if (hasBlockingErrors()) { setExportMessage('Rätta felen i formuläret innan du exporterar.', 'warn'); selectAll(elExportJSON); return; }
-
-  const res = await copyToClipboard(json);
-  if (res && res.ok) { setExportMessage('JSON kopierat.', 'info'); return; }
-
-  setExportMessage('Kopiering nekades. Markera JSON-rutan och kopiera manuellt (Ctrl/Cmd+C).', 'warn');
-  selectAll(elExportJSON);
-}
-
-async function onCopyLink() {
-  ensureExportPanel();
-
-  if (hasBlockingErrors()) { setExportMessage('Rätta felen i formuläret innan du kopierar länk.', 'warn'); return; }
-
-  const built = buildParticipantLinkOrFail();
-  if (!built.ok) {
-    if (built.reason === 'too-large') {
-      setExportMessage('Payload för stor att dela som länk. Använd KOPIERA JSON istället.', 'danger');
-      if (elExportLink) elExportLink.value = '';
-      selectAll(elExportJSON);
-      return;
-    }
-    setExportMessage('Kunde inte skapa länk (okänt fel).', 'danger');
-    return;
-  }
-
-  if (elExportLink) elExportLink.value = built.url;
-
-  const res = await copyToClipboard(built.url);
-  if (res && res.ok) { setExportMessage('Länk kopierad (startar deltagarvyn).', 'info'); return; }
-
-  setExportMessage('Kopiering nekades. Markera länken och kopiera manuellt.', 'warn');
-  selectAll(elExportLink);
-}
-
-/* ============================================================
-   BLOCK 15 — QR per checkpoint — debounced
-============================================================ */
-function setQrError(msg) {
-  if (!elQrError) return;
-  elQrError.textContent = msg || '';
-}
-
-function clearQr() {
-  if (elQrSlot) elQrSlot.innerHTML = '';
-  setQrError('');
-}
-
-function qrImgUrlFor(text) {
-  const size = 200;
-  const enc = encodeURIComponent(text);
-  return `https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${enc}`;
-}
-
-async function copyTextOrSelect(inputEl, text) {
-  const res = await copyToClipboard(text);
-  if (res && res.ok) { showStatus('Kopierat.', 'info'); return true; }
-  if (inputEl) {
-    try { inputEl.focus(); inputEl.select(); inputEl.setSelectionRange(0, inputEl.value.length); } catch (_) {}
-  }
-  showStatus('Kopiering nekades. Markera texten och kopiera manuellt.', 'warn');
-  return false;
-}
-
-function renderQRPanelDebounced() {
-  if (!elQrSlot) return;
-  if (qrTimer) clearTimeout(qrTimer);
-  qrTimer = setTimeout(() => renderQRPanel(), 180);
-}
-
-function renderQRPanel() {
-  if (!elQrSlot) return;
-  clearQr();
-
-  if (hasBlockingErrors()) { setQrError('QR kräver att formuläret är utan fel. Rätta felen först.'); return; }
-
-  const built = buildParticipantLinkOrFail();
-  if (!built.ok) { setQrError('Payload för stor att dela som länk. Använd KOPIERA JSON istället.'); return; }
-
-  const baseUrl = new URL(built.url);
-  const payloadEncoded = built.payloadEncoded;
-
-  for (let i = 0; i < draft.checkpointCount; i++) {
-    const cp = draft.checkpoints[i] || {};
-    const cpNo = i + 1;
-
-    const u = new URL(baseUrl.toString());
-    u.searchParams.set('payload', payloadEncoded);
-    u.searchParams.set('cp', String(cpNo));
-    const code = normalizeCode(cp.code || '');
-    if (code) u.searchParams.set('code', code);
-
-    const link = u.toString();
-
-    const row = document.createElement('div');
-    row.className = 'qrRow';
-
-    const top = document.createElement('div');
-    top.className = 'qrRowTop';
-
-    const title = document.createElement('div');
-    title.className = 'qrTitle';
-    title.textContent = `CP ${cpNo}${(i === draft.checkpointCount - 1 && cp.isFinal) ? ' (Skattkista)' : ''}`;
-
-    const actions = document.createElement('div');
-    actions.className = 'qrActions';
-
-    const btnCopy = document.createElement('button');
-    btnCopy.type = 'button';
-    btnCopy.className = 'btn btn-ghost miniBtn';
-    btnCopy.textContent = 'Kopiera länk';
-
-    const btnToggle = document.createElement('button');
-    btnToggle.type = 'button';
-    btnToggle.className = 'btn btn-ghost miniBtn';
-    btnToggle.textContent = 'Visa QR';
-
-    top.appendChild(title);
-    top.appendChild(actions);
-    actions.appendChild(btnCopy);
-    actions.appendChild(btnToggle);
-
-    const input = document.createElement('input');
-    input.className = 'input';
-    input.type = 'text';
-    input.readOnly = true;
-    input.value = link;
-
-    const img = document.createElement('img');
-    img.className = 'qrImg';
-    img.alt = `QR för CP ${cpNo}`;
-    img.loading = 'lazy';
-
-    btnCopy.addEventListener('click', async (ev) => { ev.preventDefault(); await copyTextOrSelect(input, link); });
-    btnToggle.addEventListener('click', (ev) => {
-      ev.preventDefault();
-      const showing = img.style.display === 'block';
-      if (showing) { img.style.display = 'none'; btnToggle.textContent = 'Visa QR'; return; }
-      if (!img.src) img.src = qrImgUrlFor(link);
-      img.style.display = 'block';
-      btnToggle.textContent = 'Dölj QR';
-    });
-
-    row.appendChild(top);
-    row.appendChild(input);
-    row.appendChild(img);
-
-    elQrSlot.appendChild(row);
-  }
 }
 
 /* ============================================================
@@ -1580,15 +1232,14 @@ function renderQRPanel() {
     } catch (_) {}
   }
 
-  // 1) Försök ladda från library om ?load= finns (visar status om saknas)
-  // OBS: om new=1 användes så finns inget load och draft är redan nollad.
+  // 1) Försök ladda från library om ?load= finns
   tryLoadFromLibraryOnBoot();
 
-  // 2) Skapa Radera-knapp om URL har ?load= (source of truth)
+  // 2) Skapa Radera-knapp om URL har ?load=
   createDeleteButtonIfLoaded();
 
   // 3) UI setup
-  ensureExportPanel();
+  exportUI.ensureExportPanel();
   bindMapEvents();
   bindEvents();
 
