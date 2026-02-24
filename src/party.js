@@ -1,554 +1,402 @@
-/* ============================================================
-   FIL: src/party.js  (HEL FIL)
-   AO 10/15 (PATCH) — Party logic (checkpoint progression + poäng)
-   AO 6/6 (FAS 1.2) — Starta party via payload (admin-export)
-   FIX:
-   - Subpath-safe data URLs via import.meta.url (GitHub Pages /uppdrag/)
-   - Fail-closed redirect till ../index.html (inte /index.html)
-   - Payload-stöd: mode=party&payload=... (id optional)
-   - Stepper byggs dynamiskt efter pack-längd (1..20)
-   Mål: Party-läge ger poäng per checkpoint, sparar lokalt.
-============================================================ */
+<!-- ============================================================
+     FIL: pages/party.html  (HEL FIL)
+     AO 4/8 (FAS 1.5) — Deltagarvy: karta + checkpoint 1 + kod-inmatning
+     AO 5/8 (FAS 1.5) — Clear + reveal circle + nästa aktiv
+     AO 6/8 (FAS 2.0) — Fog-of-war “papper/sepia”-look
+     AO 7/8 (FAS 2.0) — Grid-läge (alternativ vy): Toggle Karta/Grid + grid container
+     AO 1/3 (FAS 1.0) — Loot-val “Välj 1 av 3” efter checkpoint (UI hooks)
+     Policy: UI-only, Leaflet via CDN (OK)
+============================================================ -->
+<!doctype html>
+<html lang="sv">
+<head>
+  <!-- ==========================================================
+       BLOCK 1 — Meta + CSS
+  =========================================================== -->
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Skattjakt — Deltagare</title>
+  <meta name="description" content="Skattjakt med karta och kod." />
+  <link rel="stylesheet" href="../styles/main.css" />
 
-/* ============================================================
-   BLOCK 1 — Imports
-============================================================ */
-import { qsGet, uid } from './util.js';
-import { createStore } from './store.js';
-import { awardCheckpointComplete } from './engine.js';
-import { toast, renderErrorCard } from './ui.js';
+  <!-- ==========================================================
+       BLOCK 1.1 — Leaflet CSS (CDN)
+  =========================================================== -->
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+    crossorigin=""
+  />
+</head>
 
-/* ============================================================
-   BLOCK 2 — Subpath-safe URLs
-============================================================ */
-function dataUrl(pathFromSrc) {
-  return new URL(pathFromSrc, import.meta.url).toString();
-}
+<!-- AO 6/8: theme hook -->
+<body class="theme-party">
+  <!-- ==========================================================
+       BLOCK 2 — Skip link (A11y light)
+  =========================================================== -->
+  <a class="skipLink" href="#mainContent">Hoppa till innehåll</a> <!-- HOOK: skip-link -->
 
-const PARTIES_INDEX_URL = dataUrl('../data/parties.index.json'); // HOOK: parties-index-url
-const PACKS_BASE_URL = dataUrl('../data/packs/');                // HOOK: packs-base-url
+  <!-- ==========================================================
+       BLOCK 3 — App Root
+  =========================================================== -->
+  <div id="app" class="app partyApp"> <!-- HOOK: app-root -->
 
-/* ============================================================
-   BLOCK 3 — DOM hooks
-============================================================ */
-const $ = (sel) => document.querySelector(sel);
+    <!-- ========================================================
+         BLOCK 4 — Header
+    ========================================================= -->
+    <header class="topbar partyTopbar">
+      <div class="topbar__inner">
+        <div class="row row--header">
+          <button id="backBtn" class="btn btn-ghost btn--icon" type="button" aria-label="Tillbaka">
+            ←
+          </button>
+          <!-- HOOK: back-button -->
 
-const elBack = $('#backBtn');         // HOOK: back-button
-const elPartyName = $('#partyName');  // HOOK: party-name
-const elStepPill = $('#stepPill');    // HOOK: step-pill
-const elClueText = $('#clueText');    // HOOK: clue-text
-const elNextBtn = $('#nextBtn');      // HOOK: next-button
-const elStepper = $('#stepper');      // HOOK: stepper
+          <div class="headerTitle">
+            <div class="muted small">Skattjakt</div>
+            <div id="partyName" class="headerName">—</div>
+            <!-- HOOK: party-name -->
+          </div>
 
-/* ============================================================
-   BLOCK 4 — Store
-============================================================ */
-const store = createStore(); // HOOK: store
+          <div class="headerRight">
+            <span id="stepPill" class="pill pill--level">Checkpoint 1</span>
+            <!-- HOOK: step-pill -->
+          </div>
+        </div>
+      </div>
+    </header>
 
-/* ============================================================
-   BLOCK 5 — Fail-closed redirect helper (subpath-safe)
-============================================================ */
-function redirectToIndex(err) {
-  const code = (err || 'PARTY_BAD_PARAMS').toString().trim() || 'PARTY_BAD_PARAMS';
-  const url = new URL('../index.html', window.location.href); // /uppdrag/index.html
-  url.searchParams.set('err', code);
-  window.location.assign(url.toString());
-}
+    <!-- ========================================================
+         BLOCK 5 — Main
+    ========================================================= -->
+    <main id="mainContent" class="main" role="main"> <!-- HOOK: main -->
+      <div class="container">
+        <!-- Status / error slot -->
+        <div id="statusSlot" class="slot" aria-live="polite"></div> <!-- HOOK: status-slot -->
 
-/* ============================================================
-   BLOCK 6 — Controlled fetch + validation (fail-closed)
-============================================================ */
-function isPlainObject(v) {
-  return !!v && typeof v === 'object' && !Array.isArray(v);
-}
+        <!-- ======================================================
+             AO 7/8 — Toggle (Karta / Grid)
+        ======================================================= -->
+        <section class="card paperCard" aria-label="Vyval">
+          <div class="card__head">
+            <div class="card__meta">
+              <h1 class="h2" style="margin:0">Vy</h1>
+              <p class="muted small" style="margin:6px 0 0 0">
+                Välj hur du vill se checkpoints.
+              </p>
+            </div>
+          </div>
 
-function asTextSafe(x) {
-  return (x ?? '').toString().trim();
-}
+          <div class="viewToggle" role="tablist" aria-label="Välj vy">
+            <button id="viewMapBtn" class="btn btn-ghost viewTab is-active" type="button" role="tab" aria-selected="true">
+              Karta
+            </button>
+            <!-- HOOK: view-map-btn -->
+            <button id="viewGridBtn" class="btn btn-ghost viewTab" type="button" role="tab" aria-selected="false">
+              Grid
+            </button>
+            <!-- HOOK: view-grid-btn -->
+          </div>
+        </section>
 
-async function fetchJson(url) {
-  const rid = uid('party_fetch');
-  let res;
+        <!-- ======================================================
+             AO 7/8 — View: Map
+        ======================================================= -->
+        <section id="mapView" class="card paperCard" aria-label="Karta"> <!-- HOOK: map-view -->
+          <div class="card__head">
+            <div class="card__meta">
+              <h2 class="h2" style="margin:0">Karta</h2>
+              <p class="muted small" style="margin:6px 0 0 0">
+                Gå till checkpointen och skriv in koden.
+              </p>
+            </div>
+          </div>
 
-  try {
-    res = await fetch(url, { method: 'GET', credentials: 'include', cache: 'no-store' });
-  } catch (_) {
-    throw { code: 'P_PARTY_FETCH_NETWORK', message: 'Nätverksfel vid hämtning.', rid, url };
-  }
+          <div class="mapWrap fogWrap">
+            <div id="partyMap" class="map partyMap" role="application" aria-label="Karta"></div>
+            <!-- HOOK: party-map -->
 
-  if (!res || !res.ok) {
-    throw { code: 'P_PARTY_FETCH_HTTP', message: 'HTTP-fel vid hämtning.', rid, url, status: res?.status };
-  }
+            <div class="fogOverlay" aria-hidden="true"></div>
+            <!-- HOOK: fog-overlay -->
 
-  try {
-    return await res.json();
-  } catch (_) {
-    throw { code: 'P_PARTY_FETCH_JSON', message: 'Kunde inte tolka JSON (parse-fel).', rid, url };
-  }
-}
+            <div id="mapError" class="errorText" role="alert"></div>
+            <!-- HOOK: map-error -->
+          </div>
+        </section>
 
-function validatePartiesIndex(idx) {
-  if (!isPlainObject(idx)) throw { code: 'P_PARTY_INDEX_BAD', message: 'parties.index.json har fel format.' };
+        <!-- ======================================================
+             AO 7/8 — View: Grid
+        ======================================================= -->
+        <section id="gridView" class="card paperCard is-hidden" aria-label="Grid"> <!-- HOOK: grid-view -->
+          <div class="card__head">
+            <div class="card__meta">
+              <h2 class="h2" style="margin:0">Grid</h2>
+              <p class="muted small" style="margin:6px 0 0 0">
+                Checkpoints som rutor: låst / aktiv / klar.
+              </p>
+            </div>
+          </div>
 
-  const parties = idx.parties;
-  if (!Array.isArray(parties) || parties.length < 1) {
-    throw { code: 'P_PARTY_INDEX_EMPTY', message: 'parties.index.json saknar parties[] eller är tom.' };
-  }
+          <div id="gridWrap" class="gridWrap" role="list" aria-label="Checkpoint grid"></div>
+          <!-- HOOK: grid-wrap -->
 
-  const map = new Map();
-  for (const p of parties) {
-    if (!isPlainObject(p)) throw { code: 'P_PARTY_INDEX_ITEM_BAD', message: 'parties[] innehåller fel typ.' };
+          <div id="gridHint" class="muted small" style="margin-top:10px"></div>
+          <!-- HOOK: grid-hint -->
+        </section>
 
-    const id = asTextSafe(p.id);
-    const name = asTextSafe(p.name);
-    const file = asTextSafe(p.file);
+        <!-- Checkpoint panel -->
+        <section class="card paperCard" aria-label="Aktiv checkpoint">
+          <div class="card__head">
+            <div class="card__meta">
+              <h2 class="h2" style="margin:0">Aktiv checkpoint</h2>
+              <p id="clueText" class="muted small" style="margin:6px 0 0 0">Laddar…</p>
+              <!-- HOOK: clue-text -->
+            </div>
+            <div class="card__side">
+              <span class="pill pill--difficulty" id="cluePill">kod</span>
+              <!-- HOOK: clue-pill -->
+            </div>
+          </div>
 
-    if (!id) throw { code: 'P_PARTY_INDEX_ID_MISSING', message: 'Party saknar id.' };
-    if (!name) throw { code: 'P_PARTY_INDEX_NAME_MISSING', message: 'Party saknar name.', partyId: id };
-    if (!file) throw { code: 'P_PARTY_INDEX_FILE_MISSING', message: 'Party saknar file.', partyId: id };
-    if (!/^[a-zA-Z0-9._-]+\.json$/.test(file)) throw { code: 'P_PARTY_INDEX_FILE_INVALID', message: 'Party file har ogiltigt filnamn.', partyId: id, file };
+          <div class="form" style="margin-top:12px">
+            <div class="field">
+              <label class="label2" for="codeInput">Kod</label>
+              <input id="codeInput" class="input" type="text" autocomplete="off" placeholder="Skriv koden här…" />
+              <!-- HOOK: code-input -->
+              <div id="errCode" class="errorText" role="alert"></div>
+              <!-- HOOK: err-code -->
+            </div>
 
-    if (map.has(id)) throw { code: 'P_PARTY_INDEX_DUPLICATE', message: 'Dubbel party id i index.', partyId: id };
-    map.set(id, { id, name, file });
-  }
+            <button id="okBtn" class="btn btn-primary" type="button">
+              OK
+            </button>
+            <!-- HOOK: ok-button -->
+          </div>
+        </section>
 
-  return map;
-}
+        <!-- ======================================================
+             AO 1/3 — Mina belöningar (MVP panel)
+             - Ingen redeem i AO 1
+        ======================================================= -->
+        <section class="card paperCard" aria-label="Mina belöningar">
+          <div class="card__head">
+            <div class="card__meta">
+              <h2 class="h2" style="margin:0">Mina belöningar</h2>
+              <p class="muted small" style="margin:6px 0 0 0">
+                Valda belöningar visas här. Status: Ej inlöst (MVP).
+              </p>
+            </div>
+          </div>
 
-function normalizeCheckpoint(cp, index) {
-  const obj = isPlainObject(cp) ? cp : {};
-  const clue = asTextSafe(obj.clue ?? obj.hint ?? obj.text ?? obj.instruction ?? obj.title);
-  const points = Number.isFinite(Number(obj.points)) ? Math.floor(Number(obj.points)) : 10;
-  const xp = Number.isFinite(Number(obj.xp)) ? Math.floor(Number(obj.xp)) : 10;
+          <div id="rewardsPanel" class="rewardsPanel">
+            <div id="rewardsEmpty" class="muted small">Inga belöningar ännu.</div>
+            <ul id="rewardsList" class="rewardsList" aria-label="Lista med upplåsta belöningar"></ul>
+            <!-- HOOK: rewards-list -->
+          </div>
+        </section>
 
-  return {
-    index,
-    clue: clue || `Checkpoint ${index + 1}`,
-    points: Math.max(0, Math.min(1_000_000, points)),
-    xp: Math.max(0, Math.min(1_000_000, xp))
-  };
-}
+        <div class="muted small footerNote">
+          Deltagarvy (AO 7/8). Toggle Karta/Grid. UI-state i party-map.js.
+        </div>
+      </div>
+    </main>
 
-function validateAndNormalizePartyPack(pack) {
-  if (!isPlainObject(pack)) throw { code: 'P_PARTY_PACK_BAD', message: 'Party pack har fel format.' };
+    <!-- ========================================================
+         AO 1/3 — Loot modal (dold som standard)
+         XSS-safe: dynamiskt innehåll sätts i JS via textContent
+    ========================================================= -->
+    <div id="lootOverlay" class="lootOverlay is-hidden" aria-hidden="true"> <!-- HOOK: loot-overlay -->
+      <div class="lootBackdrop" data-close="1"></div>
 
-  const id = asTextSafe(pack.id);
-  const name = asTextSafe(pack.name);
+      <section
+        id="lootModal"
+        class="lootModal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="lootTitle"
+        aria-describedby="lootDesc"
+      >
+        <header class="lootHead">
+          <div class="lootHead__meta">
+            <h3 id="lootTitle" class="h3" style="margin:0">Välj en belöning</h3>
+            <p id="lootDesc" class="muted small" style="margin:6px 0 0 0">Du får 1 av 3</p>
+          </div>
+        </header>
 
-  const rawList =
-    Array.isArray(pack.checkpoints) ? pack.checkpoints :
-    Array.isArray(pack.steps) ? pack.steps :
-    Array.isArray(pack.missions) ? pack.missions :
-    null;
+        <div id="lootCards" class="lootCards" role="list" aria-label="Belöningsval">
+          <!-- 3 cards renderas av JS -->
+        </div>
 
-  if (!id) throw { code: 'P_PARTY_PACK_ID_MISSING', message: 'Party pack saknar id.' };
-  if (!name) throw { code: 'P_PARTY_PACK_NAME_MISSING', message: 'Party pack saknar name.' };
-  if (!Array.isArray(rawList)) throw { code: 'P_PARTY_PACK_CHECKPOINTS_BAD', message: 'Party pack saknar checkpoints[] (eller steps[]).' };
+        <div class="lootActions">
+          <button id="lootSkipBtn" class="btn btn-ghost" type="button">Hoppa över</button>
+          <!-- HOOK: loot-skip -->
+        </div>
+      </section>
+    </div>
 
-  const checkpoints = rawList.map((cp, i) => normalizeCheckpoint(cp, i));
-  if (checkpoints.length < 1) throw { code: 'P_PARTY_PACK_CHECKPOINTS_EMPTY', message: 'Party pack har inga checkpoints.' };
+  </div>
 
-  return { id, name, checkpoints };
-}
+  <!-- ==========================================================
+       BLOCK 6 — Page-only inline styles (minimal)
+  =========================================================== -->
+  <style>
+    .row { display:flex; align-items:center; gap: var(--sp-3); }
+    .row--header { width:100%; }
+    .btn--icon { width:44px; padding: 10px 10px; }
+    .headerTitle { flex: 1; min-width: 0; }
+    .headerName { font-weight: 800; font-size: var(--fs-4); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .headerRight { display:flex; align-items:center; gap: var(--sp-2); }
 
-async function loadPartyPack(partyId) {
-  const idx = await fetchJson(PARTIES_INDEX_URL);
-  const map = validatePartiesIndex(idx);
-  const entry = map.get(partyId);
+    .pill { display:inline-flex; align-items:center; justify-content:center; padding: 7px 10px; border-radius: 999px; border: 1px solid var(--border); background: rgba(255,255,255,.06); font-weight: 800; font-size: var(--fs-1); }
+    .pill--level { border-color: rgba(110,231,255,.30); background: rgba(110,231,255,.10); color: rgba(255,255,255,.92); }
+    .pill--difficulty { border-color: rgba(255,255,255,.14); }
 
-  if (!entry) throw { code: 'P_PARTY_NOT_FOUND', message: 'Party finns inte i index.', partyId };
+    .slot { margin-top: var(--sp-4); }
 
-  const packUrl = new URL(entry.file, PACKS_BASE_URL).toString();
-  const pack = await fetchJson(packUrl);
-  const norm = validateAndNormalizePartyPack(pack);
-
-  if (norm.id && norm.id !== partyId) {
-    throw { code: 'P_PARTY_PACK_ID_MISMATCH', message: 'Party pack id matchar inte URL id.', partyId, packId: norm.id };
-  }
-
-  return { ...norm, displayName: entry.name };
-}
-
-/* ============================================================
-   BLOCK 6.1 — AO 6/6: payload → pack (fail-closed)
-   - Admin-export skickar draft shape:
-     { version:1, name, checkpointCount, pointsPerCheckpoint, clues[] }
-   - Vi bygger ett "partyPack" i samma shape som loadPartyPack() levererar.
-============================================================ */
-function safeDecodePayload(raw) {
-  const s = (raw ?? '').toString().trim();
-  if (!s) return { ok: false, value: '' };
-
-  // decode 1 gång
-  try {
-    const once = decodeURIComponent(s);
-    // prova decode 2 ggr om det ser dubbelkodat ut
-    try {
-      const twice = decodeURIComponent(once);
-      const best = looksLikeJSON(twice) ? twice : once;
-      return { ok: true, value: best };
-    } catch (_) {
-      return { ok: true, value: once };
+    .form { display:grid; gap: 14px; }
+    .field { display:grid; gap: 6px; }
+    .label2 { font-weight: 800; font-size: var(--fs-2); }
+    .input {
+      min-height: 44px;
+      padding: 12px 12px;
+      border-radius: 14px;
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,.05);
+      color: var(--text);
+      outline: none;
     }
-  } catch (_) {
-    // kanske redan plain
-    return { ok: true, value: s };
-  }
-}
+    .input::placeholder { color: rgba(255,255,255,.45); }
+    .input:focus-visible { box-shadow: var(--focus); }
+    .errorText { min-height: 18px; font-size: var(--fs-2); color: rgba(251,113,133,.95); }
 
-function looksLikeJSON(str) {
-  const t = (str ?? '').toString().trim();
-  return (t.startsWith('{') && t.endsWith('}')) || (t.startsWith('[') && t.endsWith(']'));
-}
-
-function safeJSONParseLocal(str) {
-  try {
-    return { ok: true, value: JSON.parse(str) };
-  } catch (_) {
-    return { ok: false, value: null };
-  }
-}
-
-function clampInt(n, min, max) {
-  const x = Math.floor(Number(n));
-  if (!Number.isFinite(x)) return min;
-  return Math.max(min, Math.min(max, x));
-}
-
-function isValidDraftPayload(obj) {
-  if (!isPlainObject(obj)) return false;
-
-  const v = Number(obj.version);
-  if (!Number.isFinite(v) || v !== 1) return false;
-
-  const name = asTextSafe(obj.name);
-  if (name.length < 2 || name.length > 60) return false;
-
-  const cc = Number(obj.checkpointCount);
-  if (!Number.isFinite(cc) || cc < 1 || cc > 20) return false;
-
-  const pp = Number(obj.pointsPerCheckpoint);
-  if (!Number.isFinite(pp) || pp < 0 || pp > 1000) return false;
-
-  if (!Array.isArray(obj.clues) || obj.clues.length !== cc) return false;
-
-  for (let i = 0; i < obj.clues.length; i++) {
-    const t = asTextSafe(obj.clues[i]);
-    if (t.length < 3 || t.length > 140) return false;
-  }
-
-  return true;
-}
-
-// Stabil "id" för payload utan att lagra något: enkel deterministisk hash av payload-JSON.
-function hashStringDJB2(input) {
-  const s = (input ?? '').toString();
-  let h = 5381;
-  for (let i = 0; i < s.length; i++) {
-    h = ((h << 5) + h) + s.charCodeAt(i);
-    h = h >>> 0;
-  }
-  return h.toString(36);
-}
-
-function buildPartyPackFromDraftPayload(payloadRaw, payloadObj) {
-  const name = asTextSafe(payloadObj.name);
-  const cc = clampInt(payloadObj.checkpointCount, 1, 20);
-  const pp = clampInt(payloadObj.pointsPerCheckpoint, 0, 1000);
-
-  const clues = payloadObj.clues.map((c) => asTextSafe(c));
-
-  const id = `payload_${hashStringDJB2(payloadRaw)}`; // stabilt mellan reload så länge payload är samma
-  const checkpoints = clues.slice(0, cc).map((clue, i) => ({
-    index: i,
-    clue,
-    points: pp,
-    xp: pp // enkel baseline: xp = points (kan justeras senare utan att bryta)
-  }));
-
-  return {
-    id,
-    name,
-    displayName: name,
-    checkpoints
-  };
-}
-
-/* ============================================================
-   BLOCK 7 — Progress model (utan ny store-shape)
-============================================================ */
-function getCompletedSet(state, partyId) {
-  const set = new Set();
-  const hist = Array.isArray(state?.history) ? state.history : [];
-  for (const h of hist) {
-    if (!h || typeof h !== 'object') continue;
-    if (h.type !== 'checkpoint_complete') continue;
-    if ((h.partyId ?? '') !== partyId) continue;
-    const idx = Number(h.checkpointIndex);
-    if (Number.isFinite(idx) && idx >= 0 && idx <= 9999) set.add(idx);
-  }
-  return set;
-}
-
-function isCheckpointCompleted(state, partyId, index) {
-  return getCompletedSet(state, partyId).has(index);
-}
-
-/* ============================================================
-   BLOCK 8 — Render
-============================================================ */
-function setText(node, text) {
-  if (!node) return;
-  node.textContent = (text ?? '').toString();
-}
-
-function ensurePrevButton() {
-  const bar = document.querySelector('.ctaBar__inner');
-  if (!bar) return null;
-
-  let prev = document.getElementById('prevBtn'); // HOOK: prev-button
-  if (prev) return prev;
-
-  prev = document.createElement('button');
-  prev.id = 'prevBtn';
-  prev.className = 'btn btn-ghost';
-  prev.type = 'button';
-  prev.textContent = 'Föregående';
-  // HOOK: prev-button (created)
-
-  const next = elNextBtn;
-  if (next && next.parentElement === bar) bar.insertBefore(prev, next);
-  else bar.appendChild(prev);
-
-  return prev;
-}
-
-// AO 6/6: stepper kan vara 1..20, så vi bygger den dynamiskt
-function ensureStepperDots(total) {
-  if (!elStepper) return;
-
-  const t = clampInt(total, 1, 20);
-
-  // Rebuild alltid när pack laddas (enkel, stabilt)
-  elStepper.innerHTML = '';
-
-  for (let i = 1; i <= t; i++) {
-    const btn = document.createElement('button');
-    btn.className = 'stepDot' + (i === 1 ? ' is-active' : '');
-    btn.type = 'button';
-    btn.setAttribute('data-step', String(i));
-    btn.setAttribute('aria-label', `Steg ${i}`);
-    btn.textContent = String(i);
-    elStepper.appendChild(btn);
-  }
-}
-
-function setActiveDot(stepIndex) {
-  const dots = Array.from(elStepper?.querySelectorAll?.('.stepDot') || []);
-  dots.forEach((d) => {
-    const s = Number(d.getAttribute('data-step'));
-    const isActive = (s - 1) === stepIndex;
-    d.classList.toggle('is-active', isActive);
-    d.setAttribute('aria-current', isActive ? 'step' : 'false');
-  });
-}
-
-function markCompletedDots(completedSet) {
-  const dots = Array.from(elStepper?.querySelectorAll?.('.stepDot') || []);
-  dots.forEach((d) => {
-    const s = Number(d.getAttribute('data-step'));
-    const idx = s - 1;
-    d.classList.toggle('is-done', completedSet.has(idx)); // HOOK: done-class
-  });
-}
-
-function renderErrorCardInMain(message, code, rid) {
-  const main = document.querySelector('.container');
-  if (!main) return;
-
-  const suffix = rid ? ` (rid: ${rid})` : '';
-  const msg = code ? `${message} Felkod: ${code}${suffix}` : `${message}${suffix}`;
-
-  const card = renderErrorCard(msg, [
-    { label: 'Tillbaka', variant: 'ghost', onClick: () => window.location.assign('../index.html') },
-    { label: 'Försök igen', variant: 'primary', onClick: () => window.location.reload() }
-  ]);
-
-  main.prepend(card);
-}
-
-/* ============================================================
-   BLOCK 9 — Controller (next/prev + award)
-============================================================ */
-let partyId = '';
-let partyPack = null;
-let stepIndex = 0;
-let prevBtn = null;
-
-function renderStep() {
-  if (!partyPack) return;
-
-  const total = partyPack.checkpoints.length;
-  const s = store.getState();
-  const completed = getCompletedSet(s, partyId);
-
-  setText(elPartyName, partyPack.displayName || partyPack.name || 'Skattjakt');
-  setText(elStepPill, `Steg ${stepIndex + 1}/${total}`);
-
-  const cp = partyPack.checkpoints[stepIndex];
-  setText(elClueText, cp?.clue || '—');
-
-  setActiveDot(stepIndex);
-  markCompletedDots(completed);
-
-  if (prevBtn) prevBtn.disabled = stepIndex <= 0;
-
-  const isLast = stepIndex >= total - 1;
-  const done = completed.has(stepIndex);
-  if (elNextBtn) {
-    if (isLast && done) {
-      elNextBtn.textContent = 'Klar!';
-      elNextBtn.disabled = true;
-    } else {
-      elNextBtn.textContent = 'Nästa';
-      elNextBtn.disabled = false;
+    .mapWrap { margin-top: 10px; display:grid; gap: 8px; position: relative; }
+    .map {
+      width: 100%;
+      min-height: 340px;
+      border-radius: 14px;
+      border: 1px solid var(--border);
+      overflow: hidden;
+      background: rgba(255,255,255,.03);
     }
-  }
-}
-
-function awardIfNeededAndAdvance() {
-  if (!partyPack) return;
-
-  const total = partyPack.checkpoints.length;
-  const cp = partyPack.checkpoints[stepIndex];
-  const s = store.getState();
-
-  const alreadyDone = isCheckpointCompleted(s, partyId, stepIndex);
-
-  if (!alreadyDone) {
-    const res = store.update((draft) => {
-      const next = awardCheckpointComplete(draft, {
-        partyId,
-        checkpointIndex: stepIndex,
-        points: cp?.points ?? 10,
-        xp: cp?.xp ?? 10
-      });
-      return next || draft;
-    });
-
-    if (!res.ok) {
-      toast('Kunde inte spara checkpoint.', 'danger');
-      return;
+    @media (min-width: 900px) {
+      .map { min-height: 460px; }
     }
 
-    toast(`Checkpoint klar! +${cp?.points ?? 10}p • +${cp?.xp ?? 10}xp`, 'success', { ttlMs: 1800 });
-  }
+    .footerNote { margin-top: var(--sp-6); text-align:center; opacity:.85; }
 
-  if (stepIndex < total - 1) {
-    stepIndex += 1;
-    renderStep();
-  } else {
-    renderStep();
-    toast('Skattjakten är klar (demo).', 'info', { ttlMs: 2200 });
-  }
-}
-
-function goPrev() {
-  if (!partyPack) return;
-  if (stepIndex <= 0) return;
-  stepIndex -= 1;
-  renderStep();
-}
-
-/* ============================================================
-   BLOCK 10 — Boot
-============================================================ */
-(function bootParty() {
-  'use strict';
-
-  if (window.__AO10_PARTY_INIT__) return; // HOOK: init-guard-party
-  window.__AO10_PARTY_INIT__ = true;
-
-  const mode = qsGet('mode');      // HOOK: qs-mode
-  const id = qsGet('id');          // HOOK: qs-id (partyId)
-  const payload = qsGet('payload'); // HOOK: qs-payload (AO 6/6)
-
-  if (!mode) return redirectToIndex('PARTY_MISSING_PARAMS');
-  if (mode !== 'party') return redirectToIndex('PARTY_MODE_REQUIRED');
-
-  store.init();
-
-  if (elBack) {
-    elBack.addEventListener('click', () => {
-      if (window.history.length > 1) window.history.back();
-      else window.location.assign('../index.html');
-    });
-  }
-
-  prevBtn = ensurePrevButton();
-  if (prevBtn) prevBtn.addEventListener('click', (e) => { e.preventDefault(); goPrev(); });
-
-  if (elNextBtn) elNextBtn.addEventListener('click', (e) => { e.preventDefault(); awardIfNeededAndAdvance(); });
-
-  // Klick på dots: (binds efter vi byggt steppern)
-  function bindDotClicks() {
-    const dots = Array.from(elStepper?.querySelectorAll?.('.stepDot') || []);
-    dots.forEach((d) => {
-      d.addEventListener('click', () => {
-        const s = Number(d.getAttribute('data-step'));
-        const idx = s - 1;
-        if (!Number.isFinite(idx) || idx < 0) return;
-        stepIndex = idx;
-        renderStep();
-      });
-    });
-  }
-
-  (async () => {
-    try {
-      // =======================================================
-      // AO 6/6: payload prioriteras om den finns
-      // =======================================================
-      if (payload) {
-        const dec = safeDecodePayload(payload);
-        if (!dec.ok) return redirectToIndex('INVALID_PAYLOAD');
-
-        const parsed = safeJSONParseLocal(dec.value);
-        if (!parsed.ok) return redirectToIndex('INVALID_PAYLOAD');
-
-        if (!isValidDraftPayload(parsed.value)) return redirectToIndex('INVALID_PAYLOAD');
-
-        const pack = buildPartyPackFromDraftPayload(dec.value, parsed.value);
-        partyId = pack.id;
-        partyPack = pack;
-
-        ensureStepperDots(partyPack.checkpoints.length); // dynamiskt 1..20
-        bindDotClicks();
-
-        renderStep();
-        store.subscribe(() => renderStep());
-        return;
-      }
-
-      // =======================================================
-      // Legacy/demo: id krävs (oförändrat beteende)
-      // =======================================================
-      if (!id) return redirectToIndex('PARTY_MISSING_PARAMS');
-
-      partyId = id;
-
-      partyPack = await loadPartyPack(partyId);
-
-      ensureStepperDots(partyPack.checkpoints.length); // dynamiskt även för demo
-      bindDotClicks();
-
-      renderStep();
-      store.subscribe(() => renderStep());
-    } catch (e) {
-      const msg = (e?.message || 'Kunde inte ladda party-pack.').toString();
-      renderErrorCardInMain(msg, e?.code, e?.rid);
-      if (elNextBtn) elNextBtn.disabled = true;
-      if (prevBtn) prevBtn.disabled = true;
+    .fogOverlay {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      border-radius: 14px;
     }
-  })();
-})();
+
+    /* AO 7/8 toggle + grid (light styles here, main polish can be moved to main.css later) */
+    .viewToggle { margin-top: 12px; display:flex; gap: 10px; flex-wrap: wrap; }
+    .viewTab.is-active { border-color: rgba(110,231,255,.40); background: rgba(110,231,255,.10); }
+    .is-hidden { display:none !important; }
+
+    .gridWrap { margin-top: 12px; display:grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+    @media (min-width: 720px) { .gridWrap { grid-template-columns: repeat(8, 1fr); } }
+    .gridCell {
+      min-height: 44px;
+      border-radius: 14px;
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,.05);
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      font-weight: 900;
+      cursor: pointer;
+      user-select:none;
+    }
+    .gridCell[aria-disabled="true"] { opacity: .50; cursor: not-allowed; }
+    .gridCell.is-active { border-color: rgba(110,231,255,.55); background: rgba(110,231,255,.10); }
+    .gridCell.is-cleared { border-color: rgba(74,222,128,.45); background: rgba(74,222,128,.10); }
+    .gridCell.is-locked { border-style: dashed; }
+
+    /* ==========================================================
+       AO 1/3 — Rewards panel + Loot modal (page-local, minimal)
+    =========================================================== */
+    .rewardsPanel { margin-top: 12px; display:grid; gap: 10px; }
+    .rewardsList { margin:0; padding:0; list-style:none; display:grid; gap: 10px; }
+    .rewardItem {
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,.05);
+      border-radius: 14px;
+      padding: 12px 12px;
+      display:flex;
+      align-items:flex-start;
+      justify-content:space-between;
+      gap: 12px;
+    }
+    .rewardItem__meta { min-width:0; display:grid; gap: 4px; }
+    .rewardPartner { font-weight: 900; }
+    .rewardTitle { font-weight: 900; }
+    .rewardStatus { white-space: nowrap; }
+
+    .lootOverlay {
+      position: fixed;
+      inset: 0;
+      z-index: 2500;
+      display:flex;
+      align-items:flex-end;
+      justify-content:center;
+      padding: 12px;
+    }
+    .lootBackdrop {
+      position:absolute;
+      inset:0;
+      background: rgba(0,0,0,.55);
+      backdrop-filter: blur(6px);
+    }
+    .lootModal {
+      position: relative;
+      width: 100%;
+      max-width: 720px;
+      border: 1px solid var(--border);
+      background: rgba(16, 26, 47, .92);
+      border-radius: 16px;
+      box-shadow: 0 20px 50px rgba(0,0,0,.45);
+      padding: 14px;
+      display:grid;
+      gap: 12px;
+    }
+    .lootHead { display:flex; align-items:flex-start; justify-content:space-between; gap: 12px; }
+    .lootCards { display:grid; gap: 10px; grid-template-columns: 1fr; }
+    @media (min-width: 720px) {
+      .lootOverlay { align-items:center; padding: 16px; }
+      .lootCards { grid-template-columns: repeat(3, 1fr); }
+    }
+    .lootCardBtn {
+      width: 100%;
+      text-align:left;
+      border: 1px solid rgba(255,255,255,.14);
+      background: rgba(255,255,255,.06);
+      border-radius: 16px;
+      padding: 12px;
+      min-height: 88px;
+      cursor: pointer;
+      display:grid;
+      gap: 6px;
+    }
+    .lootCardBtn:focus-visible { box-shadow: var(--focus); }
+    .lootCardTitle { font-weight: 900; }
+    .lootCardPartner { font-weight: 900; opacity: .92; }
+    .lootCardShort { opacity: .88; }
+    .lootActions { display:flex; justify-content:flex-end; gap: 10px; }
+  </style>
+
+  <!-- ==========================================================
+       BLOCK 7 — Leaflet JS (CDN) + participant logic
+  =========================================================== -->
+  <script
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+    crossorigin=""
+  ></script>
+
+  <script type="module" src="../src/party-map.js"></script>
+</body>
+</html>
