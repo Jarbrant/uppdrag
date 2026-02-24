@@ -1,1 +1,571 @@
+<!-- ============================================================
+     FIL: pages/dashboard.html  (HEL FIL)
+     AO 3/6 — Admin Dashboard UI (Partners + Invites + Översikt)
+     Policy: UI-only, fail-closed, inga storage keys, XSS-safe
+============================================================ -->
+<!doctype html>
+<html lang="sv">
+<head>
+  <!-- ==========================================================
+       BLOCK 1 — Meta + CSS
+  =========================================================== -->
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Dashboard • Admin</title>
+  <meta name="description" content="Admin dashboard för partners & invites." />
+  <link rel="stylesheet" href="../styles/main.css" />
+  <style>
+    /* Minimal page-local (ingen ny css-fil) */
+    .row { display:flex; align-items:center; justify-content:space-between; gap: 12px; }
+    .grid2 { display:grid; gap: 12px; grid-template-columns: 1fr; }
+    @media (min-width: 860px){ .grid2{ grid-template-columns: 1fr 1fr; } }
+    .slot { margin-top: 12px; }
+    .stack { display:grid; gap: 10px; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+    .list { margin:0; padding:0; list-style:none; display:grid; gap: 10px; }
+    .item { border: 1px solid var(--border); background: rgba(255,255,255,.05); border-radius: 14px; padding: 12px; display:flex; gap: 12px; align-items:flex-start; justify-content:space-between; }
+    .itemMeta { min-width:0; display:grid; gap: 4px; }
+    .itemTitle { font-weight: 900; }
+    .itemSub { display:grid; gap: 6px; }
+    .btnRow { display:flex; gap: 8px; flex-wrap:wrap; justify-content:flex-end; }
+    .err { color: rgba(251,113,133,.95); min-height: 18px; font-size: 14px; }
+    .hint { opacity:.85; }
+    .isHidden { display:none !important; }
+    .badge2 { display:inline-flex; align-items:center; justify-content:center; padding: 6px 10px; border-radius: 999px; border:1px solid var(--border); background: rgba(255,255,255,.06); font-weight: 900; font-size: 12px; letter-spacing:.08em; }
+    .badge-ok { border-color: rgba(74,222,128,.45); background: rgba(74,222,128,.10); }
+    .badge-warn { border-color: rgba(251,191,36,.35); background: rgba(251,191,36,.10); }
+    .badge-neutral { border-color: rgba(255,255,255,.16); background: rgba(255,255,255,.05); }
 
+    .kpi { display:flex; gap: 10px; flex-wrap:wrap; }
+    .kpiBox { border:1px solid rgba(255,255,255,.12); background: rgba(255,255,255,.04); border-radius: 14px; padding: 10px 12px; }
+    .kpiLabel { font-size: 12px; opacity:.85; font-weight: 900; letter-spacing:.06em; }
+    .kpiValue { font-size: 18px; font-weight: 900; margin-top: 4px; }
+  </style>
+</head>
+
+<body class="theme-party">
+  <!-- ==========================================================
+       BLOCK 2 — Topbar
+  =========================================================== -->
+  <header class="topbar">
+    <div class="topbar__inner">
+      <div class="row">
+        <div>
+          <div class="muted small">Admin</div>
+          <div class="h2" style="margin:0;font-weight:900">Dashboard</div>
+        </div>
+        <div class="stack" style="justify-items:end">
+          <span id="apiPill" class="badge2 badge-neutral">API</span>
+          <span id="sessionPill" class="muted small mono">session: —</span>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- ==========================================================
+       BLOCK 3 — Main
+  =========================================================== -->
+  <main class="main" role="main">
+    <div class="container">
+      <div id="statusSlot" class="slot" aria-live="polite"></div>
+
+      <!-- ======================================================
+           BLOCK 4 — Admin key (KRAV 1)
+      ======================================================= -->
+      <section class="card paperCard" aria-label="Admin key">
+        <div class="card__head">
+          <div class="card__meta">
+            <h2 class="h2" style="margin:0">Admin Key</h2>
+            <p class="muted small" style="margin:6px 0 0 0">
+              Admin key lagras inte. Den används bara i minnet för requests.
+            </p>
+          </div>
+        </div>
+
+        <div class="stack" style="margin-top:12px">
+          <div class="field">
+            <label class="label2" for="adminKeyInput">Admin Key</label>
+            <input id="adminKeyInput" class="input" type="password" placeholder="••••" autocomplete="off" />
+            <div id="adminKeyErr" class="err" role="alert"></div>
+          </div>
+
+          <div class="muted small hint">
+            Tips: Du kan klistra in key, göra actions, och sedan rensa fältet.
+          </div>
+        </div>
+      </section>
+
+      <!-- ======================================================
+           BLOCK 5 — 3 cards (KRAV 5)
+      ======================================================= -->
+      <div class="grid2" style="margin-top:12px">
+        <!-- Create partner -->
+        <section class="card paperCard" aria-label="Skapa butik">
+          <div class="card__head">
+            <div class="card__meta">
+              <h3 class="h3" style="margin:0">Skapa butik</h3>
+              <p class="muted small" style="margin:6px 0 0 0">Skapar partner i backend.</p>
+            </div>
+          </div>
+
+          <div class="stack" style="margin-top:12px">
+            <div class="field">
+              <label class="label2" for="pId">PartnerId</label>
+              <input id="pId" class="input mono" type="text" placeholder="t.ex butik-123" autocomplete="off" />
+            </div>
+
+            <div class="field">
+              <label class="label2" for="pName">Namn</label>
+              <input id="pName" class="input" type="text" placeholder="t.ex Café Nova" autocomplete="off" />
+              <div id="createErr" class="err" role="alert"></div>
+            </div>
+
+            <button id="createPartnerBtn" class="btn btn-primary" type="button">Skapa</button>
+          </div>
+        </section>
+
+        <!-- Invite partner -->
+        <section class="card paperCard" aria-label="Bjud in butik">
+          <div class="card__head">
+            <div class="card__meta">
+              <h3 class="h3" style="margin:0">Bjud in butik</h3>
+              <p class="muted small" style="margin:6px 0 0 0">Skapar invite-token till partner.</p>
+            </div>
+          </div>
+
+          <div class="stack" style="margin-top:12px">
+            <div class="field">
+              <label class="label2" for="invitePartnerId">PartnerId</label>
+              <select id="invitePartnerId" class="input mono">
+                <option value="">— välj partner —</option>
+              </select>
+            </div>
+
+            <div class="field">
+              <label class="label2" for="ttlMinutes">TTL (min)</label>
+              <input id="ttlMinutes" class="input mono" type="number" min="1" max="43200" value="10080" />
+              <div id="inviteErr" class="err" role="alert"></div>
+            </div>
+
+            <button id="createInviteBtn" class="btn btn-primary" type="button">Skapa invite</button>
+
+            <div id="inviteResult" class="isHidden">
+              <div class="muted small">Invite URL</div>
+              <input id="inviteUrlInput" class="input mono" type="text" readonly />
+              <div class="btnRow" style="margin-top:10px">
+                <button id="copyInviteBtn" class="btn btn-ghost" type="button">Kopiera</button>
+              </div>
+              <div id="inviteMeta" class="muted small" style="margin-top:8px"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Overview -->
+        <section class="card paperCard" aria-label="Översikt">
+          <div class="card__head">
+            <div class="card__meta">
+              <h3 class="h3" style="margin:0">Översikt (MVP)</h3>
+              <p class="muted small" style="margin:6px 0 0 0">
+                Vi visar bara session-data i AO 3/6.
+              </p>
+            </div>
+          </div>
+
+          <div class="kpi" style="margin-top:12px">
+            <div class="kpiBox">
+              <div class="kpiLabel">Skapade partners</div>
+              <div id="kpiPartners" class="kpiValue">0</div>
+            </div>
+            <div class="kpiBox">
+              <div class="kpiLabel">Senaste invite</div>
+              <div id="kpiLastInvite" class="kpiValue mono">—</div>
+            </div>
+          </div>
+
+          <div class="muted small hint" style="margin-top:10px">
+            Riktig “lista alla partners + rewards” kräver extra admin GET-endpoints (eget AO).
+          </div>
+        </section>
+      </div>
+
+      <!-- ======================================================
+           BLOCK 6 — Session list (KRAV 3)
+      ======================================================= -->
+      <section class="card paperCard" aria-label="Sessionlista" style="margin-top:12px">
+        <div class="card__head">
+          <div class="card__meta">
+            <h3 class="h3" style="margin:0">Partners (denna session)</h3>
+            <p class="muted small" style="margin:6px 0 0 0">Skapas via API och visas här utan persist.</p>
+          </div>
+        </div>
+
+        <div class="stack" style="margin-top:12px">
+          <ul id="partnersList" class="list" aria-label="Partners lista"></ul>
+          <div id="partnersHint" class="muted small hint"></div>
+        </div>
+      </section>
+
+      <div class="muted small" style="margin-top:18px;text-align:center;opacity:.8">
+        Dashboard (AO 3/6) • Admin key i minnet • Ingen storage
+      </div>
+    </div>
+  </main>
+
+  <!-- ==========================================================
+       BLOCK 7 — JS (inbyggd)
+  =========================================================== -->
+  <script>
+    /* ==========================================================
+       BLOCK 7.1 — API base (KRAV 2)
+    =========================================================== */
+    const API_BASE = 'https://uppdrag.andersmenyit.workers.dev';
+
+    /* ==========================================================
+       BLOCK 7.2 — DOM + helpers (XSS-safe via textContent)
+    =========================================================== */
+    const $ = (sel) => document.querySelector(sel);
+
+    const elStatus = $('#statusSlot');
+    const elApiPill = $('#apiPill');
+    const elSessionPill = $('#sessionPill');
+
+    const elAdminKey = $('#adminKeyInput');
+    const elAdminKeyErr = $('#adminKeyErr');
+
+    const elPId = $('#pId');
+    const elPName = $('#pName');
+    const elCreateErr = $('#createErr');
+    const elCreatePartnerBtn = $('#createPartnerBtn');
+
+    const elInvitePartnerId = $('#invitePartnerId');
+    const elTtl = $('#ttlMinutes');
+    const elInviteErr = $('#inviteErr');
+    const elCreateInviteBtn = $('#createInviteBtn');
+    const elInviteResult = $('#inviteResult');
+    const elInviteUrlInput = $('#inviteUrlInput');
+    const elCopyInviteBtn = $('#copyInviteBtn');
+    const elInviteMeta = $('#inviteMeta');
+
+    const elKpiPartners = $('#kpiPartners');
+    const elKpiLastInvite = $('#kpiLastInvite');
+
+    const elPartnersList = $('#partnersList');
+    const elPartnersHint = $('#partnersHint');
+
+    function setText(el, txt) {
+      if (!el) return;
+      el.textContent = (txt ?? '').toString();
+    }
+
+    function clearStatus() {
+      if (!elStatus) return;
+      elStatus.innerHTML = '';
+    }
+
+    function toast(msg, type = 'info') {
+      if (!elStatus) return;
+      const div = document.createElement('div');
+      div.className = 'toast toast--' + (type === 'danger' ? 'danger' : type === 'warn' ? 'warn' : type === 'success' ? 'success' : 'info');
+      div.setAttribute('role', 'status');
+      div.textContent = (msg ?? '').toString();
+      elStatus.appendChild(div);
+      setTimeout(() => { try { div.remove(); } catch (_) {} }, 2400);
+    }
+
+    function asText(v) {
+      return (v ?? '').toString().trim();
+    }
+
+    function apiUrl(path) {
+      return API_BASE.replace(/\/$/, '') + path;
+    }
+
+    function requireAdminKey() {
+      const k = elAdminKey ? elAdminKey.value.trim() : '';
+      if (!k) {
+        setText(elAdminKeyErr, 'Admin key krävs.');
+        toast('Admin key saknas', 'warn');
+        return '';
+      }
+      setText(elAdminKeyErr, '');
+      return k;
+    }
+
+    async function postAdmin(path, body) {
+      const key = requireAdminKey();
+      if (!key) return { ok: false, status: 0, data: { ok:false, error:'forbidden' } };
+
+      const res = await fetch(apiUrl(path), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-ADMIN-KEY': key
+        },
+        body: JSON.stringify(body || {})
+      });
+
+      const data = await res.json().catch(() => null);
+      return { ok: res.ok, status: res.status, data };
+    }
+
+    /* ==========================================================
+       BLOCK 7.3 — Subpath-safe invite URL (KRAV 4)
+    =========================================================== */
+    function currentBaseUrl() {
+      try {
+        const u = new URL(window.location.href);
+        u.hash = '';
+        u.search = '';
+        u.pathname = u.pathname.replace(/\/pages\/[^/]+$/, '/');
+        const s = u.toString();
+        return s.endsWith('/') ? s.slice(0, -1) : s;
+      } catch (_) {
+        return (window.location.origin || '').toString();
+      }
+    }
+
+    function buildInviteUrl(token) {
+      const base = currentBaseUrl();
+      const t = encodeURIComponent(asText(token));
+      return base + '/pages/partner.html?invite=' + t;
+    }
+
+    async function copyText(txt) {
+      const s = asText(txt);
+      if (!s) return false;
+      try {
+        await navigator.clipboard.writeText(s);
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+
+    /* ==========================================================
+       BLOCK 7.4 — Session state (KRAV 3)
+    =========================================================== */
+    const state = {
+      sessionId: Math.random().toString(36).slice(2, 8),
+      partners: [], // { partnerId, name, invites:[{token,url,expiresAt}] }
+      lastInviteUrl: ''
+    };
+
+    function findPartner(pid) {
+      const id = asText(pid);
+      return state.partners.find((p) => asText(p.partnerId) === id) || null;
+    }
+
+    function upsertPartner(pid, name) {
+      const id = asText(pid);
+      const nm = asText(name);
+      let p = findPartner(id);
+      if (!p) {
+        p = { partnerId: id, name: nm, invites: [] };
+        state.partners.push(p);
+      } else {
+        if (nm) p.name = nm;
+      }
+      return p;
+    }
+
+    function refreshPartnerDropdown() {
+      if (!elInvitePartnerId) return;
+      const current = elInvitePartnerId.value || '';
+      elInvitePartnerId.innerHTML = '<option value="">— välj partner —</option>';
+
+      for (const p of state.partners) {
+        const opt = document.createElement('option');
+        opt.value = asText(p.partnerId);
+        opt.textContent = asText(p.partnerId) + (p.name ? (' • ' + p.name) : '');
+        elInvitePartnerId.appendChild(opt);
+      }
+
+      if (current) elInvitePartnerId.value = current;
+    }
+
+    function renderOverview() {
+      setText(elKpiPartners, String(state.partners.length));
+      setText(elKpiLastInvite, state.lastInviteUrl ? state.lastInviteUrl : '—');
+      setText(elSessionPill, 'session: ' + state.sessionId);
+    }
+
+    function renderPartnersList() {
+      if (!elPartnersList) return;
+      elPartnersList.innerHTML = '';
+
+      if (state.partners.length === 0) {
+        setText(elPartnersHint, 'Inga partners skapade i denna session ännu.');
+        renderOverview();
+        refreshPartnerDropdown();
+        return;
+      }
+      setText(elPartnersHint, '');
+
+      for (const p of state.partners) {
+        const li = document.createElement('li');
+        li.className = 'item';
+
+        const meta = document.createElement('div');
+        meta.className = 'itemMeta';
+
+        const title = document.createElement('div');
+        title.className = 'itemTitle';
+        title.textContent = (p.name ? (p.name + ' • ') : '') + asText(p.partnerId);
+
+        const sub = document.createElement('div');
+        sub.className = 'itemSub';
+
+        const badge = document.createElement('span');
+        badge.className = 'badge2 badge-ok';
+        badge.textContent = 'SESSION';
+
+        sub.appendChild(badge);
+
+        // latest invite
+        const last = (Array.isArray(p.invites) && p.invites.length > 0) ? p.invites[p.invites.length - 1] : null;
+        if (last && last.url) {
+          const urlLine = document.createElement('div');
+          urlLine.className = 'muted small mono';
+          urlLine.textContent = last.url;
+          sub.appendChild(urlLine);
+
+          const expLine = document.createElement('div');
+          expLine.className = 'muted small';
+          expLine.textContent = last.expiresAt ? ('Går ut: ' + new Date(last.expiresAt).toLocaleString('sv-SE')) : '';
+          sub.appendChild(expLine);
+        }
+
+        meta.appendChild(title);
+        meta.appendChild(sub);
+
+        const right = document.createElement('div');
+        right.className = 'btnRow';
+
+        const btnCopyLast = document.createElement('button');
+        btnCopyLast.type = 'button';
+        btnCopyLast.className = 'btn btn-ghost';
+        btnCopyLast.textContent = 'Kopiera invite';
+        btnCopyLast.disabled = !(last && last.url);
+
+        btnCopyLast.addEventListener('click', async () => {
+          if (!last || !last.url) return;
+          const ok = await copyText(last.url);
+          toast(ok ? 'Kopierad' : 'Kunde inte kopiera', ok ? 'success' : 'warn');
+        });
+
+        right.appendChild(btnCopyLast);
+
+        li.appendChild(meta);
+        li.appendChild(right);
+        elPartnersList.appendChild(li);
+      }
+
+      renderOverview();
+      refreshPartnerDropdown();
+    }
+
+    /* ==========================================================
+       BLOCK 7.5 — Actions
+    =========================================================== */
+    async function onCreatePartner() {
+      clearStatus();
+      setText(elCreateErr, '');
+
+      const partnerId = asText(elPId ? elPId.value : '');
+      const name = asText(elPName ? elPName.value : '');
+
+      if (!partnerId) { setText(elCreateErr, 'partnerId krävs.'); return; }
+      if (!name) { setText(elCreateErr, 'namn krävs.'); return; }
+
+      try {
+        toast('Skapar partner…', 'info');
+        const out = await postAdmin('/admin/partners/create', { partnerId, name });
+
+        if (out.ok && out.data && out.data.ok === true) {
+          toast('Partner skapad ✅', 'success');
+          upsertPartner(partnerId, name);
+          if (elPId) elPId.value = '';
+          if (elPName) elPName.value = '';
+          renderPartnersList();
+          return;
+        }
+
+        const err = (out.data && out.data.error) ? out.data.error : 'bad_request';
+        setText(elCreateErr, 'Kunde inte skapa (' + err + ').');
+        toast('Misslyckades', 'danger');
+      } catch (_) {
+        setText(elCreateErr, 'Nätverksfel. Försök igen.');
+        toast('Nätverksfel', 'danger');
+      }
+    }
+
+    async function onCreateInvite() {
+      clearStatus();
+      setText(elInviteErr, '');
+      if (elInviteResult) elInviteResult.classList.add('isHidden');
+
+      const partnerId = asText(elInvitePartnerId ? elInvitePartnerId.value : '');
+      const ttlMinutes = Math.floor(Number(elTtl ? elTtl.value : 10080));
+
+      if (!partnerId) { setText(elInviteErr, 'Välj partnerId.'); return; }
+      if (!Number.isFinite(ttlMinutes) || ttlMinutes < 1) { setText(elInviteErr, 'TTL måste vara >= 1.'); return; }
+
+      try {
+        toast('Skapar invite…', 'info');
+        const out = await postAdmin('/admin/partners/invite', { partnerId, ttlMinutes });
+
+        if (out.ok && out.data && out.data.ok === true && out.data.inviteToken) {
+          const token = asText(out.data.inviteToken);
+          const expiresAt = Number(out.data.expiresAt) || 0;
+          const url = buildInviteUrl(token);
+
+          // UI
+          if (elInviteUrlInput) elInviteUrlInput.value = url;
+          if (elInviteMeta) setText(elInviteMeta, expiresAt ? ('Går ut: ' + new Date(expiresAt).toLocaleString('sv-SE')) : '');
+          if (elInviteResult) elInviteResult.classList.remove('isHidden');
+
+          // session state
+          const p = upsertPartner(partnerId, '');
+          p.invites.push({ token, url, expiresAt });
+          state.lastInviteUrl = url;
+
+          toast('Invite skapad ✅', 'success');
+          renderPartnersList();
+          return;
+        }
+
+        const err = (out.data && out.data.error) ? out.data.error : 'bad_request';
+        setText(elInviteErr, 'Kunde inte skapa invite (' + err + ').');
+        toast('Misslyckades', 'danger');
+      } catch (_) {
+        setText(elInviteErr, 'Nätverksfel. Försök igen.');
+        toast('Nätverksfel', 'danger');
+      }
+    }
+
+    async function onCopyInvite() {
+      const url = elInviteUrlInput ? elInviteUrlInput.value : '';
+      const ok = await copyText(url);
+      toast(ok ? 'Kopierad' : 'Kunde inte kopiera', ok ? 'success' : 'warn');
+    }
+
+    /* ==========================================================
+       BLOCK 7.6 — Boot
+    =========================================================== */
+    (function boot() {
+      setText(elApiPill, 'API');
+      renderOverview();
+      renderPartnersList();
+
+      if (elCreatePartnerBtn) elCreatePartnerBtn.addEventListener('click', onCreatePartner);
+      if (elCreateInviteBtn) elCreateInviteBtn.addEventListener('click', onCreateInvite);
+      if (elCopyInviteBtn) elCopyInviteBtn.addEventListener('click', onCopyInvite);
+
+      // Enter shortcuts
+      if (elAdminKey) elAdminKey.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); toast('Admin key klar', 'success'); } });
+      if (elPName) elPName.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); onCreatePartner(); } });
+      if (elTtl) elTtl.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); onCreateInvite(); } });
+    })();
+  </script>
+</body>
+</html>
