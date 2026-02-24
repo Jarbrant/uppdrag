@@ -1,361 +1,433 @@
 <!-- ============================================================
      FIL: pages/dashboard.html  (HEL FIL)
-     AO 3/6 — Admin Dashboard UI (Partners + Invites + Översikt)
-     PATCH: "Riktig dashboard" via admin GET endpoints:
+     AO 6/6 — Stats + riktig admin-lista (partners/rewards/vouchers)
+     Bygger på Worker endpoints:
        - GET  /admin/partners/list
-       - GET  /admin/rewards/stats
-       - GET  /admin/rewards/list?partnerId=<optional>   (valfritt)
-     Policy: UI-only, fail-closed, inga storage keys, XSS-safe
+       - GET  /admin/stats/overview?windowHours=...
+       - GET  /admin/stats/partner/:partnerId?windowHours=...
+       - GET  /admin/partners/:partnerId/rewards
+       - POST /admin/partners/create
+       - POST /admin/partners/invite
+     Policy: UI-only, fail-closed, ingen storage för admin key, XSS-safe (textContent)
 ============================================================ -->
 <!doctype html>
 <html lang="sv">
 <head>
-  <!-- ==========================================================
-       BLOCK 1 — Meta + CSS
-  =========================================================== -->
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Dashboard • Admin</title>
-  <meta name="description" content="Admin dashboard för partners & invites." />
+  <title>Admin Dashboard</title>
+  <meta name="description" content="Admin dashboard för partners, rewards och vouchers." />
   <link rel="stylesheet" href="../styles/main.css" />
+
+  <!-- Page-local fix: vita texter i inputs/select (som på din screenshot) -->
   <style>
-    /* Minimal page-local (ingen ny css-fil) */
-    .row { display:flex; align-items:center; justify-content:space-between; gap: 12px; }
-    .grid2 { display:grid; gap: 12px; grid-template-columns: 1fr; }
-    @media (min-width: 860px){ .grid2{ grid-template-columns: 1fr 1fr; } }
-    .slot { margin-top: 12px; }
-    .stack { display:grid; gap: 10px; }
-    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
-    .list { margin:0; padding:0; list-style:none; display:grid; gap: 10px; }
-    .item { border: 1px solid var(--border); background: rgba(255,255,255,.05); border-radius: 14px; padding: 12px; display:flex; gap: 12px; align-items:flex-start; justify-content:space-between; }
-    .itemMeta { min-width:0; display:grid; gap: 4px; }
-    .itemTitle { font-weight: 900; }
-    .itemSub { display:grid; gap: 6px; }
-    .btnRow { display:flex; gap: 8px; flex-wrap:wrap; justify-content:flex-end; }
-    .err { color: rgba(251,113,133,.95); min-height: 18px; font-size: 14px; }
-    .hint { opacity:.85; }
-    .isHidden { display:none !important; }
-    .badge2 { display:inline-flex; align-items:center; justify-content:center; padding: 6px 10px; border-radius: 999px; border:1px solid var(--border); background: rgba(255,255,255,.06); font-weight: 900; font-size: 12px; letter-spacing:.08em; }
-    .badge-ok { border-color: rgba(74,222,128,.45); background: rgba(74,222,128,.10); }
-    .badge-warn { border-color: rgba(251,191,36,.35); background: rgba(251,191,36,.10); }
-    .badge-neutral { border-color: rgba(255,255,255,.16); background: rgba(255,255,255,.05); }
+    /* ==========================================================
+       AO 6/6 — Input/Select text ska vara vit (fix)
+    =========================================================== */
+    .input, select.input, .input[type="text"], .input[type="password"], .input[type="number"]{
+      color: rgba(255,255,255,.92) !important;
+      -webkit-text-fill-color: rgba(255,255,255,.92) !important;
+      caret-color: rgba(255,255,255,.92);
+    }
+    .input::placeholder{
+      color: rgba(255,255,255,.45) !important;
+      -webkit-text-fill-color: rgba(255,255,255,.45) !important;
+    }
 
-    .kpi { display:flex; gap: 10px; flex-wrap:wrap; }
-    .kpiBox { border:1px solid rgba(255,255,255,.12); background: rgba(255,255,255,.04); border-radius: 14px; padding: 10px 12px; }
-    .kpiLabel { font-size: 12px; opacity:.85; font-weight: 900; letter-spacing:.06em; }
-    .kpiValue { font-size: 18px; font-weight: 900; margin-top: 4px; }
+    /* Select: visad vald text vit, dropdown options läsbara */
+    select.input { background: rgba(255,255,255,.05); }
+    select.input option{
+      color: #111;
+      background: #fff;
+    }
 
-    .miniTable { width:100%; border-collapse:collapse; }
-    .miniTable th, .miniTable td { padding: 8px 8px; border-bottom: 1px solid rgba(255,255,255,.10); text-align:left; font-size: 14px; }
-    .miniTable th { font-weight: 900; opacity:.9; }
-    .right { text-align:right; }
+    /* Layout helpers (page-local, minimal) */
+    .dashGrid { display:grid; gap: 14px; }
+    @media (min-width: 900px){ .dashGrid--2 { grid-template-columns: 1fr 1fr; } }
+
+    .row { display:flex; align-items:center; gap: 10px; flex-wrap:wrap; }
+    .rowSpace { display:flex; align-items:center; justify-content:space-between; gap: 12px; flex-wrap:wrap; }
+
+    .slot { margin-top: var(--sp-4); }
+    .mini { font-size: var(--fs-2); }
+    .muted2 { opacity:.85; }
+
+    /* Lists */
+    .list { list-style:none; padding:0; margin:0; display:grid; gap: 10px; }
+    .listItem {
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,.05);
+      border-radius: 14px;
+      padding: 12px;
+      display:flex;
+      align-items:flex-start;
+      justify-content:space-between;
+      gap: 12px;
+    }
+    .listItem__meta { min-width:0; display:grid; gap: 4px; }
+    .listItem__title { font-weight: 900; }
+    .listItem__sub { font-size: var(--fs-2); opacity:.9; }
+    .listItem__right { display:flex; gap: 8px; align-items:center; flex-wrap:wrap; justify-content:flex-end; }
+
+    /* Badges (light) */
+    .badge--ok { border-color: rgba(74,222,128,.45); background: rgba(74,222,128,.10); }
+    .badge--warn { border-color: rgba(251,191,36,.35); background: rgba(251,191,36,.10); }
+    .badge--off { border-color: rgba(255,255,255,.18); background: rgba(255,255,255,.06); }
+
+    /* Partner detail */
+    .detailGrid { display:grid; gap: 12px; }
+    @media (min-width: 900px){ .detailGrid { grid-template-columns: 1.1fr .9fr; } }
+
+    .tableLite { width:100%; border-collapse: separate; border-spacing: 0 8px; }
+    .tableLite th { text-align:left; font-size: var(--fs-2); opacity:.85; padding: 0 8px; }
+    .tableLite td { padding: 10px 8px; background: rgba(255,255,255,.05); border:1px solid var(--border); }
+    .tableLite td:first-child { border-radius: 12px 0 0 12px; }
+    .tableLite td:last-child { border-radius: 0 12px 12px 0; }
+    .num { text-align:right; }
+
+    /* Toast slot uses existing .toast in main.css if present */
+    .toast { margin-top: 10px; }
   </style>
 </head>
 
 <body class="theme-party">
-  <!-- ==========================================================
-       BLOCK 2 — Topbar
-  =========================================================== -->
-  <header class="topbar">
-    <div class="topbar__inner">
-      <div class="row">
-        <div>
-          <div class="muted small">Admin</div>
-          <div class="h2" style="margin:0;font-weight:900">Dashboard</div>
+  <div id="app" class="app">
+    <!-- Topbar -->
+    <header class="topbar">
+      <div class="topbar__inner">
+        <div class="brand">
+          <div class="brand__mark" aria-hidden="true">◎</div>
+          <div class="brand__text">
+            <div class="brand__name">Admin Dashboard</div>
+            <div class="brand__tag muted">session: <span id="sessionId">—</span></div>
+          </div>
         </div>
-        <div class="stack" style="justify-items:end">
-          <span id="apiPill" class="badge2 badge-neutral">API</span>
-          <span id="sessionPill" class="muted small mono">session: —</span>
+
+        <div class="topbar__right" style="display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end;">
+          <a class="badge" href="admin.html?new=1" aria-label="Öppna admin">Admin</a>
+          <a class="badge" href="partner.html" aria-label="Öppna partner-sida">Partner</a>
+          <span class="badge badge-success" aria-label="MVP status">MVP</span>
         </div>
       </div>
-    </div>
-  </header>
+    </header>
 
-  <!-- ==========================================================
-       BLOCK 3 — Main
-  =========================================================== -->
-  <main class="main" role="main">
-    <div class="container">
-      <div id="statusSlot" class="slot" aria-live="polite"></div>
+    <main class="main" role="main">
+      <div class="container">
+        <!-- Status slot -->
+        <div id="statusSlot" class="slot" aria-live="polite"></div>
 
-      <!-- ======================================================
-           BLOCK 4 — Admin key (KRAV 1)
-      ======================================================= -->
-      <section class="card paperCard" aria-label="Admin key">
-        <div class="card__head">
-          <div class="card__meta">
-            <h2 class="h2" style="margin:0">Admin Key</h2>
-            <p class="muted small" style="margin:6px 0 0 0">
-              Admin key lagras inte. Den används bara i minnet för requests.
-            </p>
-          </div>
-          <div class="card__side">
-            <button id="refreshAllBtn" class="btn btn-ghost" type="button">Hämta data</button>
-          </div>
-        </div>
-
-        <div class="stack" style="margin-top:12px">
-          <div class="field">
-            <label class="label2" for="adminKeyInput">Admin Key</label>
-            <input id="adminKeyInput" class="input" type="password" placeholder="••••" autocomplete="off" />
-            <div id="adminKeyErr" class="err" role="alert"></div>
-          </div>
-
-          <div class="muted small hint">
-            Klicka “Hämta data” för att lista partners + stats. (Fail-closed om key saknas/fel.)
-          </div>
-        </div>
-      </section>
-
-      <!-- ======================================================
-           BLOCK 5 — 3 cards (KRAV 5)
-      ======================================================= -->
-      <div class="grid2" style="margin-top:12px">
-        <!-- Create partner -->
-        <section class="card paperCard" aria-label="Skapa butik">
+        <!-- Admin key card -->
+        <section class="card paperCard" aria-label="Admin Key">
           <div class="card__head">
             <div class="card__meta">
-              <h3 class="h3" style="margin:0">Skapa butik</h3>
-              <p class="muted small" style="margin:6px 0 0 0">Skapar partner i backend.</p>
-            </div>
-          </div>
-
-          <div class="stack" style="margin-top:12px">
-            <div class="field">
-              <label class="label2" for="pId">PartnerId</label>
-              <input id="pId" class="input mono" type="text" placeholder="t.ex butik-123" autocomplete="off" />
-            </div>
-
-            <div class="field">
-              <label class="label2" for="pName">Namn</label>
-              <input id="pName" class="input" type="text" placeholder="t.ex Café Nova" autocomplete="off" />
-              <div id="createErr" class="err" role="alert"></div>
-            </div>
-
-            <button id="createPartnerBtn" class="btn btn-primary" type="button">Skapa</button>
-          </div>
-        </section>
-
-        <!-- Invite partner -->
-        <section class="card paperCard" aria-label="Bjud in butik">
-          <div class="card__head">
-            <div class="card__meta">
-              <h3 class="h3" style="margin:0">Bjud in butik</h3>
-              <p class="muted small" style="margin:6px 0 0 0">Skapar invite-token till partner.</p>
-            </div>
-          </div>
-
-          <div class="stack" style="margin-top:12px">
-            <div class="field">
-              <label class="label2" for="invitePartnerId">PartnerId</label>
-              <select id="invitePartnerId" class="input mono">
-                <option value="">— välj partner —</option>
-              </select>
-            </div>
-
-            <div class="field">
-              <label class="label2" for="ttlMinutes">TTL (min)</label>
-              <input id="ttlMinutes" class="input mono" type="number" min="1" max="43200" value="10080" />
-              <div id="inviteErr" class="err" role="alert"></div>
-            </div>
-
-            <button id="createInviteBtn" class="btn btn-primary" type="button">Skapa invite</button>
-
-            <div id="inviteResult" class="isHidden">
-              <div class="muted small">Invite URL</div>
-              <input id="inviteUrlInput" class="input mono" type="text" readonly />
-              <div class="btnRow" style="margin-top:10px">
-                <button id="copyInviteBtn" class="btn btn-ghost" type="button">Kopiera</button>
-              </div>
-              <div id="inviteMeta" class="muted small" style="margin-top:8px"></div>
-            </div>
-          </div>
-        </section>
-
-        <!-- Overview (REAL via stats endpoint) -->
-        <section class="card paperCard" aria-label="Översikt">
-          <div class="card__head">
-            <div class="card__meta">
-              <h3 class="h3" style="margin:0">Översikt</h3>
-              <p class="muted small" style="margin:6px 0 0 0">
-                Hämtas från /admin/rewards/stats.
-              </p>
+              <h1 class="h2" style="margin:0">Admin Key</h1>
+              <p class="muted small" style="margin:6px 0 0 0">Admin key lagras inte. Den används bara i minnet för requests.</p>
             </div>
             <div class="card__side">
-              <span id="statsPill" class="badge2 badge-neutral">—</span>
+              <button id="fetchBtn" class="btn btn-ghost" type="button" aria-label="Hämta data">Hämta data</button>
             </div>
           </div>
 
-          <div class="kpi" style="margin-top:12px">
-            <div class="kpiBox">
-              <div class="kpiLabel">Partners (aktiva/total)</div>
-              <div id="kpiPartners" class="kpiValue">—</div>
+          <div class="form" style="margin-top:12px">
+            <div class="field" style="max-width:420px">
+              <label class="label2" for="adminKeyInput">Admin Key</label>
+              <input id="adminKeyInput" class="input" type="password" placeholder="••••" autocomplete="off" />
             </div>
-            <div class="kpiBox">
-              <div class="kpiLabel">Rewards (aktiva/total)</div>
-              <div id="kpiRewards" class="kpiValue">—</div>
+            <div class="muted small">
+              Klicka “Hämta data” för att lista partners + stats. (fail-closed om key saknas/fel.)
             </div>
-            <div class="kpiBox">
-              <div class="kpiLabel">Rewards med stock</div>
-              <div id="kpiInStock" class="kpiValue">—</div>
-            </div>
-            <div class="kpiBox">
-              <div class="kpiLabel">CP / FINAL</div>
-              <div id="kpiTier" class="kpiValue">—</div>
-            </div>
-          </div>
-
-          <div class="muted small hint" style="margin-top:10px">
-            Senaste invite: <span id="kpiLastInvite" class="mono">—</span>
           </div>
         </section>
-      </div>
 
-      <!-- ======================================================
-           BLOCK 6 — Partners list (REAL via /admin/partners/list)
-      ======================================================= -->
-      <section class="card paperCard" aria-label="Partners" style="margin-top:12px">
-        <div class="card__head">
-          <div class="card__meta">
-            <h3 class="h3" style="margin:0">Partners</h3>
-            <p class="muted small" style="margin:6px 0 0 0">Lista från backend (admin).</p>
-          </div>
-          <div class="card__side">
-            <button id="copyLastInviteBtn" class="btn btn-ghost" type="button">Kopiera senaste invite</button>
-          </div>
+        <div class="dashGrid dashGrid--2" style="margin-top:14px">
+          <!-- Create partner -->
+          <section class="card paperCard" aria-label="Skapa butik">
+            <div class="card__head">
+              <div class="card__meta">
+                <h2 class="h2" style="margin:0">Skapa butik</h2>
+                <p class="muted small" style="margin:6px 0 0 0">Skapar partner i backend.</p>
+              </div>
+            </div>
+
+            <div class="form" style="margin-top:12px">
+              <div class="field">
+                <label class="label2" for="createPartnerId">PartnerId</label>
+                <input id="createPartnerId" class="input" type="text" placeholder="t.ex butik-123" autocomplete="off" />
+              </div>
+              <div class="field">
+                <label class="label2" for="createPartnerName">Namn</label>
+                <input id="createPartnerName" class="input" type="text" placeholder="t.ex Café Nova" autocomplete="off" />
+              </div>
+              <button id="createPartnerBtn" class="btn btn-primary" type="button">Skapa</button>
+            </div>
+          </section>
+
+          <!-- Invite partner -->
+          <section class="card paperCard" aria-label="Bjud in butik">
+            <div class="card__head">
+              <div class="card__meta">
+                <h2 class="h2" style="margin:0">Bjud in butik</h2>
+                <p class="muted small" style="margin:6px 0 0 0">Skapar invite-token till partner.</p>
+              </div>
+            </div>
+
+            <div class="form" style="margin-top:12px">
+              <div class="field">
+                <label class="label2" for="invitePartnerSelect">PartnerId</label>
+                <select id="invitePartnerSelect" class="input" aria-label="Välj partner">
+                  <option value="">— välj partner —</option>
+                </select>
+              </div>
+              <div class="field" style="max-width:220px">
+                <label class="label2" for="inviteTtl">TTL (min)</label>
+                <input id="inviteTtl" class="input" type="number" inputmode="numeric" value="10080" min="1" max="43200" />
+              </div>
+
+              <button id="createInviteBtn" class="btn btn-primary" type="button">Skapa invite</button>
+
+              <div class="field" style="margin-top:6px">
+                <label class="label2" for="inviteUrlInput">Invite-länk</label>
+                <input id="inviteUrlInput" class="input" type="text" readonly value="" />
+                <div class="row">
+                  <button id="inviteCopyBtn" class="btn btn-ghost miniBtn" type="button">Kopiera</button>
+                  <span id="inviteMsg" class="muted small" style="min-height:18px"></span>
+                </div>
+              </div>
+            </div>
+          </section>
         </div>
 
-        <div class="stack" style="margin-top:12px">
-          <ul id="partnersList" class="list" aria-label="Partners lista"></ul>
-          <div id="partnersHint" class="muted small hint"></div>
+        <!-- Overview + Partners + Detail -->
+        <div class="dashGrid" style="margin-top:14px">
+          <!-- Overview -->
+          <section class="card paperCard" aria-label="Översikt">
+            <div class="card__head">
+              <div class="card__meta">
+                <h2 class="h2" style="margin:0">Översikt</h2>
+                <p class="muted small" style="margin:6px 0 0 0">Hämtas från <code>/admin/stats/overview</code>.</p>
+              </div>
+              <div class="card__side row">
+                <label class="muted small" for="windowHoursSelect">Fönster</label>
+                <select id="windowHoursSelect" class="input" style="min-width:140px">
+                  <option value="1">1h</option>
+                  <option value="24" selected>24h</option>
+                  <option value="168">168h</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="dashGrid dashGrid--2" style="margin-top:12px">
+              <div class="card" style="padding:12px">
+                <div class="muted small">Vouchers skapade</div>
+                <div id="ovCreated" style="font-weight:900; font-size:26px; margin-top:6px;">—</div>
+              </div>
+              <div class="card" style="padding:12px">
+                <div class="muted small">Vouchers inlösta</div>
+                <div id="ovRedeemed" style="font-weight:900; font-size:26px; margin-top:6px;">—</div>
+              </div>
+              <div class="card" style="padding:12px">
+                <div class="muted small">Unika gameIds</div>
+                <div id="ovUnique" style="font-weight:900; font-size:26px; margin-top:6px;">—</div>
+              </div>
+              <div class="card" style="padding:12px">
+                <div class="muted small">Topp</div>
+                <div class="muted small" style="margin-top:6px">Partners + Rewards (Top 5)</div>
+              </div>
+            </div>
+
+            <div class="dashGrid dashGrid--2" style="margin-top:12px">
+              <div class="card" style="padding:12px">
+                <div class="rowSpace">
+                  <div class="listItem__title">Top Partners</div>
+                  <span class="badge badge--off">created/redeemed</span>
+                </div>
+                <ul id="topPartnersList" class="list" style="margin-top:10px"></ul>
+              </div>
+              <div class="card" style="padding:12px">
+                <div class="rowSpace">
+                  <div class="listItem__title">Top Rewards</div>
+                  <span class="badge badge--off">created/redeemed</span>
+                </div>
+                <ul id="topRewardsList" class="list" style="margin-top:10px"></ul>
+              </div>
+            </div>
+          </section>
+
+          <!-- Partners -->
+          <section class="card paperCard" aria-label="Partners">
+            <div class="card__head">
+              <div class="card__meta">
+                <h2 class="h2" style="margin:0">Partners</h2>
+                <p class="muted small" style="margin:6px 0 0 0">Lista från <code>/admin/partners/list</code>. Klicka en partner för details.</p>
+              </div>
+            </div>
+
+            <ul id="partnersList" class="list" style="margin-top:12px"></ul>
+          </section>
+
+          <!-- Partner detail -->
+          <section id="partnerDetailCard" class="card paperCard" aria-label="Partner detail">
+            <div class="card__head">
+              <div class="card__meta">
+                <h2 class="h2" style="margin:0">Partner detail</h2>
+                <p id="partnerDetailSub" class="muted small" style="margin:6px 0 0 0">Välj en partner i listan.</p>
+              </div>
+            </div>
+
+            <div class="detailGrid" style="margin-top:12px">
+              <div class="card" style="padding:12px">
+                <div class="rowSpace">
+                  <div class="listItem__title">Rewards</div>
+                  <span id="detailPartnerBadge" class="badge badge--off">—</span>
+                </div>
+
+                <div style="overflow:auto; margin-top:10px">
+                  <table class="tableLite" aria-label="Rewards tabell">
+                    <thead>
+                      <tr>
+                        <th>Title</th>
+                        <th>Tier</th>
+                        <th class="num">Stock</th>
+                        <th>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody id="rewardsTbody"></tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div class="card" style="padding:12px">
+                <div class="rowSpace">
+                  <div class="listItem__title">Stats</div>
+                  <span class="badge badge--off">windowHours</span>
+                </div>
+
+                <div class="dashGrid" style="margin-top:10px">
+                  <div class="card" style="padding:12px">
+                    <div class="muted small">Created</div>
+                    <div id="pCreated" style="font-weight:900; font-size:24px; margin-top:4px;">—</div>
+                  </div>
+                  <div class="card" style="padding:12px">
+                    <div class="muted small">Redeemed</div>
+                    <div id="pRedeemed" style="font-weight:900; font-size:24px; margin-top:4px;">—</div>
+                  </div>
+                  <div class="card" style="padding:12px">
+                    <div class="muted small">Active rewards</div>
+                    <div id="pActiveRewards" style="font-weight:900; font-size:24px; margin-top:4px;">—</div>
+                  </div>
+                  <div class="card" style="padding:12px">
+                    <div class="muted small">Out of stock</div>
+                    <div id="pOutStock" style="font-weight:900; font-size:24px; margin-top:4px;">—</div>
+                  </div>
+                </div>
+
+                <div class="muted small" style="margin-top:10px">
+                  Admin override (pause/stock) kommer senare.
+                </div>
+              </div>
+            </div>
+          </section>
         </div>
-      </section>
 
-      <div class="muted small" style="margin-top:18px;text-align:center;opacity:.8">
-        Dashboard • Admin key i minnet • Ingen storage
+        <div class="muted small" style="margin-top:18px; text-align:center; opacity:.85;">
+          AO 6/6 — Admin dashboard (UI-only). Admin key lagras inte.
+        </div>
       </div>
-    </div>
-  </main>
+    </main>
+  </div>
 
-  <!-- ==========================================================
-       BLOCK 7 — JS (inbyggd)
-  =========================================================== -->
-  <script>
-    /* ==========================================================
-       BLOCK 7.1 — API base
-    =========================================================== */
+  <script type="module">
+    /* ============================================================
+       BLOCK 1 — Konstanter + state
+    ============================================================ */
     const API_BASE = 'https://uppdrag.andersmenyit.workers.dev';
 
-    /* ==========================================================
-       BLOCK 7.2 — DOM + helpers (XSS-safe via textContent)
-    =========================================================== */
-    const $ = (sel) => document.querySelector(sel);
+    const $ = (id) => document.getElementById(id);
 
-    const elStatus = $('#statusSlot');
-    const elApiPill = $('#apiPill');
-    const elSessionPill = $('#sessionPill');
-    const elStatsPill = $('#statsPill');
+    const elStatusSlot = $('statusSlot');
+    const elSessionId = $('sessionId');
 
-    const elAdminKey = $('#adminKeyInput');
-    const elAdminKeyErr = $('#adminKeyErr');
-    const elRefreshAllBtn = $('#refreshAllBtn');
+    const elAdminKey = $('adminKeyInput');
+    const elFetchBtn = $('fetchBtn');
 
-    const elPId = $('#pId');
-    const elPName = $('#pName');
-    const elCreateErr = $('#createErr');
-    const elCreatePartnerBtn = $('#createPartnerBtn');
+    const elCreatePartnerId = $('createPartnerId');
+    const elCreatePartnerName = $('createPartnerName');
+    const elCreatePartnerBtn = $('createPartnerBtn');
 
-    const elInvitePartnerId = $('#invitePartnerId');
-    const elTtl = $('#ttlMinutes');
-    const elInviteErr = $('#inviteErr');
-    const elCreateInviteBtn = $('#createInviteBtn');
-    const elInviteResult = $('#inviteResult');
-    const elInviteUrlInput = $('#inviteUrlInput');
-    const elCopyInviteBtn = $('#copyInviteBtn');
-    const elCopyLastInviteBtn = $('#copyLastInviteBtn');
-    const elInviteMeta = $('#inviteMeta');
+    const elInvitePartnerSelect = $('invitePartnerSelect');
+    const elInviteTtl = $('inviteTtl');
+    const elCreateInviteBtn = $('createInviteBtn');
+    const elInviteUrlInput = $('inviteUrlInput');
+    const elInviteCopyBtn = $('inviteCopyBtn');
+    const elInviteMsg = $('inviteMsg');
 
-    const elKpiPartners = $('#kpiPartners');
-    const elKpiRewards = $('#kpiRewards');
-    const elKpiInStock = $('#kpiInStock');
-    const elKpiTier = $('#kpiTier');
-    const elKpiLastInvite = $('#kpiLastInvite');
+    const elWindowHours = $('windowHoursSelect');
+    const elOvCreated = $('ovCreated');
+    const elOvRedeemed = $('ovRedeemed');
+    const elOvUnique = $('ovUnique');
+    const elTopPartners = $('topPartnersList');
+    const elTopRewards = $('topRewardsList');
 
-    const elPartnersList = $('#partnersList');
-    const elPartnersHint = $('#partnersHint');
+    const elPartnersList = $('partnersList');
 
-    function setText(el, txt) {
-      if (!el) return;
-      el.textContent = (txt ?? '').toString();
+    const elPartnerDetailSub = $('partnerDetailSub');
+    const elDetailPartnerBadge = $('detailPartnerBadge');
+    const elRewardsTbody = $('rewardsTbody');
+
+    const elPCreated = $('pCreated');
+    const elPRedeemed = $('pRedeemed');
+    const elPActiveRewards = $('pActiveRewards');
+    const elPOutStock = $('pOutStock');
+
+    const state = {
+      adminKey: '',
+      partners: [],
+      selectedPartnerId: '',
+      lastInviteUrl: ''
+    };
+
+    /* ============================================================
+       BLOCK 2 — UI helpers (XSS-safe)
+    ============================================================ */
+    function setText(node, text) {
+      if (!node) return;
+      node.textContent = (text ?? '').toString();
     }
 
-    function clearStatus() {
-      if (!elStatus) return;
-      elStatus.innerHTML = '';
+    function clearNode(node) {
+      if (!node) return;
+      while (node.firstChild) node.removeChild(node.firstChild);
     }
 
     function toast(msg, type = 'info') {
-      if (!elStatus) return;
+      if (!elStatusSlot) return;
+      clearNode(elStatusSlot);
       const div = document.createElement('div');
-      div.className = 'toast toast--' + (type === 'danger' ? 'danger' : type === 'warn' ? 'warn' : type === 'success' ? 'success' : 'info');
+      div.className = `toast toast--${type === 'danger' ? 'danger' : type === 'warn' ? 'warn' : type === 'success' ? 'success' : 'info'}`;
       div.setAttribute('role', 'status');
       div.textContent = (msg ?? '').toString();
-      elStatus.appendChild(div);
-      setTimeout(() => { try { div.remove(); } catch (_) {} }, 2400);
+      elStatusSlot.appendChild(div);
     }
 
-    function asText(v) {
-      return (v ?? '').toString().trim();
-    }
-
-    function apiUrl(path) {
-      return API_BASE.replace(/\/$/, '') + path;
-    }
-
-    function requireAdminKey() {
-      const k = elAdminKey ? elAdminKey.value.trim() : '';
-      if (!k) {
-        setText(elAdminKeyErr, 'Admin key krävs.');
-        toast('Admin key saknas', 'warn');
-        return '';
+    function requireKeyOrWarn() {
+      const k = (elAdminKey && elAdminKey.value) ? String(elAdminKey.value) : '';
+      state.adminKey = k.trim();
+      if (!state.adminKey) {
+        toast('Admin key saknas.', 'warn');
+        return false;
       }
-      setText(elAdminKeyErr, '');
-      return k;
+      return true;
     }
 
-    async function fetchAdminJson(path) {
-      const key = requireAdminKey();
-      if (!key) return { ok: false, status: 0, data: null };
-
-      const res = await fetch(apiUrl(path), {
-        method: 'GET',
-        headers: { 'X-ADMIN-KEY': key }
-      });
-      const data = await res.json().catch(() => null);
-      return { ok: res.ok, status: res.status, data };
+    function badge(text, variant) {
+      const s = document.createElement('span');
+      s.className = `badge ${variant || ''}`.trim();
+      s.textContent = text;
+      return s;
     }
 
-    async function postAdmin(path, body) {
-      const key = requireAdminKey();
-      if (!key) return { ok: false, status: 0, data: { ok:false, error:'forbidden' } };
-
-      const res = await fetch(apiUrl(path), {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-ADMIN-KEY': key
-        },
-        body: JSON.stringify(body || {})
-      });
-
-      const data = await res.json().catch(() => null);
-      return { ok: res.ok, status: res.status, data };
-    }
-
-    /* ==========================================================
-       BLOCK 7.3 — Subpath-safe invite URL
-    =========================================================== */
     function currentBaseUrl() {
+      // dashboard.html ligger i /pages/dashboard.html → base = repo-root
       try {
         const u = new URL(window.location.href);
         u.hash = '';
@@ -368,340 +440,450 @@
       }
     }
 
-    function buildInviteUrl(token) {
+    function buildInviteUrl(inviteToken) {
       const base = currentBaseUrl();
-      const t = encodeURIComponent(asText(token));
-      return base + '/pages/partner.html?invite=' + t;
+      const t = encodeURIComponent(String(inviteToken || ''));
+      return `${base}/pages/partner.html?invite=${t}`;
     }
 
-    async function copyText(txt) {
-      const s = asText(txt);
-      if (!s) return false;
+    async function copyText(text, fallbackInput) {
+      const t = String(text || '');
+      if (!t) return false;
       try {
-        await navigator.clipboard.writeText(s);
-        return true;
-      } catch (_) {
-        return false;
+        if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+          await navigator.clipboard.writeText(t);
+          return true;
+        }
+      } catch (_) {}
+      if (fallbackInput) {
+        try {
+          fallbackInput.focus();
+          fallbackInput.select();
+          fallbackInput.setSelectionRange(0, String(fallbackInput.value || '').length);
+          document.execCommand('copy');
+          return true;
+        } catch (_) {}
       }
+      return false;
     }
 
-    /* ==========================================================
-       BLOCK 7.4 — State (ingen storage)
-    =========================================================== */
-    const state = {
-      sessionId: Math.random().toString(36).slice(2, 8),
-      partners: [],        // backend partners list
-      lastInviteUrl: ''    // bara minne
-    };
-
-    function renderDropdown() {
-      if (!elInvitePartnerId) return;
-      const current = elInvitePartnerId.value || '';
-      elInvitePartnerId.innerHTML = '<option value="">— välj partner —</option>';
-
-      for (const p of state.partners) {
-        const opt = document.createElement('option');
-        opt.value = asText(p.partnerId);
-        opt.textContent = asText(p.partnerId) + (p.name ? (' • ' + p.name) : '');
-        elInvitePartnerId.appendChild(opt);
-      }
-      if (current) elInvitePartnerId.value = current;
+    /* ============================================================
+       BLOCK 3 — API helpers (fail-closed)
+    ============================================================ */
+    async function apiGet(path) {
+      const url = `${API_BASE.replace(/\/$/, '')}${path}`;
+      const res = await fetch(url, {
+        method: 'GET',
+        headers: { 'x-admin-key': state.adminKey }
+      });
+      const data = await res.json().catch(() => null);
+      return { ok: res.ok, status: res.status, data };
     }
 
-    function pill(el, cls, txt) {
-      if (!el) return;
-      el.className = 'badge2 ' + (cls || 'badge-neutral');
-      setText(el, txt || '—');
+    async function apiPost(path, body) {
+      const url = `${API_BASE.replace(/\/$/, '')}${path}`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-admin-key': state.adminKey
+        },
+        body: JSON.stringify(body || {})
+      });
+      const data = await res.json().catch(() => null);
+      return { ok: res.ok, status: res.status, data };
     }
 
-    function fmtDt(ms) {
-      const n = Number(ms);
-      if (!Number.isFinite(n) || n <= 0) return '';
-      try { return new Date(n).toLocaleString('sv-SE'); } catch (_) { return ''; }
+    function isDbMissingTable(payload) {
+      return !!(payload && payload.ok === false && payload.error === 'db_missing_table');
     }
 
-    function renderPartnersList() {
-      if (!elPartnersList) return;
-      elPartnersList.innerHTML = '';
-
-      if (!Array.isArray(state.partners) || state.partners.length === 0) {
-        setText(elPartnersHint, 'Inga partners laddade ännu. Skriv admin key och klicka “Hämta data”.');
-        renderDropdown();
+    /* ============================================================
+       BLOCK 4 — Render: overview + top lists
+    ============================================================ */
+    function renderTopList(container, items, kind) {
+      clearNode(container);
+      const arr = Array.isArray(items) ? items : [];
+      if (!arr.length) {
+        const li = document.createElement('li');
+        li.className = 'muted small';
+        li.textContent = '—';
+        container.appendChild(li);
         return;
       }
 
-      setText(elPartnersHint, '');
-
-      for (const p of state.partners) {
+      arr.forEach((it) => {
         const li = document.createElement('li');
-        li.className = 'item';
+        li.className = 'listItem';
 
         const meta = document.createElement('div');
-        meta.className = 'itemMeta';
+        meta.className = 'listItem__meta';
 
         const title = document.createElement('div');
-        title.className = 'itemTitle';
-        title.textContent = (p.name ? (p.name + ' • ') : '') + asText(p.partnerId);
+        title.className = 'listItem__title';
+
+        if (kind === 'partner') {
+          title.textContent = `${String(it.name || it.partnerId || 'Partner')}`;
+        } else {
+          title.textContent = `${String(it.title || it.rewardId || 'Reward')}`;
+        }
 
         const sub = document.createElement('div');
-        sub.className = 'itemSub';
-
-        const row = document.createElement('div');
-        row.className = 'row';
-
-        const left = document.createElement('div');
-        left.className = 'stack';
-        left.style.gap = '6px';
-
-        const badges = document.createElement('div');
-        badges.className = 'btnRow';
-        badges.style.justifyContent = 'flex-start';
-
-        const bActive = document.createElement('span');
-        bActive.className = 'badge2 ' + (Number(p.isActive) === 1 ? 'badge-ok' : 'badge-warn');
-        bActive.textContent = Number(p.isActive) === 1 ? 'AKTIV' : 'PAUSAD';
-
-        const bPin = document.createElement('span');
-        bPin.className = 'badge2 ' + (Number(p.hasPin) === 1 ? 'badge-ok' : 'badge-neutral');
-        bPin.textContent = Number(p.hasPin) === 1 ? 'PIN SATT' : 'PIN EJ SATT';
-
-        badges.appendChild(bActive);
-        badges.appendChild(bPin);
-
-        const created = document.createElement('div');
-        created.className = 'muted small';
-        created.textContent = p.createdAt ? ('Skapad: ' + fmtDt(p.createdAt)) : '';
-
-        left.appendChild(badges);
-        if (created.textContent) left.appendChild(created);
-
-        // Optional: reward count per partner (billigt, men kan vara lite tungt om många)
-        const right = document.createElement('div');
-        right.className = 'btnRow';
-
-        const btnRewards = document.createElement('button');
-        btnRewards.type = 'button';
-        btnRewards.className = 'btn btn-ghost';
-        btnRewards.textContent = 'Hämta rewards';
-        btnRewards.addEventListener('click', async () => {
-          // /admin/rewards/list?partnerId=...
-          try {
-            toast('Hämtar rewards…', 'info');
-            const out = await fetchAdminJson('/admin/rewards/list?partnerId=' + encodeURIComponent(asText(p.partnerId)));
-            if (!out.ok || !out.data || out.data.ok !== true || !Array.isArray(out.data.rewards)) {
-              toast('Kunde inte hämta rewards', 'warn');
-              return;
-            }
-            const total = out.data.rewards.length;
-            const inStock = out.data.rewards.filter(r => Number(r.stock) > 0).length;
-            toast(`Rewards: ${total} (med stock: ${inStock})`, 'success');
-          } catch (_) {
-            toast('Nätverksfel', 'danger');
-          }
-        });
-
-        right.appendChild(btnRewards);
-
-        row.appendChild(left);
-        row.appendChild(right);
-
-        sub.appendChild(row);
+        sub.className = 'listItem__sub muted2';
+        sub.textContent = kind === 'partner'
+          ? `partnerId: ${String(it.partnerId || '—')}`
+          : `rewardId: ${String(it.rewardId || '—')} • partnerId: ${String(it.partnerId || '—')}`;
 
         meta.appendChild(title);
         meta.appendChild(sub);
 
+        const right = document.createElement('div');
+        right.className = 'listItem__right';
+        right.appendChild(badge(`${Number(it.created) || 0}/${Number(it.redeemed) || 0}`, 'badge--off'));
+
         li.appendChild(meta);
+        li.appendChild(right);
+        container.appendChild(li);
+      });
+    }
+
+    function renderOverview(overview) {
+      setText(elOvCreated, overview ? String(overview.vouchersCreated ?? '—') : '—');
+      setText(elOvRedeemed, overview ? String(overview.vouchersRedeemed ?? '—') : '—');
+      setText(elOvUnique, overview ? String(overview.uniqueGames ?? '—') : '—');
+
+      renderTopList(elTopPartners, overview?.topPartners || [], 'partner');
+      renderTopList(elTopRewards, overview?.topRewards || [], 'reward');
+    }
+
+    /* ============================================================
+       BLOCK 5 — Render: partners list + invite select
+    ============================================================ */
+    function renderInviteSelect(partners) {
+      if (!elInvitePartnerSelect) return;
+      const selected = elInvitePartnerSelect.value || '';
+      clearNode(elInvitePartnerSelect);
+
+      const opt0 = document.createElement('option');
+      opt0.value = '';
+      opt0.textContent = '— välj partner —';
+      elInvitePartnerSelect.appendChild(opt0);
+
+      (partners || []).forEach((p) => {
+        const opt = document.createElement('option');
+        opt.value = String(p.partnerId || '');
+        opt.textContent = String(p.partnerId || '');
+        elInvitePartnerSelect.appendChild(opt);
+      });
+
+      // restore selection if possible
+      elInvitePartnerSelect.value = selected;
+    }
+
+    function renderPartnersList(partners) {
+      clearNode(elPartnersList);
+
+      const arr = Array.isArray(partners) ? partners : [];
+      if (!arr.length) {
+        const li = document.createElement('li');
+        li.className = 'muted small';
+        li.textContent = 'Inga partners ännu.';
         elPartnersList.appendChild(li);
-      }
-
-      renderDropdown();
-    }
-
-    function renderStats(stats) {
-      if (!stats) return;
-
-      const pTot = Number(stats?.partners?.total) || 0;
-      const pAct = Number(stats?.partners?.active) || 0;
-
-      const rTot = Number(stats?.rewards?.total) || 0;
-      const rAct = Number(stats?.rewards?.active) || 0;
-      const rIn = Number(stats?.rewards?.inStock) || 0;
-      const rCp = Number(stats?.rewards?.cpTotal) || 0;
-      const rFi = Number(stats?.rewards?.finalTotal) || 0;
-
-      setText(elKpiPartners, `${pAct}/${pTot}`);
-      setText(elKpiRewards, `${rAct}/${rTot}`);
-      setText(elKpiInStock, `${rIn}`);
-      setText(elKpiTier, `${rCp} / ${rFi}`);
-      setText(elKpiLastInvite, state.lastInviteUrl ? state.lastInviteUrl : '—');
-
-      pill(elStatsPill, 'badge-ok', 'LIVE');
-    }
-
-    /* ==========================================================
-       BLOCK 7.5 — Load (REAL)
-    =========================================================== */
-    async function refreshAll() {
-      clearStatus();
-      pill(elApiPill, 'badge-neutral', 'API');
-
-      const key = requireAdminKey();
-      if (!key) {
-        pill(elStatsPill, 'badge-neutral', '—');
         return;
       }
 
-      try {
-        toast('Hämtar partners + stats…', 'info');
+      arr.forEach((p) => {
+        const li = document.createElement('li');
+        li.className = 'listItem';
 
-        const [plist, stats] = await Promise.all([
-          fetchAdminJson('/admin/partners/list'),
-          fetchAdminJson('/admin/rewards/stats')
-        ]);
+        const meta = document.createElement('div');
+        meta.className = 'listItem__meta';
 
-        if (!plist.ok || !plist.data || plist.data.ok !== true || !Array.isArray(plist.data.partners)) {
-          pill(elApiPill, 'badge-warn', 'API FEL');
-          toast('Kunde inte hämta partners', 'danger');
-          return;
-        }
+        const title = document.createElement('div');
+        title.className = 'listItem__title';
+        title.textContent = String(p.name || '—');
 
-        state.partners = plist.data.partners;
-        renderPartnersList();
+        const sub = document.createElement('div');
+        sub.className = 'listItem__sub muted2';
+        sub.textContent = `partnerId: ${String(p.partnerId || '—')}`;
 
-        if (stats.ok && stats.data && stats.data.ok === true) {
-          renderStats(stats.data);
-          pill(elApiPill, 'badge-ok', 'API OK');
-          toast('Uppdaterad ✅', 'success');
+        meta.appendChild(title);
+        meta.appendChild(sub);
+
+        const right = document.createElement('div');
+        right.className = 'listItem__right';
+
+        const hasPin = Number(p.hasPin) === 1 || p.hasPin === true;
+        const isActive = Number(p.isActive) === 1;
+
+        right.appendChild(badge(hasPin ? 'PIN OK' : 'PIN saknas', hasPin ? 'badge--ok' : 'badge--warn'));
+        right.appendChild(badge(isActive ? 'Aktiv' : 'Inaktiv', isActive ? 'badge--ok' : 'badge--off'));
+
+        const btnView = document.createElement('button');
+        btnView.type = 'button';
+        btnView.className = 'btn btn-ghost miniBtn';
+        btnView.textContent = 'Visa';
+        btnView.addEventListener('click', () => selectPartner(String(p.partnerId || '')));
+
+        const btnInvite = document.createElement('button');
+        btnInvite.type = 'button';
+        btnInvite.className = 'btn btn-ghost miniBtn';
+        btnInvite.textContent = 'Skapa invite';
+        btnInvite.addEventListener('click', () => {
+          if (elInvitePartnerSelect) elInvitePartnerSelect.value = String(p.partnerId || '');
+          createInvite();
+        });
+
+        right.appendChild(btnView);
+        right.appendChild(btnInvite);
+
+        li.appendChild(meta);
+        li.appendChild(right);
+
+        // click row selects partner (but not double-trigger)
+        li.addEventListener('click', (e) => {
+          const tag = (e?.target?.tagName || '').toUpperCase();
+          if (tag === 'BUTTON') return;
+          selectPartner(String(p.partnerId || ''));
+        });
+
+        elPartnersList.appendChild(li);
+      });
+    }
+
+    /* ============================================================
+       BLOCK 6 — Partner detail: rewards + partner stats
+    ============================================================ */
+    function rewardStatusLabel(r) {
+      const isActive = Number(r.isActive) === 1;
+      const stock = Number(r.stock) || 0;
+      if (!isActive) return { text: 'Pausad', variant: 'badge--off' };
+      if (stock <= 0) return { text: 'Slut', variant: 'badge--warn' };
+      return { text: 'Aktiv', variant: 'badge--ok' };
+    }
+
+    function renderRewardsTable(rewards) {
+      clearNode(elRewardsTbody);
+
+      const arr = Array.isArray(rewards) ? rewards : [];
+      if (!arr.length) {
+        const tr = document.createElement('tr');
+        const td = document.createElement('td');
+        td.colSpan = 4;
+        td.style.borderRadius = '12px';
+        td.textContent = 'Inga rewards.';
+        tr.appendChild(td);
+        elRewardsTbody.appendChild(tr);
+        return;
+      }
+
+      arr.forEach((r) => {
+        const tr = document.createElement('tr');
+
+        const tdTitle = document.createElement('td');
+        const title = String(r.title || '—');
+        const valueText = String(r.valueText || '');
+        tdTitle.textContent = valueText ? `${title} • ${valueText}` : title;
+
+        const tdTier = document.createElement('td');
+        tdTier.textContent = String(r.tier || '—').toUpperCase();
+
+        const tdStock = document.createElement('td');
+        tdStock.className = 'num';
+        tdStock.textContent = String(Number(r.stock) || 0);
+
+        const tdStatus = document.createElement('td');
+        const st = rewardStatusLabel(r);
+        const b = document.createElement('span');
+        b.className = `badge ${st.variant}`.trim();
+        b.textContent = st.text;
+        tdStatus.appendChild(b);
+
+        tr.appendChild(tdTitle);
+        tr.appendChild(tdTier);
+        tr.appendChild(tdStock);
+        tr.appendChild(tdStatus);
+
+        elRewardsTbody.appendChild(tr);
+      });
+    }
+
+    function renderPartnerStats(stats) {
+      setText(elPCreated, stats ? String(stats.created ?? '—') : '—');
+      setText(elPRedeemed, stats ? String(stats.redeemed ?? '—') : '—');
+      setText(elPActiveRewards, stats ? String(stats.activeRewards ?? '—') : '—');
+      setText(elPOutStock, stats ? String(stats.outOfStockRewards ?? '—') : '—');
+    }
+
+    async function selectPartner(partnerId) {
+      if (!requireKeyOrWarn()) return;
+
+      const pid = String(partnerId || '').trim();
+      if (!pid) return;
+
+      state.selectedPartnerId = pid;
+      setText(elPartnerDetailSub, `Laddar: ${pid}…`);
+      setText(elDetailPartnerBadge, pid);
+
+      // fetch rewards + stats parallel
+      const wh = String(elWindowHours?.value || '24');
+      const p1 = apiGet(`/admin/partners/${encodeURIComponent(pid)}/rewards`);
+      const p2 = apiGet(`/admin/stats/partner/${encodeURIComponent(pid)}?windowHours=${encodeURIComponent(wh)}`);
+
+      const [rewardsRes, statsRes] = await Promise.all([p1, p2]);
+
+      if (!rewardsRes.ok || !rewardsRes.data || rewardsRes.data.ok !== true) {
+        if (isDbMissingTable(rewardsRes.data)) toast(`DB saknar tabell: vouchers (rid: ${rewardsRes.data.rid || '—'})`, 'danger');
+        setText(elPartnerDetailSub, `Kunde inte hämta rewards för ${pid}.`);
+        renderRewardsTable([]);
+      } else {
+        renderRewardsTable(rewardsRes.data.rewards || []);
+      }
+
+      if (!statsRes.ok || !statsRes.data || statsRes.data.ok !== true) {
+        if (isDbMissingTable(statsRes.data)) toast(`DB saknar tabell: vouchers (rid: ${statsRes.data.rid || '—'})`, 'danger');
+        renderPartnerStats(null);
+      } else {
+        renderPartnerStats(statsRes.data);
+      }
+
+      setText(elPartnerDetailSub, `Partner: ${pid}`);
+    }
+
+    /* ============================================================
+       BLOCK 7 — Actions: fetch all / create partner / invite
+    ============================================================ */
+    async function fetchAll() {
+      if (!requireKeyOrWarn()) return;
+
+      toast('Hämtar data…', 'info');
+
+      const wh = String(elWindowHours?.value || '24');
+
+      const [partnersRes, ovRes] = await Promise.all([
+        apiGet('/admin/partners/list'),
+        apiGet(`/admin/stats/overview?windowHours=${encodeURIComponent(wh)}`)
+      ]);
+
+      if (!partnersRes.ok || !partnersRes.data || partnersRes.data.ok !== true) {
+        toast('Kunde inte hämta partners (fel admin key eller CORS).', 'danger');
+        state.partners = [];
+        renderPartnersList([]);
+        renderInviteSelect([]);
+      } else {
+        state.partners = partnersRes.data.partners || [];
+        renderPartnersList(state.partners);
+        renderInviteSelect(state.partners);
+      }
+
+      if (!ovRes.ok || !ovRes.data || ovRes.data.ok !== true) {
+        if (isDbMissingTable(ovRes.data)) {
+          toast(`DB saknar tabell: vouchers (rid: ${ovRes.data.rid || '—'})`, 'danger');
         } else {
-          pill(elApiPill, 'badge-warn', 'DELVIS');
-          pill(elStatsPill, 'badge-warn', 'INGA STATS');
-          toast('Partners OK, stats misslyckades', 'warn');
+          toast('Kunde inte hämta översikt (kontrollera vouchers-tabell + admin key).', 'warn');
         }
-      } catch (_) {
-        pill(elApiPill, 'badge-warn', 'API FEL');
-        toast('Nätverksfel', 'danger');
+        renderOverview(null);
+      } else {
+        renderOverview(ovRes.data);
+        toast('Data uppdaterad.', 'success');
+      }
+
+      // re-render selected partner if any
+      if (state.selectedPartnerId) {
+        selectPartner(state.selectedPartnerId);
       }
     }
 
-    /* ==========================================================
-       BLOCK 7.6 — Actions
-    =========================================================== */
-    async function onCreatePartner() {
-      clearStatus();
-      setText(elCreateErr, '');
+    async function createPartner() {
+      if (!requireKeyOrWarn()) return;
 
-      const partnerId = asText(elPId ? elPId.value : '');
-      const name = asText(elPName ? elPName.value : '');
+      const partnerId = String(elCreatePartnerId?.value || '').trim();
+      const name = String(elCreatePartnerName?.value || '').trim();
 
-      if (!partnerId) { setText(elCreateErr, 'partnerId krävs.'); return; }
-      if (!name) { setText(elCreateErr, 'namn krävs.'); return; }
-
-      try {
-        toast('Skapar partner…', 'info');
-        const out = await postAdmin('/admin/partners/create', { partnerId, name });
-
-        if (out.ok && out.data && out.data.ok === true) {
-          toast('Partner skapad ✅', 'success');
-          if (elPId) elPId.value = '';
-          if (elPName) elPName.value = '';
-          await refreshAll();
-          return;
-        }
-
-        const err = (out.data && out.data.error) ? out.data.error : 'bad_request';
-        setText(elCreateErr, 'Kunde inte skapa (' + err + ').');
-        toast('Misslyckades', 'danger');
-      } catch (_) {
-        setText(elCreateErr, 'Nätverksfel. Försök igen.');
-        toast('Nätverksfel', 'danger');
+      if (!partnerId || !name) {
+        toast('PartnerId och Namn krävs.', 'warn');
+        return;
       }
-    }
 
-    async function onCreateInvite() {
-      clearStatus();
-      setText(elInviteErr, '');
-      if (elInviteResult) elInviteResult.classList.add('isHidden');
+      toast('Skapar partner…', 'info');
 
-      const partnerId = asText(elInvitePartnerId ? elInvitePartnerId.value : '');
-      const ttlMinutes = Math.floor(Number(elTtl ? elTtl.value : 10080));
+      const out = await apiPost('/admin/partners/create', { partnerId, name });
 
-      if (!partnerId) { setText(elInviteErr, 'Välj partnerId.'); return; }
-      if (!Number.isFinite(ttlMinutes) || ttlMinutes < 1) { setText(elInviteErr, 'TTL måste vara >= 1.'); return; }
-
-      try {
-        toast('Skapar invite…', 'info');
-        const out = await postAdmin('/admin/partners/invite', { partnerId, ttlMinutes });
-
-        if (out.ok && out.data && out.data.ok === true && out.data.inviteToken) {
-          const token = asText(out.data.inviteToken);
-          const expiresAt = Number(out.data.expiresAt) || 0;
-          const url = buildInviteUrl(token);
-
-          if (elInviteUrlInput) elInviteUrlInput.value = url;
-          if (elInviteMeta) setText(elInviteMeta, expiresAt ? ('Går ut: ' + fmtDt(expiresAt)) : '');
-          if (elInviteResult) elInviteResult.classList.remove('isHidden');
-
-          state.lastInviteUrl = url;
-          setText(elKpiLastInvite, state.lastInviteUrl);
-
-          toast('Invite skapad ✅', 'success');
-          return;
-        }
-
-        const err = (out.data && out.data.error) ? out.data.error : 'bad_request';
-        setText(elInviteErr, 'Kunde inte skapa invite (' + err + ').');
-        toast('Misslyckades', 'danger');
-      } catch (_) {
-        setText(elInviteErr, 'Nätverksfel. Försök igen.');
-        toast('Nätverksfel', 'danger');
+      if (!out.ok || !out.data || out.data.ok !== true) {
+        toast('Kunde inte skapa partner (id kan redan finnas).', 'danger');
+        return;
       }
+
+      toast('Partner skapad.', 'success');
+      if (elCreatePartnerId) elCreatePartnerId.value = '';
+      if (elCreatePartnerName) elCreatePartnerName.value = '';
+
+      // refresh
+      fetchAll();
     }
 
-    async function onCopyInvite() {
-      const url = elInviteUrlInput ? elInviteUrlInput.value : '';
-      const ok = await copyText(url);
-      toast(ok ? 'Kopierad' : 'Kunde inte kopiera', ok ? 'success' : 'warn');
+    async function createInvite() {
+      if (!requireKeyOrWarn()) return;
+
+      const partnerId = String(elInvitePartnerSelect?.value || '').trim();
+      const ttlMinutes = Number(elInviteTtl?.value || 0);
+
+      if (!partnerId) {
+        toast('Välj PartnerId.', 'warn');
+        return;
+      }
+      if (!Number.isFinite(ttlMinutes) || ttlMinutes < 1) {
+        toast('TTL måste vara ett tal > 0.', 'warn');
+        return;
+      }
+
+      setText(elInviteMsg, 'Skapar invite…');
+
+      const out = await apiPost('/admin/partners/invite', { partnerId, ttlMinutes });
+
+      if (!out.ok || !out.data || out.data.ok !== true || !out.data.inviteToken) {
+        setText(elInviteMsg, 'Kunde inte skapa invite.');
+        toast('Invite misslyckades (fel partnerId eller admin key).', 'danger');
+        return;
+      }
+
+      const url = buildInviteUrl(out.data.inviteToken);
+      state.lastInviteUrl = url;
+
+      if (elInviteUrlInput) elInviteUrlInput.value = url;
+      setText(elInviteMsg, 'Invite skapad.');
+
+      toast('Invite skapad.', 'success');
     }
 
-    async function onCopyLastInvite() {
-      const ok = await copyText(state.lastInviteUrl || '');
-      toast(ok ? 'Kopierad' : 'Ingen invite att kopiera', ok ? 'success' : 'warn');
-    }
-
-    /* ==========================================================
-       BLOCK 7.7 — Boot
-    =========================================================== */
+    /* ============================================================
+       BLOCK 8 — Events + boot
+    ============================================================ */
     (function boot() {
-      setText(elSessionPill, 'session: ' + state.sessionId);
-      pill(elApiPill, 'badge-neutral', 'API');
-      pill(elStatsPill, 'badge-neutral', '—');
+      // session id (UI-only)
+      const sid = String(Math.random()).slice(2, 7);
+      setText(elSessionId, sid);
 
-      // empty placeholders
-      setText(elKpiPartners, '—');
-      setText(elKpiRewards, '—');
-      setText(elKpiInStock, '—');
-      setText(elKpiTier, '—');
-      setText(elKpiLastInvite, '—');
-
-      renderDropdown();
-      renderPartnersList();
-
-      if (elRefreshAllBtn) elRefreshAllBtn.addEventListener('click', refreshAll);
-      if (elCreatePartnerBtn) elCreatePartnerBtn.addEventListener('click', onCreatePartner);
-      if (elCreateInviteBtn) elCreateInviteBtn.addEventListener('click', onCreateInvite);
-      if (elCopyInviteBtn) elCopyInviteBtn.addEventListener('click', onCopyInvite);
-      if (elCopyLastInviteBtn) elCopyLastInviteBtn.addEventListener('click', onCopyLastInvite);
-
-      // Enter shortcuts
-      if (elAdminKey) elAdminKey.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') { e.preventDefault(); refreshAll(); }
+      if (elFetchBtn) elFetchBtn.addEventListener('click', fetchAll);
+      if (elWindowHours) elWindowHours.addEventListener('change', () => {
+        // update overview (and partner stats if selected)
+        fetchAll();
       });
-      if (elPName) elPName.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') { e.preventDefault(); onCreatePartner(); }
-      });
-      if (elTtl) elTtl.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') { e.preventDefault(); onCreateInvite(); }
-      });
+
+      if (elCreatePartnerBtn) elCreatePartnerBtn.addEventListener('click', createPartner);
+      if (elCreateInviteBtn) elCreateInviteBtn.addEventListener('click', createInvite);
+
+      if (elInviteCopyBtn) {
+        elInviteCopyBtn.addEventListener('click', async () => {
+          const link = String(elInviteUrlInput?.value || '');
+          if (!link) { setText(elInviteMsg, 'Ingen länk att kopiera.'); return; }
+          const ok = await copyText(link, elInviteUrlInput);
+          setText(elInviteMsg, ok ? 'Kopierad.' : 'Kopiering nekades. Markera och kopiera manuellt.');
+        });
+      }
+
+      // fail-closed: vi fetch:ar inte automatiskt utan key
+      toast('Klart. Ange Admin Key och klicka “Hämta data”.', 'info');
     })();
   </script>
 </body>
