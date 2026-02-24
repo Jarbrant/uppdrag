@@ -1,7 +1,6 @@
 <!-- ============================================================
      FIL: index.html  (HEL FIL)
-     PATCH: Mina skattjakter — “Skattjakt” öppnar Bjud in-modal (QR/länk),
-            “Min karta” öppnar Admin (redigera)
+     PATCH: UI-fix — ta bort dubbel header (Admin/MVP) + fixa trasiga taggar
      Policy: UI-only, XSS-safe, fail-closed, subpath-safe
 ============================================================ -->
 <!doctype html>
@@ -22,6 +21,7 @@
      BLOCK 2 — App Root
 =========================================================== -->
 <div id="app" class="app"> <!-- HOOK: app-root -->
+
   <header class="topbar">
     <div class="topbar__inner">
       <div class="brand">
@@ -45,168 +45,155 @@
       </div>
     </div>
   </header>
-          <!-- ======================================================
-               AO 5/6 (FAS 1.2) — Admin link
-          ======================================================= -->
-          <a id="adminLink"
-             class="badge"
-             href="pages/admin.html"
-             aria-label="Öppna admin för att skapa skattjakt">
-            Admin
-          </a>
-          <!-- HOOK: admin-link -->
-          <span class="badge badge-success">MVP</span>
+
+  <main class="main">
+    <!-- ========================================================
+         BLOCK 3 — Start View (Mode-val)
+    ========================================================= -->
+    <section id="startView" class="view view--active" aria-label="Start"> <!-- HOOK: view-start -->
+      <div class="container">
+        <div class="hero">
+          <h1 class="h1">Välj läge</h1>
+          <p class="lead muted">Välj ett läge och tryck Starta.</p>
         </div>
+
+        <!-- ======================================================
+             BLOCK 3.1 — Error slot (AO-11)
+        ======================================================= -->
+        <div id="errorSlot" class="slot"> <!-- HOOK: error-slot --></div>
+
+        <div class="grid grid--modes" role="list">
+          <article class="card card--mode" role="listitem" tabindex="0"
+                   data-mode-card="zone"> <!-- HOOK: select-mode-zone -->
+            <div class="card__top">
+              <div class="card__icon" aria-hidden="true">🌿</div>
+              <div class="card__meta">
+                <h2 class="card__title">Naturjakt</h2>
+                <p class="card__desc muted">Hitta och fota saker i naturen. Samla poäng och XP.</p>
+              </div>
+            </div>
+            <div class="card__bottom">
+              <span class="badge">Utomhus</span>
+              <span class="badge badge-success">Demo: Skogsrundan</span>
+            </div>
+          </article>
+
+          <article class="card card--mode" role="listitem" tabindex="0"
+                   data-mode-card="party"> <!-- HOOK: select-mode-party -->
+            <div class="card__top">
+              <div class="card__icon" aria-hidden="true">🗺️</div>
+              <div class="card__meta">
+                <h2 class="card__title">Skattjakt</h2>
+                <p class="card__desc muted">Följ checkpoints och ledtrådar. Perfekt för kalas.</p>
+              </div>
+            </div>
+            <div class="card__bottom">
+              <span class="badge">Kalas</span>
+              <span class="badge badge-success">Demo: Kalas</span>
+            </div>
+          </article>
+        </div>
+
+        <!-- ======================================================
+             Mina skattjakter (renderas av JS)
+        ======================================================= -->
+        <div id="partyLibraryWrap" class="slot" style="margin-top: var(--sp-5);">
+          <!-- HOOK: party-library-wrap -->
+        </div>
+
+        <div class="panel">
+          <div class="panel__row">
+            <div class="panel__left">
+              <div class="label muted">Valt läge</div>
+              <div id="selectedModeLabel" class="value">Inget valt</div> <!-- HOOK: selected-mode-label -->
+            </div>
+
+            <div class="panel__right">
+              <button id="startBtn" class="btn btn-primary" type="button" disabled>
+                Starta
+              </button>
+              <!-- HOOK: start-button -->
+            </div>
+          </div>
+
+          <div id="startHint" class="hint muted" role="status" aria-live="polite">
+            Välj ett läge för att aktivera Starta.
+          </div>
+          <!-- HOOK: hint-area -->
+        </div>
+
+        <footer class="footer muted">
+          <span>Tips: QR kan starta direkt via URL (på samma base path).</span>
+        </footer>
       </div>
-    </header>
+    </section>
+  </main>
 
-    <main class="main">
-      <!-- ========================================================
-           BLOCK 3 — Start View (Mode-val)
-      ========================================================= -->
-      <section id="startView" class="view view--active" aria-label="Start"> <!-- HOOK: view-start -->
-        <div class="container">
-          <div class="hero">
-            <h1 class="h1">Välj läge</h1>
-            <p class="lead muted">Välj ett läge och tryck Starta.</p>
-          </div>
-
-          <!-- ======================================================
-               BLOCK 3.1 — Error slot (AO-11)
-          ======================================================= -->
-          <div id="errorSlot" class="slot"> <!-- HOOK: error-slot --></div>
-
-          <div class="grid grid--modes" role="list">
-            <article class="card card--mode" role="listitem" tabindex="0"
-                     data-mode-card="zone"> <!-- HOOK: select-mode-zone -->
-              <div class="card__top">
-                <div class="card__icon" aria-hidden="true">🌿</div>
-                <div class="card__meta">
-                  <h2 class="card__title">Naturjakt</h2>
-                  <p class="card__desc muted">Hitta och fota saker i naturen. Samla poäng och XP.</p>
-                </div>
-              </div>
-              <div class="card__bottom">
-                <span class="badge">Utomhus</span>
-                <span class="badge badge-success">Demo: Skogsrundan</span>
-              </div>
-            </article>
-
-            <article class="card card--mode" role="listitem" tabindex="0"
-                     data-mode-card="party"> <!-- HOOK: select-mode-party -->
-              <div class="card__top">
-                <div class="card__icon" aria-hidden="true">🗺️</div>
-                <div class="card__meta">
-                  <h2 class="card__title">Skattjakt</h2>
-                  <p class="card__desc muted">Följ checkpoints och ledtrådar. Perfekt för kalas.</p>
-                </div>
-              </div>
-              <div class="card__bottom">
-                <span class="badge">Kalas</span>
-                <span class="badge badge-success">Demo: Kalas</span>
-              </div>
-            </article>
-          </div>
-
-          <!-- ======================================================
-               Mina skattjakter (renderas av JS)
-          ======================================================= -->
-          <div id="partyLibraryWrap" class="slot" style="margin-top: var(--sp-5);">
-            <!-- HOOK: party-library-wrap -->
-          </div>
-
-          <div class="panel">
-            <div class="panel__row">
-              <div class="panel__left">
-                <div class="label muted">Valt läge</div>
-                <div id="selectedModeLabel" class="value">Inget valt</div> <!-- HOOK: selected-mode-label -->
-              </div>
-
-              <div class="panel__right">
-                <button id="startBtn" class="btn btn-primary" type="button" disabled>
-                  Starta
-                </button>
-                <!-- HOOK: start-button -->
-              </div>
-            </div>
-
-            <div id="startHint" class="hint muted" role="status" aria-live="polite">
-              Välj ett läge för att aktivera Starta.
-            </div>
-            <!-- HOOK: hint-area -->
-          </div>
-
-          <footer class="footer muted">
-            <span>Tips: QR kan starta direkt via URL (på samma base path).</span>
-          </footer>
+  <!-- ==========================================================
+       BLOCK 4 — Invite Modal (för “Skattjakt”-knappen i Mina skattjakter)
+  =========================================================== -->
+  <div id="inviteOverlay"
+       style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:9999; padding:16px;"
+       aria-hidden="true">
+    <div id="inviteModal"
+         role="dialog"
+         aria-modal="true"
+         aria-labelledby="inviteTitle"
+         style="max-width:720px; margin:40px auto; background:rgba(10,18,30,.98); border:1px solid rgba(255,255,255,.10); border-radius:16px; box-shadow:0 20px 60px rgba(0,0,0,.45); overflow:hidden;">
+      <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:12px; padding:16px 16px 12px 16px;">
+        <div>
+          <div id="inviteTitle" style="font-weight:700; font-size:18px;">Bjud in till Skattjakt</div>
+          <div id="inviteSub" class="muted" style="margin-top:4px;">Dela länken eller låt andra skanna QR.</div>
         </div>
-      </section>
-    </main>
+        <button id="inviteCloseBtn" type="button" class="btn btn-ghost miniBtn" aria-label="Stäng">
+          Stäng
+        </button>
+      </div>
 
-    <!-- ==========================================================
-         BLOCK 4 — Invite Modal (för “Skattjakt”-knappen i Mina skattjakter)
-    =========================================================== -->
-    <div id="inviteOverlay"
-         style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:9999; padding:16px;"
-         aria-hidden="true">
-      <div id="inviteModal"
-           role="dialog"
-           aria-modal="true"
-           aria-labelledby="inviteTitle"
-           style="max-width:720px; margin:40px auto; background:rgba(10,18,30,.98); border:1px solid rgba(255,255,255,.10); border-radius:16px; box-shadow:0 20px 60px rgba(0,0,0,.45); overflow:hidden;">
-        <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:12px; padding:16px 16px 12px 16px;">
-          <div>
-            <div id="inviteTitle" style="font-weight:700; font-size:18px;">Bjud in till Skattjakt</div>
-            <div id="inviteSub" class="muted" style="margin-top:4px;">Dela länken eller låt andra skanna QR.</div>
+      <div style="padding:0 16px 16px 16px; display:grid; gap:14px;">
+        <div class="card" style="padding:12px;">
+          <div class="muted small" style="margin-bottom:8px;">QR-kod</div>
+          <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:center;">
+            <img id="inviteQrImg" alt="QR för Skattjakt" style="width:200px; height:200px; border-radius:12px; background:rgba(255,255,255,.06); display:block;" />
+            <div style="flex:1; min-width:220px; display:grid; gap:8px;">
+              <div class="muted small">Länk</div>
+              <input id="inviteLinkInput" class="input" type="text" readonly value="" />
+              <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                <button id="inviteCopyBtn" type="button" class="btn btn-ghost miniBtn">Kopiera länk</button>
+                <button id="inviteShareBtn" type="button" class="btn btn-ghost miniBtn">Dela</button>
+              </div>
+              <div id="inviteMsg" class="muted small" style="min-height:18px;"></div>
+            </div>
           </div>
-          <button id="inviteCloseBtn" type="button" class="btn btn-ghost miniBtn" aria-label="Stäng">
-            Stäng
-          </button>
         </div>
 
-        <div style="padding:0 16px 16px 16px; display:grid; gap:14px;">
-          <div class="card" style="padding:12px;">
-            <div class="muted small" style="margin-bottom:8px;">QR-kod</div>
-            <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:center;">
-              <img id="inviteQrImg" alt="QR för Skattjakt" style="width:200px; height:200px; border-radius:12px; background:rgba(255,255,255,.06); display:block;" />
-              <div style="flex:1; min-width:220px; display:grid; gap:8px;">
-                <div class="muted small">Länk</div>
-                <input id="inviteLinkInput" class="input" type="text" readonly value="" />
-                <div style="display:flex; gap:8px; flex-wrap:wrap;">
-                  <button id="inviteCopyBtn" type="button" class="btn btn-ghost miniBtn">Kopiera länk</button>
-                  <button id="inviteShareBtn" type="button" class="btn btn-ghost miniBtn">Dela</button>
-                </div>
-                <div id="inviteMsg" class="muted small" style="min-height:18px;"></div>
-              </div>
-            </div>
+        <div class="card" style="padding:12px;">
+          <div class="muted small" style="margin-bottom:8px;">Spelare (bara på denna enhet)</div>
+
+          <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+            <input id="inviteNameInput" class="input" type="text" placeholder="Skriv namn…" style="flex:1; min-width:200px;" />
+            <button id="inviteAddBtn" type="button" class="btn btn-primary miniBtn">Lägg till</button>
           </div>
 
-          <div class="card" style="padding:12px;">
-            <div class="muted small" style="margin-bottom:8px;">Spelare (bara på denna enhet)</div>
+          <ul id="inviteList" style="list-style:none; padding:0; margin:12px 0 0 0; display:grid; gap:8px;"></ul>
+        </div>
 
-            <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-              <input id="inviteNameInput" class="input" type="text" placeholder="Skriv namn…" style="flex:1; min-width:200px;" />
-              <button id="inviteAddBtn" type="button" class="btn btn-primary miniBtn">Lägg till</button>
-            </div>
-
-            <ul id="inviteList" style="list-style:none; padding:0; margin:12px 0 0 0; display:grid; gap:8px;"></ul>
-          </div>
-
-          <div class="muted small">
-            Obs: I MVP kan vi inte “skicka” inbjudan. QR/länk är det som fungerar.
-          </div>
+        <div class="muted small">
+          Obs: I MVP kan vi inte “skicka” inbjudan. QR/länk är det som fungerar.
         </div>
       </div>
     </div>
   </div>
 
-  <!-- ==========================================================
-       BLOCK 5 — Boot routing
-  =========================================================== -->
-  <script type="module" src="./src/boot.js"></script>
+</div> <!-- /#app -->
 
-  <!-- ==========================================================
-     BLOCK 6 — Index controller (PATCH + uppdelad)
+<!-- ==========================================================
+     BLOCK 5 — Boot routing
+=========================================================== -->
+<script type="module" src="./src/boot.js"></script>
+
+<!-- ==========================================================
+   BLOCK 6 — Index controller (PATCH + uppdelad)
 =========================================================== -->
 <script type="module">
   import { qsGet } from './src/util.js';
@@ -345,9 +332,6 @@
 
     /* ==========================================================
        BLOCK 6.4 — Invite link builder (PATCH: rätt path + ingen dubbelkodning)
-       - Rätt sida: pages/party.html
-       - payload sätts som råtext, URLSearchParams kodar EN gång
-       - storlek checkas på ENKEL kodning
     =========================================================== */
     function buildPartyInviteLinkFromPayload(payloadJSON) {
       const raw = String(payloadJSON || '');
@@ -365,7 +349,7 @@
     }
 
     /* ==========================================================
-       BLOCK 6.5 — Invite modal: open/close + actions (copy/share/add player)
+       BLOCK 6.5 — Invite modal: open/close + actions
     =========================================================== */
     function openInviteModalForLibraryId(libraryId, titleName) {
       if (!inviteOverlay) return;
@@ -390,7 +374,6 @@
         }
       }
 
-      // titel
       try {
         const t = document.getElementById('inviteTitle');
         if (t) t.textContent = `Bjud in till: ${String(titleName || 'Skattjakt')}`;
@@ -539,7 +522,6 @@
         card.setAttribute('tabindex', '0');
         card.style.display = 'block';
 
-        // Klick på kortet öppnar Admin (valfritt men praktiskt)
         card.addEventListener('click', (e) => {
           const t = e && e.target;
           const tag = (t && t.tagName) ? String(t.tagName).toUpperCase() : '';
@@ -622,9 +604,8 @@
     }
 
     /* ==========================================================
-       BLOCK 6.7 — Boot: err-card + library + autostart + mode/start
+       BLOCK 6.7 — Boot
     =========================================================== */
-    // err= → error card
     const err = qsGet('err');
     const rid = qsGet('rid');
     if (err && errorSlot) {
@@ -650,10 +631,8 @@
       errorSlot.appendChild(card);
     }
 
-    // Render library
     renderPartyLibraryRow();
 
-    // Autostart feedback (boot.js tar över)
     const qsMode = qsGet('mode');
     const qsId = qsGet('id');
     if (qsMode && qsId) {
@@ -666,7 +645,6 @@
       return;
     }
 
-    // Mode selection + Start
     let selectedMode = '';
 
     function setSelectedMode(nextMode) {
@@ -731,3 +709,6 @@
     }
   })();
 </script>
+
+</body>
+</html>
