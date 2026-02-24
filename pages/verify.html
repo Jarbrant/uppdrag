@@ -1,1 +1,467 @@
+<!-- ============================================================
+     FIL: pages/verify.html  (HEL FIL)
+     AO 2/3 — Partner Verify-sida (QR + PIN) för inlösen av voucher
+     Policy: UI-only, inbyggd JS (ingen extra .js-fil), fail-closed, inga persondata
+============================================================ -->
+<!doctype html>
+<html lang="sv">
+<head>
+  <!-- ==========================================================
+       BLOCK 1 — Meta + CSS
+  =========================================================== -->
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Verifiera belöning</title>
+  <meta name="description" content="Partner-verifiering av voucher." />
+  <link rel="stylesheet" href="../styles/main.css" />
 
+  <style>
+    /* ==========================================================
+       BLOCK 2 — Page-local styles (modern, mobilvänlig)
+       - Ingen extern dependency
+    =========================================================== */
+    .wrap { max-width: 820px; margin: 0 auto; padding: 18px 12px; }
+    .card { border: 1px solid var(--border); border-radius: 16px; background: rgba(255,255,255,.04); padding: 14px; box-shadow: 0 14px 40px rgba(0,0,0,.25); }
+    .row { display:flex; align-items:center; justify-content:space-between; gap: 12px; }
+    .col { display:grid; gap: 10px; }
+    .h1 { font-weight: 900; font-size: clamp(20px, 4.5vw, 30px); margin: 0; }
+    .muted { opacity: .85; }
+    .small { font-size: 14px; }
+    .metaGrid { display:grid; gap: 10px; margin-top: 12px; }
+    @media (min-width: 720px) { .metaGrid { grid-template-columns: 1fr 1fr; } }
+    .metaItem { border: 1px solid rgba(255,255,255,.10); border-radius: 14px; padding: 12px; background: rgba(255,255,255,.03); }
+    .label { font-weight: 900; font-size: 13px; letter-spacing: .02em; opacity: .9; }
+    .value { font-weight: 900; font-size: 16px; margin-top: 6px; word-break: break-word; }
+
+    .badge {
+      display:inline-flex; align-items:center; justify-content:center;
+      padding: 7px 10px; border-radius: 999px; border: 1px solid rgba(255,255,255,.16);
+      font-weight: 900; font-size: 12px; letter-spacing: .08em;
+      background: rgba(255,255,255,.05);
+      min-width: 104px;
+    }
+    .badge--valid { border-color: rgba(74,222,128,.45); background: rgba(74,222,128,.10); }
+    .badge--redeemed { border-color: rgba(110,231,255,.45); background: rgba(110,231,255,.10); }
+    .badge--expired { border-color: rgba(251,113,133,.45); background: rgba(251,113,133,.10); }
+
+    .form { margin-top: 14px; display:grid; gap: 12px; }
+    .field { display:grid; gap: 6px; }
+    .input {
+      min-height: 44px;
+      padding: 12px 12px;
+      border-radius: 14px;
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,.05);
+      color: var(--text);
+      outline: none;
+    }
+    .input::placeholder { color: rgba(255,255,255,.45); }
+    .input:focus-visible { box-shadow: var(--focus); }
+    .error { min-height: 18px; font-size: 14px; color: rgba(251,113,133,.95); }
+    .actions { display:flex; gap: 10px; flex-wrap: wrap; align-items:center; }
+    .btnWide { width: 100%; }
+    @media (min-width: 520px) { .btnWide { width: auto; } }
+    .toastSlot { margin-top: 12px; display:grid; gap: 10px; }
+    .toast { border-radius: 14px; padding: 10px 12px; border: 1px solid rgba(255,255,255,.14); background: rgba(255,255,255,.05); }
+    .toast--info { border-color: rgba(110,231,255,.25); background: rgba(110,231,255,.08); }
+    .toast--warn { border-color: rgba(251,191,36,.25); background: rgba(251,191,36,.08); }
+    .toast--danger { border-color: rgba(251,113,133,.25); background: rgba(251,113,133,.08); }
+    .toast--success { border-color: rgba(74,222,128,.25); background: rgba(74,222,128,.08); }
+
+    .disabledNote { opacity: .75; font-size: 13px; }
+    .footer { margin-top: 18px; opacity: .75; text-align:center; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+  </style>
+</head>
+
+<body class="theme-party">
+  <!-- ==========================================================
+       BLOCK 3 — Layout
+  =========================================================== -->
+  <main class="wrap" role="main">
+    <section class="card" aria-label="Verifiera belöning">
+      <div class="row">
+        <div class="col" style="gap:6px">
+          <h1 class="h1">Verifiera belöning</h1>
+          <div class="muted small">Scanna QR → kontrollera → använd med PIN.</div>
+        </div>
+
+        <div>
+          <span id="statusBadge" class="badge badge--expired" aria-live="polite">—</span>
+          <!-- HOOK: status-badge -->
+        </div>
+      </div>
+
+      <div class="metaGrid" aria-label="Voucher info">
+        <div class="metaItem">
+          <div class="label">Partner</div>
+          <div id="partnerValue" class="value mono">—</div>
+          <!-- HOOK: partner-value -->
+        </div>
+        <div class="metaItem">
+          <div class="label">Reward</div>
+          <div id="rewardValue" class="value mono">—</div>
+          <!-- HOOK: reward-value -->
+        </div>
+        <div class="metaItem">
+          <div class="label">Voucher</div>
+          <div id="voucherValue" class="value mono">—</div>
+          <!-- HOOK: voucher-value -->
+        </div>
+        <div class="metaItem">
+          <div class="label">Går ut</div>
+          <div id="expiresValue" class="value">—</div>
+          <!-- HOOK: expires-value -->
+        </div>
+      </div>
+
+      <div class="form" aria-label="Inlösen">
+        <div class="field">
+          <label class="label" for="pinInput">PIN</label>
+          <input id="pinInput" class="input" type="password" inputmode="numeric" autocomplete="one-time-code" placeholder="••••" />
+          <div id="pinError" class="error" role="alert"></div>
+          <!-- HOOK: pin-input -->
+        </div>
+
+        <div class="actions">
+          <button id="redeemBtn" class="btn btn-primary btnWide" type="button">Använd nu</button>
+          <button id="refreshBtn" class="btn btn-ghost btnWide" type="button">Uppdatera</button>
+          <span id="lockNote" class="disabledNote"></span>
+        </div>
+
+        <div id="toastSlot" class="toastSlot" aria-live="polite"></div>
+        <!-- HOOK: toast-slot -->
+      </div>
+
+      <div class="footer small">
+        Partnerläge • Inga persondata • Fail-closed
+      </div>
+    </section>
+  </main>
+
+  <!-- ==========================================================
+       BLOCK 4 — Inbyggd JS (ingen extra fil)
+  =========================================================== -->
+  <script>
+    /* ==========================================================
+       BLOCK 4.1 — DOM + helpers (XSS-safe via textContent)
+    =========================================================== */
+    const $ = (sel) => document.querySelector(sel);
+
+    const elBadge = $('#statusBadge');
+    const elPartner = $('#partnerValue');
+    const elReward = $('#rewardValue');
+    const elVoucher = $('#voucherValue');
+    const elExpires = $('#expiresValue');
+
+    const elPin = $('#pinInput');
+    const elPinErr = $('#pinError');
+    const elRedeem = $('#redeemBtn');
+    const elRefresh = $('#refreshBtn');
+    const elLockNote = $('#lockNote');
+    const elToastSlot = $('#toastSlot');
+
+    function setText(el, text) {
+      if (!el) return;
+      el.textContent = (text ?? '').toString();
+    }
+
+    function clearToasts() {
+      if (!elToastSlot) return;
+      elToastSlot.innerHTML = '';
+    }
+
+    function toast(msg, type = 'info') {
+      if (!elToastSlot) return;
+      const div = document.createElement('div');
+      div.className = 'toast toast--' + (type || 'info');
+      div.setAttribute('role', 'status');
+      div.textContent = (msg ?? '').toString();
+      elToastSlot.appendChild(div);
+    }
+
+    function setBadge(status) {
+      if (!elBadge) return;
+
+      const s = (status || '').toString();
+      elBadge.classList.remove('badge--valid', 'badge--redeemed', 'badge--expired');
+
+      if (s === 'valid') {
+        elBadge.classList.add('badge--valid');
+        setText(elBadge, 'GILTIG');
+        return;
+      }
+      if (s === 'redeemed') {
+        elBadge.classList.add('badge--redeemed');
+        setText(elBadge, 'ANVÄND');
+        return;
+      }
+      if (s === 'expired') {
+        elBadge.classList.add('badge--expired');
+        setText(elBadge, 'UTGÅNGEN');
+        return;
+      }
+
+      elBadge.classList.add('badge--expired');
+      setText(elBadge, '—');
+    }
+
+    function fmtTime(ms) {
+      const n = Number(ms);
+      if (!Number.isFinite(n) || n <= 0) return '—';
+      try {
+        const d = new Date(n);
+        return d.toLocaleString('sv-SE', { year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' });
+      } catch (_) {
+        return String(n);
+      }
+    }
+
+    function qsGet(key) {
+      try {
+        const usp = new URLSearchParams(window.location.search || '');
+        return (usp.get(String(key)) || '').toString().trim();
+      } catch (_) {
+        return '';
+      }
+    }
+
+    function validateInputs(voucherId, partnerId) {
+      if (!voucherId || voucherId.length < 6) return 'Saknar voucher-id.';
+      if (!partnerId || partnerId.length < 1) return 'Saknar partner-id.';
+      return '';
+    }
+
+    function setLocked(locked, note) {
+      const isLocked = !!locked;
+      if (elRedeem) elRedeem.disabled = isLocked;
+      setText(elLockNote, note || '');
+    }
+
+    /* ==========================================================
+       BLOCK 4.2 — API base
+       - Om verify.html ligger på GitHub Pages kan du sätta:
+         window.VOUCHER_API_BASE = "https://<din-worker-domän>"
+       - Annars: default = samma origin (fail-closed i prod, men funkar vid proxy)
+    =========================================================== */
+    const API_BASE = (window.VOUCHER_API_BASE || '').toString().trim() || (window.location.origin || '');
+
+    async function apiGetVoucher(voucherId) {
+      const url = API_BASE.replace(/\/$/, '') + '/vouchers/' + encodeURIComponent(voucherId);
+      const res = await fetch(url, { method: 'GET' });
+      const data = await res.json().catch(() => null);
+      return { ok: res.ok, status: res.status, data };
+    }
+
+    async function apiRedeem(voucherId, partnerId, pin) {
+      const url = API_BASE.replace(/\/$/, '') + '/vouchers/redeem';
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ voucherId, partnerId, pin })
+      });
+      const data = await res.json().catch(() => null);
+      return { ok: res.ok, status: res.status, data };
+    }
+
+    /* ==========================================================
+       BLOCK 4.3 — State + render
+    =========================================================== */
+    const state = {
+      voucherId: '',
+      partnerId: '',
+      lastStatus: '',
+      expiresAt: 0,
+      rewardId: ''
+    };
+
+    function renderState() {
+      setText(elPartner, state.partnerId || '—');
+      setText(elVoucher, state.voucherId || '—');
+      setText(elReward, state.rewardId || '—');
+      setText(elExpires, fmtTime(state.expiresAt));
+      setBadge(state.lastStatus);
+
+      if (state.lastStatus === 'redeemed') {
+        setLocked(true, 'Redan använd.');
+        return;
+      }
+      if (state.lastStatus === 'expired') {
+        setLocked(true, 'Utgången.');
+        return;
+      }
+      if (state.lastStatus === 'valid') {
+        setLocked(false, '');
+        return;
+      }
+      setLocked(true, 'Okänd status.');
+    }
+
+    function showError(msg) {
+      clearToasts();
+      toast(msg, 'danger');
+    }
+
+    /* ==========================================================
+       BLOCK 4.4 — Load voucher
+    =========================================================== */
+    async function loadVoucher() {
+      clearToasts();
+      setText(elPinErr, '');
+
+      const v = state.voucherId;
+      const p = state.partnerId;
+      const err = validateInputs(v, p);
+      if (err) {
+        showError(err);
+        setLocked(true, 'Saknar parametrar.');
+        renderState();
+        return;
+      }
+
+      try {
+        toast('Laddar…', 'info');
+        const out = await apiGetVoucher(v);
+
+        // Robust: inga console errors, tydlig text
+        if (!out.ok || !out.data || out.data.ok !== true || !out.data.voucher) {
+          clearToasts();
+          const code = (out.data && out.data.error) ? out.data.error : 'network_error';
+          showError('Kunde inte läsa voucher (' + code + ').');
+          setLocked(true, 'Kan ej verifiera.');
+          return;
+        }
+
+        const voucher = out.data.voucher || {};
+        const status = (voucher.status || '').toString();
+
+        state.lastStatus = status;
+        state.expiresAt = Number(voucher.expiresAt) || 0;
+        state.rewardId = (voucher.rewardId || '').toString();
+
+        // Fail-closed: om partner inte matchar i voucher (extra skydd)
+        if ((voucher.partnerId || '').toString() !== state.partnerId) {
+          clearToasts();
+          showError('Fel partner för denna voucher.');
+          setLocked(true, 'Partner mismatch.');
+          state.lastStatus = 'expired'; // visuellt låst
+          renderState();
+          return;
+        }
+
+        clearToasts();
+        toast('Status uppdaterad.', 'success');
+        renderState();
+      } catch (_) {
+        clearToasts();
+        showError('Nätverksfel. Försök igen.');
+        setLocked(true, 'Nätverksfel.');
+      }
+    }
+
+    /* ==========================================================
+       BLOCK 4.5 — Redeem
+    =========================================================== */
+    async function redeemNow() {
+      clearToasts();
+      setText(elPinErr, '');
+
+      const v = state.voucherId;
+      const p = state.partnerId;
+      const err = validateInputs(v, p);
+      if (err) {
+        showError(err);
+        return;
+      }
+
+      const pin = (elPin && elPin.value) ? elPin.value.toString().trim() : '';
+      if (!pin) {
+        setText(elPinErr, 'Skriv in PIN.');
+        return;
+      }
+      if (pin.length > 32) {
+        setText(elPinErr, 'PIN är för lång.');
+        return;
+      }
+
+      // Optimistisk låsning under request
+      if (elRedeem) elRedeem.disabled = true;
+
+      try {
+        toast('Kontrollerar…', 'info');
+        const out = await apiRedeem(v, p, pin);
+
+        if (out.ok && out.data && out.data.ok === true && out.data.status === 'redeemed') {
+          clearToasts();
+          toast('✅ Markerad som använd.', 'success');
+          state.lastStatus = 'redeemed';
+          renderState();
+          return;
+        }
+
+        // Felkoder enligt kontrakt
+        const error = (out.data && out.data.error) ? out.data.error : 'unknown';
+        clearToasts();
+
+        if (out.status === 403 || error === 'forbidden') {
+          toast('❌ Fel PIN eller fel partner.', 'danger');
+          if (elRedeem) elRedeem.disabled = false;
+          return;
+        }
+        if (out.status === 409 || error === 'already_redeemed') {
+          toast('⚠️ Redan använd.', 'warn');
+          state.lastStatus = 'redeemed';
+          renderState();
+          return;
+        }
+        if (out.status === 410 || error === 'expired') {
+          toast('⌛ Utgången.', 'warn');
+          state.lastStatus = 'expired';
+          renderState();
+          return;
+        }
+
+        toast('Fel vid inlösen (' + error + ').', 'danger');
+        if (elRedeem) elRedeem.disabled = false;
+      } catch (_) {
+        clearToasts();
+        toast('Nätverksfel vid inlösen.', 'danger');
+        if (elRedeem) elRedeem.disabled = false;
+      }
+    }
+
+    /* ==========================================================
+       BLOCK 4.6 — Boot
+    =========================================================== */
+    (function boot() {
+      state.voucherId = qsGet('voucher');
+      state.partnerId = qsGet('partner');
+
+      renderState();
+
+      // Robust: saknas params -> visa fel, inga actions
+      const err = validateInputs(state.voucherId, state.partnerId);
+      if (err) {
+        showError(err + ' (Använd ?voucher=...&partner=...)');
+        setLocked(true, 'Saknar parametrar.');
+      } else {
+        setLocked(true, 'Laddar…');
+        loadVoucher();
+      }
+
+      if (elRefresh) elRefresh.addEventListener('click', loadVoucher);
+      if (elRedeem) elRedeem.addEventListener('click', redeemNow);
+
+      // Enter i PIN = redeem
+      if (elPin) {
+        elPin.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            redeemNow();
+          }
+        });
+      }
+    })();
+  </script>
+</body>
+</html>
