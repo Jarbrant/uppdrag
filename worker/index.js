@@ -1,13 +1,8 @@
 /* ============================================================
  * FIL: worker/index.js (HEL FIL)
- * AO 5/6 — Game Reward Pool + Claim (stock--) + Voucher i D1
- *
- * ÄNDRINGAR I DENNA FIL (AO 5/6):
- *   - /rewards/pick3: FAIL-SOFT (0–3 picks), tier default = cp, seed-stöd
- *   - NY: POST /vouchers/claim  (stock-- + skapa voucher i D1)
- *   - NY: GET  /vouchers/:id    (verify-stöd)
- *   - NY: POST /vouchers/redeem (verify-stöd, partnerId+pin)
- *   - Vouchers lagras i D1 (CREATE TABLE IF NOT EXISTS vid behov)
+ * AO 1/6 — Worker + D1: Partners + Invites + Rewards + pick3
+ * AO 5/6 — Claim voucher (stock--) + vouchers i D1 + verify endpoints
+ * AO 6/6 — Stats + riktig admin-lista (partners/rewards/vouchers)
  *
  * Bindings (env):
  *   - DB (D1 binding)
@@ -20,8 +15,9 @@
  *     POST /admin/partners/create
  *     POST /admin/partners/invite
  *     GET  /admin/partners/list
- *     GET  /admin/rewards/stats
- *     GET  /admin/rewards/list?partnerId=<optional>
+ *     GET  /admin/partners/:partnerId/rewards
+ *     GET  /admin/stats/overview?windowHours=24
+ *     GET  /admin/stats/partner/:partnerId?windowHours=24
  *
  *   Partner invite flow:
  *     POST /partners/set-pin      { inviteToken, pin }
@@ -32,17 +28,17 @@
  *     GET  /rewards/list?partnerId=...&pin=...
  *
  *   Game:
- *     GET  /rewards/pick3?tier=cp|final(optional)&partnerPool=csv(optional)&seed=string(optional)
- *     POST /vouchers/claim        { gameId, checkpointIndex, rewardId }
+ *     GET  /rewards/pick3?tier=cp|final&partnerPool=csv(optional)&seed=string(optional)
  *
- *   Verify:
+ *   Vouchers (verify kompatibilitet + claim):
+ *     POST /vouchers/claim        { gameId, checkpointIndex, rewardId }   // stock-- + voucher create
  *     GET  /vouchers/:voucherId
  *     POST /vouchers/redeem       { voucherId, partnerId, pin }
  *
  * Policy:
- *   - Fail-closed: validera input, 400/403/404
+ *   - Fail-closed: validera input, 400/403/404/409/410/500
  *   - CORS: endast origins i CORS_ORIGINS, annars 403 (fail-closed)
- *   - Inga persondata
+ *   - Inga persondata (inga pinHash i svar)
  * ============================================================ */
 
 /* ============================================================
@@ -50,17 +46,11 @@
  * ============================================================ */
 const enc = new TextEncoder();
 
-function nowMs() {
-  return Date.now();
-}
+function nowMs() { return Date.now(); }
 
-function asText(v) {
-  return (v ?? '').toString().trim();
-}
+function asText(v) { return (v ?? '').toString().trim(); }
 
-function isPlainObject(v) {
-  return !!v && typeof v === 'object' && !Array.isArray(v);
-}
+function isPlainObject(v) { return !!v && typeof v === 'object' && !Array.isArray(v); }
 
 function intOrNaN(v) {
   const n = Math.floor(Number(v));
@@ -73,13 +63,14 @@ function clampInt(v, min, max) {
   return Math.max(min, Math.min(max, n));
 }
 
+function rid() {
+  try { return crypto.randomUUID(); } catch (_) { return String(Math.random()).slice(2); }
+}
+
 function json(body, status = 200, headers = {}) {
   return new Response(JSON.stringify(body), {
     status,
-    headers: {
-      'content-type': 'application/json; charset=utf-8',
-      ...headers
-    }
+    headers: { 'content-type': 'application/json; charset=utf-8', ...headers }
   });
 }
 
@@ -116,7 +107,6 @@ function corsHeadersFor(req, allowed) {
       'access-control-allow-credentials': 'false'
     };
   }
-
   if (!allowed.includes(origin)) return null;
 
   return {
@@ -173,12 +163,9 @@ function mulberry32(seed) {
   };
 }
 
-/**
- * FAIL-SOFT: returnera 0–3 unika rows beroende på pool.
- */
-function pickUpTo3Unique(rows, rngFn) {
+function pick3Unique(rows, rngFn) {
   const arr = Array.isArray(rows) ? rows.slice() : [];
-  if (arr.length === 0) return [];
+  if (arr.length < 1) return [];
 
   // Shuffle (Fisher-Yates)
   for (let i = arr.length - 1; i > 0; i--) {
@@ -206,8 +193,7 @@ function pickUpTo3Unique(rows, rngFn) {
 function requireAdmin(req, env) {
   const adminKey = asText(env.ADMIN_KEY);
   const headerKey = asText(req.headers.get('x-admin-key'));
-  if (!adminKey || headerKey !== adminKey) return false;
-  return true;
+  return !!adminKey && headerKey === adminKey;
 }
 
 async function verifyPartnerPin(partnerId, pin, env) {
@@ -229,34 +215,25 @@ async function verifyPartnerPin(partnerId, pin, env) {
 }
 
 /* ============================================================
- * BLOCK 5.1 — Ensure vouchers table (D1)
+ * BLOCK 6 — Vouchers table guard (fail-closed)
  * ============================================================ */
-async function ensureVouchersTable(env) {
-  // Fail-soft: CREATE IF NOT EXISTS (idempotent)
+async function vouchersTableOk(env) {
   try {
-    await env.DB.prepare(`
-      CREATE TABLE IF NOT EXISTS vouchers (
-        voucherId TEXT PRIMARY KEY,
-        partnerId TEXT NOT NULL,
-        rewardId TEXT NOT NULL,
-        status TEXT NOT NULL,
-        createdAt INTEGER NOT NULL,
-        expiresAt INTEGER NOT NULL,
-        redeemedAt INTEGER,
-        gameId TEXT,
-        checkpointIndex INTEGER
-      )
-    `).run();
-
-    await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_vouchers_partnerId ON vouchers(partnerId)`).run();
-    await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_vouchers_status ON vouchers(status)`).run();
+    // Om tabellen saknas kastar D1
+    await env.DB.prepare('SELECT voucherId FROM vouchers LIMIT 1').all();
+    return true;
   } catch (_) {
-    // Om D1 är read-only/misconfigured → server_error senare i callers
+    return false;
   }
 }
 
+function dbMissingTableResponse() {
+  const requestId = rid();
+  return { status: 500, body: { ok: false, error: 'db_missing_table', rid: requestId } };
+}
+
 /* ============================================================
- * BLOCK 6 — Endpoint handlers
+ * BLOCK 7 — Endpoint handlers: Admin (POST)
  * ============================================================ */
 async function adminCreatePartner(req, env) {
   const parsed = await readJson(req);
@@ -311,7 +288,7 @@ async function adminInvitePartner(req, env) {
 }
 
 /* ============================================================
- * BLOCK 6.1 — Admin GET: partners list
+ * BLOCK 8 — Endpoint handlers: Admin (GET) AO 6/6
  * ============================================================ */
 async function adminPartnersList(env) {
   const out = await env.DB
@@ -324,66 +301,139 @@ async function adminPartnersList(env) {
   return { status: 200, body: { ok: true, partners: out.results || [] } };
 }
 
-/* ============================================================
- * BLOCK 6.2 — Admin GET: rewards stats
- * ============================================================ */
-async function adminRewardsStats(env) {
-  const partnersTotal = await env.DB.prepare('SELECT COUNT(1) AS n FROM partners').first();
-  const partnersActive = await env.DB.prepare('SELECT COUNT(1) AS n FROM partners WHERE isActive = 1').first();
+async function adminPartnerRewards(env, partnerId) {
+  const pid = asText(partnerId);
+  if (!pid || pid.length > 80) return { status: 400, body: { ok: false, error: 'bad_request' } };
 
-  const rewardsTotal = await env.DB.prepare('SELECT COUNT(1) AS n FROM rewards').first();
-  const rewardsActive = await env.DB.prepare('SELECT COUNT(1) AS n FROM rewards WHERE isActive = 1').first();
-  const rewardsInStock = await env.DB.prepare('SELECT COUNT(1) AS n FROM rewards WHERE stock > 0').first();
-  const rewardsOutStock = await env.DB.prepare('SELECT COUNT(1) AS n FROM rewards WHERE stock <= 0').first();
+  const p = await env.DB.prepare('SELECT partnerId FROM partners WHERE partnerId = ?').bind(pid).first();
+  if (!p) return { status: 404, body: { ok: false, error: 'not_found' } };
 
-  const rewardsCp = await env.DB.prepare("SELECT COUNT(1) AS n FROM rewards WHERE tier = 'cp'").first();
-  const rewardsFinal = await env.DB.prepare("SELECT COUNT(1) AS n FROM rewards WHERE tier = 'final'").first();
+  const out = await env.DB
+    .prepare(`SELECT rewardId, title, type, valueText, tier, ttlMinutes, stock, isActive, updatedAt
+              FROM rewards
+              WHERE partnerId = ?
+              ORDER BY updatedAt DESC`)
+    .bind(pid)
+    .all();
+
+  return { status: 200, body: { ok: true, rewards: out.results || [] } };
+}
+
+function windowHoursFromUrl(url) {
+  const wh = clampInt(url.searchParams.get('windowHours'), 1, 24 * 30); // max 30d
+  return Number.isFinite(wh) ? wh : 24;
+}
+
+async function adminStatsOverview(env, url) {
+  const tableOk = await vouchersTableOk(env);
+  if (!tableOk) return dbMissingTableResponse();
+
+  const wh = windowHoursFromUrl(url);
+  const now = nowMs();
+  const since = now - wh * 60 * 60 * 1000;
+
+  // counts (expired räknas via CASE)
+  const counts = await env.DB.prepare(`
+    SELECT
+      SUM(CASE WHEN createdAt >= ? THEN 1 ELSE 0 END) AS vouchersCreated,
+      SUM(CASE WHEN redeemedAt IS NOT NULL AND redeemedAt >= ? THEN 1 ELSE 0 END) AS vouchersRedeemed,
+      COUNT(DISTINCT CASE WHEN createdAt >= ? AND gameId IS NOT NULL AND gameId <> '' THEN gameId ELSE NULL END) AS uniqueGames
+    FROM vouchers
+  `).bind(since, since, since).first();
+
+  // top partners
+  const topPartners = await env.DB.prepare(`
+    SELECT
+      v.partnerId AS partnerId,
+      p.name AS name,
+      SUM(CASE WHEN v.createdAt >= ? THEN 1 ELSE 0 END) AS created,
+      SUM(CASE WHEN v.redeemedAt IS NOT NULL AND v.redeemedAt >= ? THEN 1 ELSE 0 END) AS redeemed
+    FROM vouchers v
+    LEFT JOIN partners p ON p.partnerId = v.partnerId
+    WHERE v.createdAt >= ? OR (v.redeemedAt IS NOT NULL AND v.redeemedAt >= ?)
+    GROUP BY v.partnerId
+    ORDER BY created DESC, redeemed DESC
+    LIMIT 5
+  `).bind(since, since, since, since).all();
+
+  // top rewards
+  const topRewards = await env.DB.prepare(`
+    SELECT
+      v.rewardId AS rewardId,
+      r.title AS title,
+      v.partnerId AS partnerId,
+      SUM(CASE WHEN v.createdAt >= ? THEN 1 ELSE 0 END) AS created,
+      SUM(CASE WHEN v.redeemedAt IS NOT NULL AND v.redeemedAt >= ? THEN 1 ELSE 0 END) AS redeemed
+    FROM vouchers v
+    LEFT JOIN rewards r ON r.rewardId = v.rewardId
+    WHERE v.createdAt >= ? OR (v.redeemedAt IS NOT NULL AND v.redeemedAt >= ?)
+    GROUP BY v.rewardId
+    ORDER BY created DESC, redeemed DESC
+    LIMIT 5
+  `).bind(since, since, since, since).all();
 
   return {
     status: 200,
     body: {
       ok: true,
-      partners: {
-        total: Number(partnersTotal?.n) || 0,
-        active: Number(partnersActive?.n) || 0
-      },
-      rewards: {
-        total: Number(rewardsTotal?.n) || 0,
-        active: Number(rewardsActive?.n) || 0,
-        inStock: Number(rewardsInStock?.n) || 0,
-        outOfStock: Number(rewardsOutStock?.n) || 0,
-        cpTotal: Number(rewardsCp?.n) || 0,
-        finalTotal: Number(rewardsFinal?.n) || 0
-      }
+      windowHours: wh,
+      vouchersCreated: Number(counts?.vouchersCreated) || 0,
+      vouchersRedeemed: Number(counts?.vouchersRedeemed) || 0,
+      uniqueGames: Number(counts?.uniqueGames) || 0,
+      topPartners: topPartners.results || [],
+      topRewards: topRewards.results || []
+    }
+  };
+}
+
+async function adminStatsPartner(env, partnerId, url) {
+  const tableOk = await vouchersTableOk(env);
+  if (!tableOk) return dbMissingTableResponse();
+
+  const pid = asText(partnerId);
+  if (!pid || pid.length > 80) return { status: 400, body: { ok: false, error: 'bad_request' } };
+
+  const p = await env.DB.prepare('SELECT partnerId, name FROM partners WHERE partnerId = ?').bind(pid).first();
+  if (!p) return { status: 404, body: { ok: false, error: 'not_found' } };
+
+  const wh = windowHoursFromUrl(url);
+  const now = nowMs();
+  const since = now - wh * 60 * 60 * 1000;
+
+  const counts = await env.DB.prepare(`
+    SELECT
+      SUM(CASE WHEN createdAt >= ? THEN 1 ELSE 0 END) AS created,
+      SUM(CASE WHEN redeemedAt IS NOT NULL AND redeemedAt >= ? THEN 1 ELSE 0 END) AS redeemed
+    FROM vouchers
+    WHERE partnerId = ?
+  `).bind(since, since, pid).first();
+
+  const rewardCounts = await env.DB.prepare(`
+    SELECT
+      SUM(CASE WHEN isActive = 1 THEN 1 ELSE 0 END) AS activeRewards,
+      SUM(CASE WHEN stock <= 0 THEN 1 ELSE 0 END) AS outOfStockRewards
+    FROM rewards
+    WHERE partnerId = ?
+  `).bind(pid).first();
+
+  return {
+    status: 200,
+    body: {
+      ok: true,
+      partnerId: pid,
+      name: asText(p.name),
+      windowHours: wh,
+      created: Number(counts?.created) || 0,
+      redeemed: Number(counts?.redeemed) || 0,
+      activeRewards: Number(rewardCounts?.activeRewards) || 0,
+      outOfStockRewards: Number(rewardCounts?.outOfStockRewards) || 0
     }
   };
 }
 
 /* ============================================================
- * BLOCK 6.3 — Admin GET: rewards list
+ * BLOCK 9 — Partner invite flow
  * ============================================================ */
-async function adminRewardsList(env, url) {
-  const partnerId = asText(url.searchParams.get('partnerId'));
-
-  if (partnerId && partnerId.length > 80) {
-    return { status: 400, body: { ok: false, error: 'bad_request' } };
-  }
-
-  let sql = `SELECT rewardId, partnerId, title, type, valueText, stock, ttlMinutes, tier, isActive, createdAt, updatedAt
-             FROM rewards`;
-  const binds = [];
-
-  if (partnerId) {
-    sql += ' WHERE partnerId = ?';
-    binds.push(partnerId);
-  }
-
-  sql += ' ORDER BY updatedAt DESC';
-
-  const out = await env.DB.prepare(sql).bind(...binds).all();
-  return { status: 200, body: { ok: true, rewards: out.results || [] } };
-}
-
 async function partnerSetPin(req, env) {
   const parsed = await readJson(req);
   if (!parsed.ok || !isPlainObject(parsed.value)) return { status: 400, body: { ok: false, error: 'bad_request' } };
@@ -424,6 +474,9 @@ async function partnerSetPin(req, env) {
   return { status: 200, body: { ok: true, partnerId } };
 }
 
+/* ============================================================
+ * BLOCK 10 — Rewards CRUD (partnerId+pin)
+ * ============================================================ */
 function validateRewardType(t) {
   const x = asText(t);
   return x === 'percent' || x === 'freebie' || x === 'bogo' || x === 'custom';
@@ -499,50 +552,41 @@ async function rewardsUpdate(req, env) {
   if (b.title !== undefined) {
     const title = asText(b.title);
     if (!title || title.length > 140) return { status: 400, body: { ok: false, error: 'bad_request' } };
-    fields.push('title = ?');
-    binds.push(title);
+    fields.push('title = ?'); binds.push(title);
   }
   if (b.valueText !== undefined) {
     const v = asText(b.valueText);
     if (!v || v.length > 140) return { status: 400, body: { ok: false, error: 'bad_request' } };
-    fields.push('valueText = ?');
-    binds.push(v);
+    fields.push('valueText = ?'); binds.push(v);
   }
   if (b.stock !== undefined) {
     const s = clampInt(b.stock, 0, 1_000_000);
     if (!Number.isFinite(s)) return { status: 400, body: { ok: false, error: 'bad_request' } };
-    fields.push('stock = ?');
-    binds.push(s);
+    fields.push('stock = ?'); binds.push(s);
   }
   if (b.ttlMinutes !== undefined) {
     const t = clampInt(b.ttlMinutes, 1, 60 * 24 * 30);
     if (!Number.isFinite(t)) return { status: 400, body: { ok: false, error: 'bad_request' } };
-    fields.push('ttlMinutes = ?');
-    binds.push(t);
+    fields.push('ttlMinutes = ?'); binds.push(t);
   }
   if (b.tier !== undefined) {
     const t = asText(b.tier);
     if (!validateTier(t)) return { status: 400, body: { ok: false, error: 'bad_request' } };
-    fields.push('tier = ?');
-    binds.push(t);
+    fields.push('tier = ?'); binds.push(t);
   }
   if (b.isActive !== undefined) {
     const ia = intOrNaN(b.isActive);
     if (!Number.isFinite(ia) || (ia !== 0 && ia !== 1)) return { status: 400, body: { ok: false, error: 'bad_request' } };
-    fields.push('isActive = ?');
-    binds.push(ia);
+    fields.push('isActive = ?'); binds.push(ia);
   }
 
   if (fields.length === 0) return { status: 400, body: { ok: false, error: 'bad_request' } };
 
-  fields.push('updatedAt = ?');
-  binds.push(nowMs());
-
+  fields.push('updatedAt = ?'); binds.push(nowMs());
   const sql = `UPDATE rewards SET ${fields.join(', ')} WHERE rewardId = ?`;
   binds.push(rewardId);
 
   await env.DB.prepare(sql).bind(...binds).run();
-
   return { status: 200, body: { ok: true } };
 }
 
@@ -565,11 +609,12 @@ async function rewardsList(req, env, url) {
 }
 
 /* ============================================================
- * BLOCK 6.4 — Game: pick3 (FAIL-SOFT + tier default cp)
+ * BLOCK 11 — Game: pick3 (AO 5/6 policy: fail-soft 0..3)
  * ============================================================ */
 async function rewardsPick3(req, env, url) {
-  const tierRaw = asText(url.searchParams.get('tier'));
-  const tier = validateTier(tierRaw) ? tierRaw : 'cp'; // default cp (KRAV)
+  const tierQ = asText(url.searchParams.get('tier'));
+  const tier = tierQ ? tierQ : 'cp';
+  if (!validateTier(tier)) return { status: 400, body: { ok: false, error: 'bad_request' } };
 
   const seed = asText(url.searchParams.get('seed'));
   const pool = asText(url.searchParams.get('partnerPool'));
@@ -597,139 +642,45 @@ async function rewardsPick3(req, env, url) {
   const rows = await env.DB.prepare(sql).bind(...binds).all();
   const all = rows.results || [];
 
-  // FAIL-SOFT: returnera 0–3 picks
+  if (!all.length) return { status: 200, body: { ok: true, picks: [] } };
+
   const rng = seed ? mulberry32(seedToUint32(seed)) : (() => Math.random());
-  const picks = pickUpTo3Unique(all, rng);
+  const picks = pick3Unique(all, rng);
 
   return { status: 200, body: { ok: true, picks } };
 }
 
 /* ============================================================
- * BLOCK 6.5 — Game: claim (stock-- + voucher create)
- * POST /vouchers/claim
- * Body: { gameId, checkpointIndex, rewardId }
+ * BLOCK 12 — Vouchers (AO 5/6 + verify kompatibilitet)
  * ============================================================ */
-async function vouchersClaim(req, env) {
-  await ensureVouchersTable(env);
-
-  const parsed = await readJson(req);
-  if (!parsed.ok || !isPlainObject(parsed.value)) return { status: 400, body: { ok: false, error: 'bad_request' } };
-
-  const b = parsed.value;
-
-  const gameId = asText(b.gameId);
-  const checkpointIndex = intOrNaN(b.checkpointIndex);
-  const rewardId = asText(b.rewardId);
-
-  if (!gameId || gameId.length > 120) return { status: 400, body: { ok: false, error: 'bad_request' } };
-  if (!Number.isFinite(checkpointIndex) || checkpointIndex < 0 || checkpointIndex > 999) return { status: 400, body: { ok: false, error: 'bad_request' } };
-  if (!rewardId || rewardId.length > 80) return { status: 400, body: { ok: false, error: 'bad_request' } };
-
-  // Hämta reward + partner info
-  const r = await env.DB.prepare(`
-      SELECT r.rewardId, r.partnerId, p.name AS partnerName, r.title, r.ttlMinutes, r.tier, r.isActive, r.stock
-      FROM rewards r
-      JOIN partners p ON p.partnerId = r.partnerId
-      WHERE r.rewardId = ?
-    `).bind(rewardId).first();
-
-  if (!r) return { status: 404, body: { ok: false, error: 'not_found' } };
-  if (Number(r.isActive) !== 1) return { status: 404, body: { ok: false, error: 'not_found' } };
-
-  const stockNow = Number(r.stock);
-  if (!Number.isFinite(stockNow) || stockNow <= 0) {
-    return { status: 409, body: { ok: false, error: 'out_of_stock' } };
-  }
-
-  const ts = nowMs();
-  const ttlMinutes = clampInt(r.ttlMinutes, 1, 60 * 24 * 30);
-  if (!Number.isFinite(ttlMinutes)) return { status: 400, body: { ok: false, error: 'bad_request' } };
-
-  const expiresAt = ts + ttlMinutes * 60 * 1000;
-  const voucherId = safeUuid();
-
-  // Best-effort atomik:
-  // 1) UPDATE stock med guard stock>0
-  // 2) INSERT voucher
-  // Om insert failar: försök återställa stock (+1) (fail-soft)
-  try {
-    const up = await env.DB.prepare(`
-        UPDATE rewards
-        SET stock = stock - 1, updatedAt = ?
-        WHERE rewardId = ? AND isActive = 1 AND stock > 0
-      `).bind(ts, rewardId).run();
-
-    const changes = Number(up?.meta?.changes) || 0;
-    if (changes !== 1) {
-      return { status: 409, body: { ok: false, error: 'out_of_stock' } };
-    }
-
-    await env.DB.prepare(`
-        INSERT INTO vouchers (voucherId, partnerId, rewardId, status, createdAt, expiresAt, redeemedAt, gameId, checkpointIndex)
-        VALUES (?, ?, ?, 'valid', ?, ?, NULL, ?, ?)
-      `).bind(
-      voucherId,
-      asText(r.partnerId),
-      rewardId,
-      ts,
-      expiresAt,
-      gameId,
-      checkpointIndex
-    ).run();
-
-    return {
-      status: 200,
-      body: {
-        ok: true,
-        voucherId,
-        partnerId: asText(r.partnerId),
-        partnerName: asText(r.partnerName),
-        rewardId,
-        rewardTitle: asText(r.title),
-        expiresAt,
-        status: 'valid'
-      }
-    };
-  } catch (_) {
-    // försök kompensera stock (best effort)
-    try {
-      await env.DB.prepare(`
-          UPDATE rewards SET stock = stock + 1, updatedAt = ?
-          WHERE rewardId = ?
-        `).bind(nowMs(), rewardId).run();
-    } catch (_)2 {}
-    return { status: 500, body: { ok: false, error: 'server_error' } };
-  }
+function normalizeVoucherStatus(row) {
+  const s = asText(row?.status);
+  if (s === 'redeemed' || s === 'expired' || s === 'valid') return s;
+  return 'valid';
 }
 
-/* ============================================================
- * BLOCK 6.6 — Verify: GET voucher
- * GET /vouchers/:voucherId
- * ============================================================ */
-async function vouchersGet(env, voucherId) {
-  await ensureVouchersTable(env);
+async function voucherGet(req, env, voucherId) {
+  const tableOk = await vouchersTableOk(env);
+  if (!tableOk) return dbMissingTableResponse();
 
-  const vid = asText(voucherId);
-  if (!vid) return { status: 400, body: { ok: false, error: 'bad_request' } };
+  const id = asText(voucherId);
+  if (!id || id.length > 80) return { status: 400, body: { ok: false, error: 'bad_request' } };
 
-  const v = await env.DB.prepare(`
-      SELECT voucherId, partnerId, rewardId, status, createdAt, expiresAt, redeemedAt, gameId, checkpointIndex
-      FROM vouchers WHERE voucherId = ?
-    `).bind(vid).first();
+  const row = await env.DB.prepare(`
+    SELECT voucherId, partnerId, rewardId, status, createdAt, expiresAt, redeemedAt, gameId, checkpointIndex
+    FROM vouchers WHERE voucherId = ?
+  `).bind(id).first();
 
-  if (!v) return { status: 404, body: { ok: false, error: 'not_found' } };
+  if (!row) return { status: 404, body: { ok: false, error: 'not_found' } };
 
-  // status-derivation: expired om passerat och inte redeemed
   const now = nowMs();
-  let status = asText(v.status) || 'valid';
-  const exp = Number(v.expiresAt) || 0;
-  const redAt = v.redeemedAt !== null && v.redeemedAt !== undefined ? Number(v.redeemedAt) : 0;
+  let status = normalizeVoucherStatus(row);
 
-  if (status !== 'redeemed' && exp > 0 && now > exp) {
+  // expired maintenance (lazy)
+  if (status === 'valid' && Number(row.expiresAt) < now) {
     status = 'expired';
-    // best-effort persist
     try {
-      await env.DB.prepare(`UPDATE vouchers SET status = 'expired' WHERE voucherId = ? AND status != 'redeemed'`).bind(vid).run();
+      await env.DB.prepare(`UPDATE vouchers SET status = 'expired' WHERE voucherId = ? AND status = 'valid'`).bind(id).run();
     } catch (_) {}
   }
 
@@ -738,94 +689,169 @@ async function vouchersGet(env, voucherId) {
     body: {
       ok: true,
       voucher: {
-        voucherId: asText(v.voucherId),
-        partnerId: asText(v.partnerId),
-        rewardId: asText(v.rewardId),
-        status: status === 'redeemed' ? 'redeemed' : status === 'expired' ? 'expired' : 'valid',
-        expiresAt: exp,
-        createdAt: Number(v.createdAt) || 0,
-        redeemedAt: redAt || 0,
-        gameId: asText(v.gameId),
-        checkpointIndex: Number(v.checkpointIndex) || 0
+        voucherId: asText(row.voucherId),
+        partnerId: asText(row.partnerId),
+        rewardId: asText(row.rewardId),
+        status,
+        expiresAt: Number(row.expiresAt) || 0,
+        createdAt: Number(row.createdAt) || 0,
+        redeemedAt: row.redeemedAt === null || row.redeemedAt === undefined ? null : Number(row.redeemedAt)
       }
     }
   };
 }
 
-/* ============================================================
- * BLOCK 6.7 — Verify: redeem
- * POST /vouchers/redeem { voucherId, partnerId, pin }
- * ============================================================ */
-async function vouchersRedeem(req, env) {
-  await ensureVouchersTable(env);
+async function voucherRedeem(req, env) {
+  const tableOk = await vouchersTableOk(env);
+  if (!tableOk) return dbMissingTableResponse();
 
   const parsed = await readJson(req);
   if (!parsed.ok || !isPlainObject(parsed.value)) return { status: 400, body: { ok: false, error: 'bad_request' } };
 
-  const b = parsed.value;
-  const voucherId = asText(b.voucherId);
-  const partnerId = asText(b.partnerId);
-  const pin = asText(b.pin);
+  const voucherId = asText(parsed.value.voucherId);
+  const partnerId = asText(parsed.value.partnerId);
+  const pin = asText(parsed.value.pin);
 
-  if (!voucherId) return { status: 400, body: { ok: false, error: 'bad_request' } };
-  if (!partnerId || !pin) return { status: 400, body: { ok: false, error: 'bad_request' } };
+  if (!voucherId || !partnerId || !pin) return { status: 400, body: { ok: false, error: 'bad_request' } };
+  if (voucherId.length > 80 || partnerId.length > 80 || pin.length > 32) return { status: 400, body: { ok: false, error: 'bad_request' } };
 
   // auth partner pin
   const auth = await verifyPartnerPin(partnerId, pin, env);
   if (!auth.ok) return { status: auth.code === 'not_found' ? 404 : 403, body: { ok: false, error: auth.code === 'not_found' ? 'not_found' : 'forbidden' } };
 
-  // read voucher
-  const v = await env.DB.prepare(`
-      SELECT voucherId, partnerId, rewardId, status, createdAt, expiresAt, redeemedAt
-      FROM vouchers WHERE voucherId = ?
-    `).bind(voucherId).first();
+  const row = await env.DB.prepare(`
+    SELECT voucherId, partnerId, status, expiresAt, redeemedAt
+    FROM vouchers WHERE voucherId = ?
+  `).bind(voucherId).first();
 
-  if (!v) return { status: 404, body: { ok: false, error: 'not_found' } };
-
-  // partner match
-  if (asText(v.partnerId) !== partnerId) return { status: 403, body: { ok: false, error: 'forbidden' } };
+  if (!row) return { status: 404, body: { ok: false, error: 'not_found' } };
+  if (asText(row.partnerId) !== partnerId) return { status: 403, body: { ok: false, error: 'forbidden' } };
 
   const now = nowMs();
-  const exp = Number(v.expiresAt) || 0;
+  let status = normalizeVoucherStatus(row);
 
-  // already redeemed
-  if (asText(v.status) === 'redeemed' || (v.redeemedAt !== null && v.redeemedAt !== undefined && Number(v.redeemedAt) > 0)) {
-    return { status: 409, body: { ok: false, error: 'already_redeemed' } };
-  }
-
-  // expired
-  if (exp > 0 && now > exp) {
-    // best-effort persist expired
+  // expired check
+  if (status === 'valid' && Number(row.expiresAt) < now) {
     try {
-      await env.DB.prepare(`UPDATE vouchers SET status = 'expired' WHERE voucherId = ? AND status != 'redeemed'`).bind(voucherId).run();
+      await env.DB.prepare(`UPDATE vouchers SET status = 'expired' WHERE voucherId = ? AND status = 'valid'`).bind(voucherId).run();
     } catch (_) {}
     return { status: 410, body: { ok: false, error: 'expired' } };
   }
 
-  // only valid can redeem
-  if (asText(v.status) !== 'valid') {
-    return { status: 403, body: { ok: false, error: 'forbidden' } };
-  }
+  if (status === 'expired') return { status: 410, body: { ok: false, error: 'expired' } };
+  if (status === 'redeemed') return { status: 409, body: { ok: false, error: 'already_redeemed' } };
 
-  // redeem
-  try {
-    const up = await env.DB.prepare(`
-        UPDATE vouchers
-        SET status = 'redeemed', redeemedAt = ?
-        WHERE voucherId = ? AND status = 'valid'
-      `).bind(now, voucherId).run();
+  // redeem atomiskt-ish: uppdatera bara om status=valid
+  const redeemedAt = now;
+  const upd = await env.DB.prepare(`
+    UPDATE vouchers
+    SET status = 'redeemed', redeemedAt = ?
+    WHERE voucherId = ? AND status = 'valid'
+  `).bind(redeemedAt, voucherId).run();
 
-    const changes = Number(up?.meta?.changes) || 0;
-    if (changes !== 1) return { status: 409, body: { ok: false, error: 'already_redeemed' } };
-
-    return { status: 200, body: { ok: true, status: 'redeemed', redeemedAt: now } };
-  } catch (_) {
+  // om någon annan hann före
+  if (!upd || Number(upd.changes) !== 1) {
+    const again = await env.DB.prepare('SELECT status, expiresAt FROM vouchers WHERE voucherId = ?').bind(voucherId).first();
+    const s2 = normalizeVoucherStatus(again);
+    if (s2 === 'redeemed') return { status: 409, body: { ok: false, error: 'already_redeemed' } };
+    if (s2 === 'valid' && Number(again.expiresAt) < now) return { status: 410, body: { ok: false, error: 'expired' } };
     return { status: 500, body: { ok: false, error: 'server_error' } };
   }
+
+  return { status: 200, body: { ok: true, status: 'redeemed', redeemedAt } };
 }
 
 /* ============================================================
- * BLOCK 7 — Router
+ * BLOCK 13 — Claim (AO 5/6): stock-- + voucher create
+ * ============================================================ */
+async function voucherClaim(req, env) {
+  const tableOk = await vouchersTableOk(env);
+  if (!tableOk) return dbMissingTableResponse();
+
+  const parsed = await readJson(req);
+  if (!parsed.ok || !isPlainObject(parsed.value)) return { status: 400, body: { ok: false, error: 'bad_request' } };
+
+  const gameId = asText(parsed.value.gameId) || 'demo';
+  const checkpointIndex = clampInt(parsed.value.checkpointIndex, 0, 999);
+  const rewardId = asText(parsed.value.rewardId);
+
+  if (!rewardId || rewardId.length > 80) return { status: 400, body: { ok: false, error: 'bad_request' } };
+  if (!Number.isFinite(checkpointIndex)) return { status: 400, body: { ok: false, error: 'bad_request' } };
+
+  const ts = nowMs();
+
+  // 1) försök minska stock atomiskt (WHERE stock>0 AND isActive=1)
+  const upd = await env.DB.prepare(`
+    UPDATE rewards
+    SET stock = stock - 1, updatedAt = ?
+    WHERE rewardId = ? AND isActive = 1 AND stock > 0
+  `).bind(ts, rewardId).run();
+
+  if (!upd || Number(upd.changes) !== 1) {
+    // skilj på out_of_stock vs not_found/inactive
+    const ex = await env.DB.prepare('SELECT rewardId, isActive, stock FROM rewards WHERE rewardId = ?').bind(rewardId).first();
+    if (!ex) return { status: 404, body: { ok: false, error: 'not_found' } };
+    if (Number(ex.isActive) !== 1) return { status: 404, body: { ok: false, error: 'not_found' } };
+    if (Number(ex.stock) <= 0) return { status: 409, body: { ok: false, error: 'out_of_stock' } };
+    return { status: 500, body: { ok: false, error: 'server_error' } };
+  }
+
+  // 2) hämta reward + partner
+  const r = await env.DB.prepare(`
+    SELECT r.rewardId, r.partnerId, r.title, r.ttlMinutes, r.tier, p.name AS partnerName
+    FROM rewards r
+    JOIN partners p ON p.partnerId = r.partnerId
+    WHERE r.rewardId = ?
+  `).bind(rewardId).first();
+
+  if (!r) {
+    // extrem edge: reward borta efter update (ska inte hända)
+    return { status: 500, body: { ok: false, error: 'server_error' } };
+  }
+
+  const ttlMinutes = clampInt(r.ttlMinutes, 1, 60 * 24 * 30);
+  const expiresAt = ts + (Number.isFinite(ttlMinutes) ? ttlMinutes : 120) * 60 * 1000;
+
+  const voucherId = safeUuid();
+  const partnerId = asText(r.partnerId);
+
+  // 3) skapa voucher
+  try {
+    await env.DB.prepare(`
+      INSERT INTO vouchers
+      (voucherId, partnerId, rewardId, status, createdAt, expiresAt, redeemedAt, gameId, checkpointIndex)
+      VALUES (?, ?, ?, 'valid', ?, ?, NULL, ?, ?)
+    `).bind(
+      voucherId,
+      partnerId,
+      rewardId,
+      ts,
+      expiresAt,
+      gameId,
+      checkpointIndex
+    ).run();
+  } catch (_) {
+    // fail-closed: om insert fail → vi har redan minskat stock. (accepteras i MVP)
+    return { status: 500, body: { ok: false, error: 'server_error' } };
+  }
+
+  return {
+    status: 200,
+    body: {
+      ok: true,
+      voucherId,
+      partnerId,
+      partnerName: asText(r.partnerName),
+      rewardId,
+      rewardTitle: asText(r.title),
+      expiresAt,
+      status: 'valid'
+    }
+  };
+}
+
+/* ============================================================
+ * BLOCK 14 — Router
  * ============================================================ */
 function route(req) {
   const url = new URL(req.url);
@@ -834,9 +860,15 @@ function route(req) {
   return { url, path: path || '/', method };
 }
 
-/* ============================================================
- * BLOCK 8 — Fetch
- * ============================================================ */
+function matchPrefix(path, prefix) {
+  const p = asText(path);
+  const pre = asText(prefix);
+  if (!p.startsWith(pre)) return null;
+  const rest = p.slice(pre.length);
+  if (!rest) return null;
+  return rest.startsWith('/') ? rest.slice(1) : rest;
+}
+
 export default {
   async fetch(req, env) {
     const allowed = parseOrigins(env);
@@ -855,7 +887,7 @@ export default {
 
     try {
       // ======================================================
-      // Admin endpoints
+      // Admin endpoints (auth)
       // ======================================================
       if (path === '/admin/partners/create' && method === 'POST') {
         if (!requireAdmin(req, env)) return json({ ok: false, error: 'forbidden' }, 403, cors);
@@ -875,15 +907,25 @@ export default {
         return json(out.body, out.status, cors);
       }
 
-      if (path === '/admin/rewards/stats' && method === 'GET') {
+      // /admin/partners/:id/rewards
+      if (path.startsWith('/admin/partners/') && path.endsWith('/rewards') && method === 'GET') {
         if (!requireAdmin(req, env)) return json({ ok: false, error: 'forbidden' }, 403, cors);
-        const out = await adminRewardsStats(env);
+        const mid = path.replace('/admin/partners/', '').replace('/rewards', '');
+        const out = await adminPartnerRewards(env, mid);
         return json(out.body, out.status, cors);
       }
 
-      if (path === '/admin/rewards/list' && method === 'GET') {
+      if (path === '/admin/stats/overview' && method === 'GET') {
         if (!requireAdmin(req, env)) return json({ ok: false, error: 'forbidden' }, 403, cors);
-        const out = await adminRewardsList(env, url);
+        const out = await adminStatsOverview(env, url);
+        return json(out.body, out.status, cors);
+      }
+
+      // /admin/stats/partner/:id
+      if (path.startsWith('/admin/stats/partner/') && method === 'GET') {
+        if (!requireAdmin(req, env)) return json({ ok: false, error: 'forbidden' }, 403, cors);
+        const pid = path.replace('/admin/stats/partner/', '');
+        const out = await adminStatsPartner(env, pid, url);
         return json(out.body, out.status, cors);
       }
 
@@ -912,33 +954,30 @@ export default {
       }
 
       // ======================================================
-      // Game: pick3 + claim
+      // Game pick3
       // ======================================================
       if (path === '/rewards/pick3' && method === 'GET') {
         const out = await rewardsPick3(req, env, url);
         return json(out.body, out.status, cors);
       }
 
+      // ======================================================
+      // Vouchers
+      // ======================================================
       if (path === '/vouchers/claim' && method === 'POST') {
-        const out = await vouchersClaim(req, env);
+        const out = await voucherClaim(req, env);
         return json(out.body, out.status, cors);
       }
 
-      // ======================================================
-      // Verify: GET /vouchers/:id + POST /vouchers/redeem
-      // ======================================================
+      if (path.startsWith('/vouchers/') && method === 'GET') {
+        const vid = path.replace('/vouchers/', '');
+        const out = await voucherGet(req, env, vid);
+        return json(out.body, out.status, cors);
+      }
+
       if (path === '/vouchers/redeem' && method === 'POST') {
-        const out = await vouchersRedeem(req, env);
+        const out = await voucherRedeem(req, env);
         return json(out.body, out.status, cors);
-      }
-
-      // Dynamic GET /vouchers/:id
-      if (method === 'GET') {
-        const m = /^\/vouchers\/([^/]+)$/.exec(path);
-        if (m && m[1]) {
-          const out = await vouchersGet(env, m[1]);
-          return json(out.body, out.status, cors);
-        }
       }
 
       return json({ ok: false, error: 'not_found' }, 404, cors);
