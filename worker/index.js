@@ -1,40 +1,71 @@
 /* ============================================================
- * FIL: worker/index.js (HEL FIL) — AO 2/3 Voucher API + Partner PIN
+ * FIL: worker/index.js (HEL FIL)
+ * AO 1/6 — Worker + D1: Partners + Invites + Rewards + pick3
+ *
+ * Bindings (env):
+ *   - DB (D1 binding)
+ *   - ADMIN_KEY (secret)
+ *   - PIN_SALT (secret, för pinHash)
+ *   - CORS_ORIGINS (comma-separated origins, fail-closed)
  *
  * Endpoints:
- *   POST /vouchers/create
- *   GET  /vouchers/:voucherId
- *   POST /vouchers/redeem
- *   POST /partners/set-pin   (admin)
+ *   Admin (X-ADMIN-KEY):
+ *     POST /admin/partners/create
+ *     POST /admin/partners/invite
  *
- * KV:
- *   VOUCHERS_KV  key: v:<voucherId>  -> voucher JSON
- *   PARTNERS_KV  key: p:<partnerId>  -> { pinHash, name?, updatedAt }
+ *   Partner invite flow:
+ *     POST /partners/set-pin      { inviteToken, pin }
  *
- * Security:
- *   - PIN lagras hashed (SHA-256) med salt (env PIN_SALT)
- *   - Admin endpoint kräver X-ADMIN-KEY (env ADMIN_KEY)
- *   - CORS allowlist (env ALLOWED_ORIGINS, kommatecken-separerad)
+ *   Partner rewards (auth via partnerId+pin):
+ *     POST /rewards/create
+ *     POST /rewards/update
+ *     GET  /rewards/list?partnerId=...&pin=...
+ *
+ *   Game:
+ *     GET  /rewards/pick3?tier=cp|final&partnerPool=csv(optional)&seed=string(optional)
  *
  * Policy:
- *   - Fail-closed på fel input/origin/pin/partner/status/expiry
- *   - Ingen persondata
+ *   - Fail-closed: validera input, 400/403/404
+ *   - CORS: endast origins i CORS_ORIGINS, annars 403 (fail-closed)
+ *   - Inga persondata
  * ============================================================ */
 
 /* ============================================================
- * BLOCK 1 — Helpers (Response, JSON, CORS)
+ * BLOCK 1 — Small utils
  * ============================================================ */
-function jsonResponse(body, status = 200, corsHeaders = {}) {
-  const h = new Headers({
-    'content-type': 'application/json; charset=utf-8',
-    ...corsHeaders
-  });
-  return new Response(JSON.stringify(body), { status, headers: h });
+const enc = new TextEncoder();
+
+function nowMs() {
+  return Date.now();
 }
 
-function textResponse(text, status = 200, corsHeaders = {}) {
-  const h = new Headers({ 'content-type': 'text/plain; charset=utf-8', ...corsHeaders });
-  return new Response(text, { status, headers: h });
+function asText(v) {
+  return (v ?? '').toString().trim();
+}
+
+function isPlainObject(v) {
+  return !!v && typeof v === 'object' && !Array.isArray(v);
+}
+
+function intOrNaN(v) {
+  const n = Math.floor(Number(v));
+  return Number.isFinite(n) ? n : NaN;
+}
+
+function clampInt(v, min, max) {
+  const n = intOrNaN(v);
+  if (!Number.isFinite(n)) return NaN;
+  return Math.max(min, Math.min(max, n));
+}
+
+function json(body, status = 200, headers = {}) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      'content-type': 'application/json; charset=utf-8',
+      ...headers
+    }
+  });
 }
 
 async function readJson(req) {
@@ -48,392 +79,489 @@ async function readJson(req) {
   }
 }
 
-function isPlainObject(v) {
-  return !!v && typeof v === 'object' && !Array.isArray(v);
-}
-
-function asText(v) {
-  return (v ?? '').toString().trim();
-}
-
-function asInt(v) {
-  const n = Math.floor(Number(v));
-  return Number.isFinite(n) ? n : NaN;
-}
-
-function nowMs() {
-  return Date.now();
-}
-
 /* ============================================================
- * BLOCK 2 — CORS (fail-closed för okänd origin; curl utan Origin tillåts)
- * env.ALLOWED_ORIGINS = "https://<din-gh-pages>,http://localhost:5173"
+ * BLOCK 2 — CORS (fail-closed)
  * ============================================================ */
-function parseAllowedOrigins(env) {
-  const raw = asText(env.ALLOWED_ORIGINS);
+function parseOrigins(env) {
+  const raw = asText(env.CORS_ORIGINS);
   if (!raw) return [];
   return raw.split(',').map((s) => s.trim()).filter(Boolean);
 }
 
-function isOriginAllowed(origin, allowedList) {
-  if (!origin) return true; // Ingen Origin (curl/postman) → OK
-  return allowedList.includes(origin);
-}
-
-function corsHeadersFor(origin, allowedList) {
-  // Fail-closed: om origin finns men ej tillåten → inga CORS headers
-  if (origin && !isOriginAllowed(origin, allowedList)) return null;
-
-  // För browser: echo origin, annars wildcard för non-browser
-  const allowOrigin = origin ? origin : '*';
+function corsHeadersFor(req, allowed) {
+  const origin = req.headers.get('origin');
+  // curl/postman utan origin: OK
+  if (!origin) {
+    return {
+      'access-control-allow-origin': '*',
+      'access-control-allow-methods': 'GET,POST,OPTIONS',
+      'access-control-allow-headers': 'content-type,x-admin-key',
+      'access-control-max-age': '86400',
+      'access-control-allow-credentials': 'false'
+    };
+  }
+  if (!allowed.includes(origin)) return null;
 
   return {
-    'access-control-allow-origin': allowOrigin,
+    'access-control-allow-origin': origin,
     'access-control-allow-methods': 'GET,POST,OPTIONS',
     'access-control-allow-headers': 'content-type,x-admin-key',
     'access-control-max-age': '86400',
-    // credentials = false (enkelt, säkrare här)
     'access-control-allow-credentials': 'false'
   };
 }
 
 /* ============================================================
- * BLOCK 3 — Crypto: SHA-256 hex (PIN hash med salt)
+ * BLOCK 3 — Crypto: SHA-256 hex + PIN hash
  * ============================================================ */
-async function sha256Hex(input) {
-  const enc = new TextEncoder();
-  const buf = enc.encode(input);
+async function sha256Hex(str) {
+  const buf = enc.encode((str ?? '').toString());
   const hash = await crypto.subtle.digest('SHA-256', buf);
   const bytes = new Uint8Array(hash);
   let hex = '';
-  for (let i = 0; i < bytes.length; i++) {
-    hex += bytes[i].toString(16).padStart(2, '0');
-  }
+  for (let i = 0; i < bytes.length; i++) hex += bytes[i].toString(16).padStart(2, '0');
   return hex;
 }
 
-async function hashPin(pin, env) {
+async function pinHash(pin, env) {
   const salt = asText(env.PIN_SALT);
-  // Fail-closed: saknas salt → ändå hash (men rekommenderas sättas)
-  const base = `${salt}::${asText(pin)}`;
-  return sha256Hex(base);
+  return sha256Hex(`${salt}::${asText(pin)}`);
+}
+
+function safeUuid() {
+  return crypto.randomUUID();
 }
 
 /* ============================================================
- * BLOCK 4 — Voucher model & KV helpers
+ * BLOCK 4 — Deterministic pick helper (seed optional)
  * ============================================================ */
-function voucherKey(voucherId) {
-  return `v:${asText(voucherId)}`;
-}
-function partnerKey(partnerId) {
-  return `p:${asText(partnerId)}`;
-}
-
-function computeStatus(voucher, now) {
-  const v = voucher || {};
-  const status = asText(v.status);
-  const expiresAt = Number(v.expiresAt);
-
-  if (status === 'redeemed') return 'redeemed';
-  if (!Number.isFinite(expiresAt)) return 'expired';
-  if (now > expiresAt) return 'expired';
-  return 'valid';
+function seedToUint32(seedStr) {
+  const s = (seedStr ?? '').toString();
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) {
+    h = ((h << 5) + h) + s.charCodeAt(i);
+    h >>>= 0;
+  }
+  return h >>> 0;
 }
 
-function sanitizeVoucherOut(voucher) {
-  const v = voucher || {};
-  return {
-    voucherId: asText(v.voucherId),
-    partnerId: asText(v.partnerId),
-    rewardId: asText(v.rewardId),
-    status: asText(v.status),
-    expiresAt: Number(v.expiresAt),
-    createdAt: Number(v.createdAt)
+function mulberry32(seed) {
+  let a = (seed >>> 0);
+  return function rng() {
+    a |= 0;
+    a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
 
-/* ============================================================
- * BLOCK 5 — Routing
- * ============================================================ */
-function route(req) {
-  const url = new URL(req.url);
-  const path = url.pathname || '/';
-  const method = (req.method || 'GET').toUpperCase();
+function pick3Unique(rows, rngFn) {
+  const arr = Array.isArray(rows) ? rows.slice() : [];
+  if (arr.length < 3) return [];
 
-  // Normalize (inga trailing slashes för enkelhet)
-  const p = path.length > 1 && path.endsWith('/') ? path.slice(0, -1) : path;
+  // Shuffle (Fisher-Yates)
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(rngFn() * (i + 1));
+    const tmp = arr[i];
+    arr[i] = arr[j];
+    arr[j] = tmp;
+  }
 
-  return { method, path: p, url };
+  const picks = [];
+  const seen = new Set();
+  for (let i = 0; i < arr.length; i++) {
+    const id = asText(arr[i]?.rewardId);
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    picks.push(arr[i]);
+    if (picks.length === 3) break;
+  }
+  return picks;
 }
 
 /* ============================================================
- * BLOCK 6 — Handlers
+ * BLOCK 5 — Auth helpers
  * ============================================================ */
-async function handleCreateVoucher(req, env) {
+function requireAdmin(req, env) {
+  const adminKey = asText(env.ADMIN_KEY);
+  const headerKey = asText(req.headers.get('x-admin-key'));
+  if (!adminKey || headerKey !== adminKey) return false;
+  return true;
+}
+
+async function verifyPartnerPin(partnerId, pin, env) {
+  const expected = await env.DB
+    .prepare('SELECT pinHash, isActive FROM partners WHERE partnerId = ?')
+    .bind(partnerId)
+    .first();
+
+  if (!expected) return { ok: false, code: 'not_found' };
+  if (Number(expected.isActive) !== 1) return { ok: false, code: 'forbidden' };
+
+  const stored = asText(expected.pinHash);
+  if (!stored) return { ok: false, code: 'forbidden' };
+
+  const actual = await pinHash(pin, env);
+  if (actual !== stored) return { ok: false, code: 'forbidden' };
+
+  return { ok: true };
+}
+
+/* ============================================================
+ * BLOCK 6 — Endpoint handlers
+ * ============================================================ */
+async function adminCreatePartner(req, env) {
   const parsed = await readJson(req);
-  if (!parsed.ok || !isPlainObject(parsed.value)) {
-    return { res: { ok: false, error: 'bad_request' }, status: 400 };
+  if (!parsed.ok || !isPlainObject(parsed.value)) return { status: 400, body: { ok: false, error: 'bad_request' } };
+
+  const partnerId = asText(parsed.value.partnerId);
+  const name = asText(parsed.value.name);
+
+  if (!partnerId || partnerId.length > 80) return { status: 400, body: { ok: false, error: 'bad_request' } };
+  if (!name || name.length > 120) return { status: 400, body: { ok: false, error: 'bad_request' } };
+
+  const createdAt = nowMs();
+
+  // Fail-closed: insert, men om redan finns -> 400
+  try {
+    await env.DB
+      .prepare('INSERT INTO partners (partnerId, name, pinHash, isActive, createdAt) VALUES (?, ?, NULL, 1, ?)')
+      .bind(partnerId, name, createdAt)
+      .run();
+  } catch (_) {
+    return { status: 400, body: { ok: false, error: 'bad_request' } };
   }
 
-  const body = parsed.value;
+  return { status: 200, body: { ok: true } };
+}
 
-  const gameId = asText(body.gameId);
-  const checkpointIndex = asInt(body.checkpointIndex);
-  const partnerId = asText(body.partnerId);
-  const rewardId = asText(body.rewardId);
-  const ttlMinutes = asInt(body.ttlMinutes);
+async function adminInvitePartner(req, env) {
+  const parsed = await readJson(req);
+  if (!parsed.ok || !isPlainObject(parsed.value)) return { status: 400, body: { ok: false, error: 'bad_request' } };
 
-  // Fail-closed validation
-  if (!gameId || gameId.length > 120) return { res: { ok: false, error: 'bad_request' }, status: 400 };
-  if (!Number.isFinite(checkpointIndex) || checkpointIndex < 0 || checkpointIndex > 999) return { res: { ok: false, error: 'bad_request' }, status: 400 };
-  if (!partnerId || partnerId.length > 80) return { res: { ok: false, error: 'bad_request' }, status: 400 };
-  if (!rewardId || rewardId.length > 80) return { res: { ok: false, error: 'bad_request' }, status: 400 };
-  if (!Number.isFinite(ttlMinutes) || ttlMinutes <= 0 || ttlMinutes > 60 * 24 * 30) return { res: { ok: false, error: 'bad_request' }, status: 400 };
+  const partnerId = asText(parsed.value.partnerId);
+  const ttlMinutes = clampInt(parsed.value.ttlMinutes, 1, 60 * 24 * 30);
+
+  if (!partnerId || !Number.isFinite(ttlMinutes)) return { status: 400, body: { ok: false, error: 'bad_request' } };
+
+  // Partner must exist
+  const p = await env.DB
+    .prepare('SELECT partnerId FROM partners WHERE partnerId = ?')
+    .bind(partnerId)
+    .first();
+
+  if (!p) return { status: 404, body: { ok: false, error: 'not_found' } };
 
   const createdAt = nowMs();
   const expiresAt = createdAt + ttlMinutes * 60 * 1000;
+  const inviteToken = safeUuid();
 
-  const voucherId = crypto.randomUUID();
+  await env.DB
+    .prepare('INSERT INTO partner_invites (inviteToken, partnerId, expiresAt, usedAt, createdAt) VALUES (?, ?, ?, NULL, ?)')
+    .bind(inviteToken, partnerId, expiresAt, createdAt)
+    .run();
 
-  const voucher = {
-    voucherId,
-    gameId,
-    checkpointIndex,
-    partnerId,
-    rewardId,
-    status: 'valid',
-    createdAt,
-    expiresAt,
-    redeemedAt: null
-  };
-
-  await env.VOUCHERS_KV.put(voucherKey(voucherId), JSON.stringify(voucher));
-
-  return {
-    res: {
-      ok: true,
-      voucherId,
-      expiresAt,
-      status: 'valid'
-    },
-    status: 200
-  };
+  return { status: 200, body: { ok: true, inviteToken, expiresAt } };
 }
 
-async function handleGetVoucher(req, env, voucherId) {
-  const vid = asText(voucherId);
-  if (!vid) return { res: { ok: false, error: 'bad_request' }, status: 400 };
+async function partnerSetPin(req, env) {
+  const parsed = await readJson(req);
+  if (!parsed.ok || !isPlainObject(parsed.value)) return { status: 400, body: { ok: false, error: 'bad_request' } };
 
-  const raw = await env.VOUCHERS_KV.get(voucherKey(vid));
-  if (!raw) {
-    // Fail-closed: ok=false (men 404 är rimligt)
-    return { res: { ok: false, error: 'not_found' }, status: 404 };
-  }
+  const inviteToken = asText(parsed.value.inviteToken);
+  const pin = asText(parsed.value.pin);
 
-  let voucher = null;
+  if (!inviteToken || inviteToken.length < 10) return { status: 400, body: { ok: false, error: 'bad_request' } };
+  if (!pin || pin.length < 3 || pin.length > 32) return { status: 400, body: { ok: false, error: 'bad_request' } };
+
+  const inv = await env.DB
+    .prepare('SELECT inviteToken, partnerId, expiresAt, usedAt FROM partner_invites WHERE inviteToken = ?')
+    .bind(inviteToken)
+    .first();
+
+  if (!inv) return { status: 404, body: { ok: false, error: 'not_found' } };
+
+  const now = nowMs();
+  if (Number(inv.expiresAt) <= now) return { status: 403, body: { ok: false, error: 'forbidden' } };
+  if (inv.usedAt !== null && inv.usedAt !== undefined) return { status: 403, body: { ok: false, error: 'forbidden' } };
+
+  const partnerId = asText(inv.partnerId);
+  if (!partnerId) return { status: 403, body: { ok: false, error: 'forbidden' } };
+
+  // Update partner pinHash + mark invite usedAt (transaction)
+  const h = await pinHash(pin, env);
+
+  const tx = env.DB.batch([
+    env.DB.prepare('UPDATE partners SET pinHash = ? WHERE partnerId = ?').bind(h, partnerId),
+    env.DB.prepare('UPDATE partner_invites SET usedAt = ? WHERE inviteToken = ?').bind(now, inviteToken)
+  ]);
+
   try {
-    voucher = JSON.parse(raw);
+    await tx;
   } catch (_) {
-    return { res: { ok: false, error: 'corrupt' }, status: 500 };
+    return { status: 500, body: { ok: false, error: 'server_error' } };
   }
 
-  const now = nowMs();
-  const computed = computeStatus(voucher, now);
-
-  // Om status behöver uppdateras (expired) → spara
-  if (computed !== asText(voucher.status)) {
-    voucher.status = computed;
-    await env.VOUCHERS_KV.put(voucherKey(vid), JSON.stringify(voucher));
-  }
-
-  return {
-    res: {
-      ok: true,
-      voucher: sanitizeVoucherOut(voucher)
-    },
-    status: 200
-  };
+  return { status: 200, body: { ok: true, partnerId } };
 }
 
-async function handleRedeemVoucher(req, env) {
-  const parsed = await readJson(req);
-  if (!parsed.ok || !isPlainObject(parsed.value)) {
-    return { res: { ok: false, error: 'bad_request' }, status: 400 };
-  }
-
-  const body = parsed.value;
-
-  const voucherId = asText(body.voucherId);
-  const partnerId = asText(body.partnerId);
-  const pin = asText(body.pin);
-
-  if (!voucherId || !partnerId || !pin) return { res: { ok: false, error: 'bad_request' }, status: 400 };
-  if (pin.length > 32) return { res: { ok: false, error: 'bad_request' }, status: 400 };
-
-  // Läs voucher
-  const rawV = await env.VOUCHERS_KV.get(voucherKey(voucherId));
-  if (!rawV) return { res: { ok: false, error: 'not_found' }, status: 404 };
-
-  let voucher = null;
-  try { voucher = JSON.parse(rawV); } catch (_) {
-    return { res: { ok: false, error: 'corrupt' }, status: 500 };
-  }
-
-  // Partner match
-  if (asText(voucher.partnerId) !== partnerId) {
-    return { res: { ok: false, error: 'forbidden' }, status: 403 };
-  }
-
-  // Status/expiry check (fail-closed)
-  const now = nowMs();
-  const computed = computeStatus(voucher, now);
-
-  if (computed === 'redeemed') {
-    return { res: { ok: false, error: 'already_redeemed' }, status: 409 };
-  }
-  if (computed === 'expired') {
-    // uppdatera status i KV så GET blir korrekt
-    voucher.status = 'expired';
-    await env.VOUCHERS_KV.put(voucherKey(voucherId), JSON.stringify(voucher));
-    return { res: { ok: false, error: 'expired' }, status: 410 };
-  }
-  if (computed !== 'valid') {
-    return { res: { ok: false, error: 'forbidden' }, status: 403 };
-  }
-
-  // Läs partner PIN-hash
-  const rawP = await env.PARTNERS_KV.get(partnerKey(partnerId));
-  if (!rawP) {
-    // Fail-closed: inga partner-credentials = forbidden
-    return { res: { ok: false, error: 'forbidden' }, status: 403 };
-  }
-
-  let partner = null;
-  try { partner = JSON.parse(rawP); } catch (_) {
-    return { res: { ok: false, error: 'forbidden' }, status: 403 };
-  }
-
-  const expectedHash = asText(partner?.pinHash);
-  if (!expectedHash) return { res: { ok: false, error: 'forbidden' }, status: 403 };
-
-  const actualHash = await hashPin(pin, env);
-  if (actualHash !== expectedHash) {
-    return { res: { ok: false, error: 'forbidden' }, status: 403 };
-  }
-
-  // Redeem
-  const redeemedAt = now;
-  voucher.status = 'redeemed';
-  voucher.redeemedAt = redeemedAt;
-
-  await env.VOUCHERS_KV.put(voucherKey(voucherId), JSON.stringify(voucher));
-
-  return {
-    res: {
-      ok: true,
-      status: 'redeemed',
-      redeemedAt
-    },
-    status: 200
-  };
+function validateRewardType(t) {
+  const x = asText(t);
+  return x === 'percent' || x === 'freebie' || x === 'bogo' || x === 'custom';
 }
 
-async function handleSetPartnerPin(req, env) {
-  // Admin auth
-  const adminKey = asText(env.ADMIN_KEY);
-  const headerKey = asText(req.headers.get('x-admin-key'));
+function validateTier(t) {
+  const x = asText(t);
+  return x === 'cp' || x === 'final';
+}
 
-  // Fail-closed
-  if (!adminKey || headerKey !== adminKey) {
-    return { res: { ok: false, error: 'forbidden' }, status: 403 };
-  }
-
+async function rewardsCreate(req, env) {
   const parsed = await readJson(req);
-  if (!parsed.ok || !isPlainObject(parsed.value)) {
-    return { res: { ok: false, error: 'bad_request' }, status: 400 };
+  if (!parsed.ok || !isPlainObject(parsed.value)) return { status: 400, body: { ok: false, error: 'bad_request' } };
+
+  const b = parsed.value;
+  const partnerId = asText(b.partnerId);
+  const pin = asText(b.pin);
+  const title = asText(b.title);
+  const type = asText(b.type);
+  const valueText = asText(b.valueText);
+  const stock = clampInt(b.stock, 0, 1_000_000);
+  const ttlMinutes = clampInt(b.ttlMinutes, 1, 60 * 24 * 30);
+  const tier = asText(b.tier);
+
+  if (!partnerId || !pin) return { status: 400, body: { ok: false, error: 'bad_request' } };
+  if (!title || title.length > 140) return { status: 400, body: { ok: false, error: 'bad_request' } };
+  if (!validateRewardType(type)) return { status: 400, body: { ok: false, error: 'bad_request' } };
+  if (!valueText || valueText.length > 140) return { status: 400, body: { ok: false, error: 'bad_request' } };
+  if (!Number.isFinite(stock) || !Number.isFinite(ttlMinutes)) return { status: 400, body: { ok: false, error: 'bad_request' } };
+  if (!validateTier(tier)) return { status: 400, body: { ok: false, error: 'bad_request' } };
+
+  const auth = await verifyPartnerPin(partnerId, pin, env);
+  if (!auth.ok) return { status: auth.code === 'not_found' ? 404 : 403, body: { ok: false, error: auth.code === 'not_found' ? 'not_found' : 'forbidden' } };
+
+  const rewardId = safeUuid();
+  const ts = nowMs();
+
+  await env.DB
+    .prepare(`INSERT INTO rewards
+      (rewardId, partnerId, title, type, valueText, stock, ttlMinutes, tier, isActive, createdAt, updatedAt)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`)
+    .bind(rewardId, partnerId, title, type, valueText, stock, ttlMinutes, tier, ts, ts)
+    .run();
+
+  return { status: 200, body: { ok: true, rewardId } };
+}
+
+async function rewardsUpdate(req, env) {
+  const parsed = await readJson(req);
+  if (!parsed.ok || !isPlainObject(parsed.value)) return { status: 400, body: { ok: false, error: 'bad_request' } };
+
+  const b = parsed.value;
+  const partnerId = asText(b.partnerId);
+  const pin = asText(b.pin);
+  const rewardId = asText(b.rewardId);
+
+  if (!partnerId || !pin || !rewardId) return { status: 400, body: { ok: false, error: 'bad_request' } };
+
+  const auth = await verifyPartnerPin(partnerId, pin, env);
+  if (!auth.ok) return { status: auth.code === 'not_found' ? 404 : 403, body: { ok: false, error: auth.code === 'not_found' ? 'not_found' : 'forbidden' } };
+
+  // Reward must exist and belong to partner
+  const existing = await env.DB
+    .prepare('SELECT rewardId, partnerId FROM rewards WHERE rewardId = ?')
+    .bind(rewardId)
+    .first();
+
+  if (!existing) return { status: 404, body: { ok: false, error: 'not_found' } };
+  if (asText(existing.partnerId) !== partnerId) return { status: 403, body: { ok: false, error: 'forbidden' } };
+
+  const fields = [];
+  const binds = [];
+
+  if (b.title !== undefined) {
+    const title = asText(b.title);
+    if (!title || title.length > 140) return { status: 400, body: { ok: false, error: 'bad_request' } };
+    fields.push('title = ?');
+    binds.push(title);
+  }
+  if (b.valueText !== undefined) {
+    const v = asText(b.valueText);
+    if (!v || v.length > 140) return { status: 400, body: { ok: false, error: 'bad_request' } };
+    fields.push('valueText = ?');
+    binds.push(v);
+  }
+  if (b.stock !== undefined) {
+    const s = clampInt(b.stock, 0, 1_000_000);
+    if (!Number.isFinite(s)) return { status: 400, body: { ok: false, error: 'bad_request' } };
+    fields.push('stock = ?');
+    binds.push(s);
+  }
+  if (b.ttlMinutes !== undefined) {
+    const t = clampInt(b.ttlMinutes, 1, 60 * 24 * 30);
+    if (!Number.isFinite(t)) return { status: 400, body: { ok: false, error: 'bad_request' } };
+    fields.push('ttlMinutes = ?');
+    binds.push(t);
+  }
+  if (b.tier !== undefined) {
+    const t = asText(b.tier);
+    if (!validateTier(t)) return { status: 400, body: { ok: false, error: 'bad_request' } };
+    fields.push('tier = ?');
+    binds.push(t);
+  }
+  if (b.isActive !== undefined) {
+    const ia = intOrNaN(b.isActive);
+    if (!Number.isFinite(ia) || (ia !== 0 && ia !== 1)) return { status: 400, body: { ok: false, error: 'bad_request' } };
+    fields.push('isActive = ?');
+    binds.push(ia);
   }
 
-  const body = parsed.value;
-  const partnerId = asText(body.partnerId);
-  const pin = asText(body.pin);
+  if (fields.length === 0) return { status: 400, body: { ok: false, error: 'bad_request' } };
 
-  if (!partnerId || partnerId.length > 80) return { res: { ok: false, error: 'bad_request' }, status: 400 };
-  if (!pin || pin.length < 3 || pin.length > 32) return { res: { ok: false, error: 'bad_request' }, status: 400 };
+  // updatedAt
+  fields.push('updatedAt = ?');
+  binds.push(nowMs());
 
-  const pinHash = await hashPin(pin, env);
-  const record = {
-    pinHash,
-    updatedAt: nowMs()
-  };
+  const sql = `UPDATE rewards SET ${fields.join(', ')} WHERE rewardId = ?`;
+  binds.push(rewardId);
 
-  await env.PARTNERS_KV.put(partnerKey(partnerId), JSON.stringify(record));
+  await env.DB.prepare(sql).bind(...binds).run();
 
-  return { res: { ok: true }, status: 200 };
+  return { status: 200, body: { ok: true } };
+}
+
+async function rewardsList(req, env, url) {
+  const partnerId = asText(url.searchParams.get('partnerId'));
+  const pin = asText(url.searchParams.get('pin'));
+
+  if (!partnerId || !pin) return { status: 400, body: { ok: false, error: 'bad_request' } };
+
+  const auth = await verifyPartnerPin(partnerId, pin, env);
+  if (!auth.ok) return { status: auth.code === 'not_found' ? 404 : 403, body: { ok: false, error: auth.code === 'not_found' ? 'not_found' : 'forbidden' } };
+
+  const out = await env.DB
+    .prepare(`SELECT rewardId, partnerId, title, type, valueText, stock, ttlMinutes, tier, isActive, createdAt, updatedAt
+              FROM rewards WHERE partnerId = ? ORDER BY createdAt DESC`)
+    .bind(partnerId)
+    .all();
+
+  return { status: 200, body: { ok: true, rewards: out.results || [] } };
+}
+
+async function rewardsPick3(req, env, url) {
+  const tier = asText(url.searchParams.get('tier'));
+  if (!validateTier(tier)) return { status: 400, body: { ok: false, error: 'bad_request' } };
+
+  const seed = asText(url.searchParams.get('seed'));
+  const pool = asText(url.searchParams.get('partnerPool'));
+
+  let partnerIds = [];
+  if (pool) {
+    partnerIds = pool.split(',').map((s) => s.trim()).filter(Boolean);
+    // fail-closed: för många
+    if (partnerIds.length > 50) return { status: 400, body: { ok: false, error: 'bad_request' } };
+  }
+
+  // SQL: isActive=1 och stock>0 + tier
+  let sql = `
+    SELECT r.rewardId, r.partnerId, p.name AS partnerName, r.title, r.type, r.valueText, r.ttlMinutes, r.tier
+    FROM rewards r
+    JOIN partners p ON p.partnerId = r.partnerId
+    WHERE r.isActive = 1 AND r.stock > 0 AND r.tier = ? AND p.isActive = 1
+  `;
+  const binds = [tier];
+
+  if (partnerIds.length > 0) {
+    const placeholders = partnerIds.map(() => '?').join(',');
+    sql += ` AND r.partnerId IN (${placeholders})`;
+    binds.push(...partnerIds);
+  }
+
+  const rows = await env.DB.prepare(sql).bind(...binds).all();
+  const all = rows.results || [];
+
+  if (all.length < 3) {
+    // fail-closed: om katalogen inte kan ge 3 -> 404 (eller 200 med färre? men KRAV säger alltid 3)
+    return { status: 404, body: { ok: false, error: 'not_found' } };
+  }
+
+  const rng = seed ? mulberry32(seedToUint32(seed)) : (() => Math.random());
+  const picks = pick3Unique(all, rng);
+
+  if (picks.length < 3) return { status: 404, body: { ok: false, error: 'not_found' } };
+
+  return { status: 200, body: { ok: true, picks } };
 }
 
 /* ============================================================
- * BLOCK 7 — Main fetch
+ * BLOCK 7 — Router
  * ============================================================ */
+function route(req) {
+  const url = new URL(req.url);
+  const path = (url.pathname || '/').replace(/\/$/, '');
+  const method = (req.method || 'GET').toUpperCase();
+  return { url, path: path || '/', method };
+}
+
 export default {
   async fetch(req, env) {
-    const allowedOrigins = parseAllowedOrigins(env);
-    const origin = req.headers.get('origin');
-    const cors = corsHeadersFor(origin, allowedOrigins);
+    const allowed = parseOrigins(env);
+    const cors = corsHeadersFor(req, allowed);
 
     // OPTIONS preflight
     if ((req.method || '').toUpperCase() === 'OPTIONS') {
-      if (!cors) return textResponse('forbidden', 403);
+      if (!cors) return json({ ok: false, error: 'forbidden' }, 403);
       return new Response(null, { status: 204, headers: cors });
     }
 
-    // Fail-closed: om origin finns men ej tillåten
-    if (!cors) return jsonResponse({ ok: false, error: 'forbidden' }, 403);
+    // Fail-closed: browser origin men ej tillåten
+    if (!cors) return json({ ok: false, error: 'forbidden' }, 403);
 
-    const { method, path } = route(req);
+    const { url, path, method } = route(req);
 
-    // Routing
     try {
-      // POST /vouchers/create
-      if (method === 'POST' && path === '/vouchers/create') {
-        const out = await handleCreateVoucher(req, env);
-        return jsonResponse(out.res, out.status, cors);
+      // Admin auth
+      if (path === '/admin/partners/create' && method === 'POST') {
+        if (!requireAdmin(req, env)) return json({ ok: false, error: 'forbidden' }, 403, cors);
+        const out = await adminCreatePartner(req, env);
+        return json(out.body, out.status, cors);
       }
 
-      // GET /vouchers/:voucherId
-      if (method === 'GET' && path.startsWith('/vouchers/')) {
-        const voucherId = path.split('/')[2] || '';
-        const out = await handleGetVoucher(req, env, voucherId);
-        return jsonResponse(out.res, out.status, cors);
+      if (path === '/admin/partners/invite' && method === 'POST') {
+        if (!requireAdmin(req, env)) return json({ ok: false, error: 'forbidden' }, 403, cors);
+        const out = await adminInvitePartner(req, env);
+        return json(out.body, out.status, cors);
       }
 
-      // POST /vouchers/redeem
-      if (method === 'POST' && path === '/vouchers/redeem') {
-        const out = await handleRedeemVoucher(req, env);
-        return jsonResponse(out.res, out.status, cors);
+      // Partner invite flow
+      if (path === '/partners/set-pin' && method === 'POST') {
+        const out = await partnerSetPin(req, env);
+        return json(out.body, out.status, cors);
       }
 
-      // POST /partners/set-pin (admin)
-      if (method === 'POST' && path === '/partners/set-pin') {
-        const out = await handleSetPartnerPin(req, env);
-        return jsonResponse(out.res, out.status, cors);
+      // Rewards CRUD (partnerId+pin)
+      if (path === '/rewards/create' && method === 'POST') {
+        const out = await rewardsCreate(req, env);
+        return json(out.body, out.status, cors);
+      }
+      if (path === '/rewards/update' && method === 'POST') {
+        const out = await rewardsUpdate(req, env);
+        return json(out.body, out.status, cors);
+      }
+      if (path === '/rewards/list' && method === 'GET') {
+        const out = await rewardsList(req, env, url);
+        return json(out.body, out.status, cors);
       }
 
-      // Default 404
-      return jsonResponse({ ok: false, error: 'not_found' }, 404, cors);
-    } catch (err) {
-      // Fail-closed: inga stacktraces
-      return jsonResponse({ ok: false, error: 'server_error' }, 500, cors);
+      // Game pick3
+      if (path === '/rewards/pick3' && method === 'GET') {
+        const out = await rewardsPick3(req, env, url);
+        return json(out.body, out.status, cors);
+      }
+
+      return json({ ok: false, error: 'not_found' }, 404, cors);
+    } catch (_) {
+      return json({ ok: false, error: 'server_error' }, 500, cors);
     }
   }
 };
-
-/* ============================================================
- * BLOCK 8 — ENV / Bindings (för wrangler.toml)
- *   KV namespaces:
- *     VOUCHERS_KV
- *     PARTNERS_KV
- *   Vars:
- *     ADMIN_KEY
- *     PIN_SALT
- *     ALLOWED_ORIGINS
- * ============================================================ */
