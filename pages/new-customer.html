@@ -1,1 +1,528 @@
+<!-- ============================================================
+     FIL: pages/new-customer.html  (HEL FIL)
+     AO-DASH-NEWCUSTOMER-01 — NY SIDA: Skapa ny kund (auto partnerId)
+     Policy: UI-only, XSS-safe, fail-closed, subpath-safe, token i minnet (via ?t=)
+============================================================ -->
+<!doctype html>
+<html lang="sv">
+<head>
+  <!-- ==========================================================
+       BLOCK 1 — Meta + CSS
+  =========================================================== -->
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Admin — Skapa ny kund</title>
+  <meta name="description" content="Skapa ny kund/partner i backend (MVP)." />
+  <link rel="stylesheet" href="../styles/main.css" />
+</head>
 
+<body class="theme-admin">
+  <!-- ==========================================================
+       BLOCK 2 — App Root
+  =========================================================== -->
+  <div id="app" class="app"> <!-- HOOK: app-root -->
+
+    <!-- ========================================================
+         BLOCK 3 — Topbar
+    ========================================================= -->
+    <header class="topbar">
+      <div class="topbar__inner">
+        <div class="brand">
+          <div class="brand__mark" aria-hidden="true">◎</div>
+          <div class="brand__text">
+            <div class="brand__name">Admin</div>
+            <div class="brand__tag muted">Skapa ny kund</div>
+          </div>
+        </div>
+
+        <div class="topbar__right" style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; justify-content:flex-end;">
+          <a class="badge" href="./dashboard.html" aria-label="Tillbaka till dashboard">Dashboard</a>
+          <a class="badge" href="./partner.html" aria-label="Öppna partner-sidan">Partner</a>
+          <span class="badge badge-success" aria-label="MVP">MVP</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- ========================================================
+         BLOCK 4 — Main
+    ========================================================= -->
+    <main class="main">
+      <div class="container">
+
+        <!-- ======================================================
+             BLOCK 4.1 — Status / Toast slot
+        ======================================================= -->
+        <div id="statusSlot" class="slot" aria-live="polite"></div> <!-- HOOK: status-slot -->
+
+        <!-- ======================================================
+             BLOCK 5 — Guard (fail-closed om token saknas)
+        ======================================================= -->
+        <section id="guardCard" class="card paperCard" aria-label="Login krävs" style="margin-top: var(--sp-4);">
+          <div class="card__head">
+            <div class="card__meta">
+              <h1 class="h2" style="margin:0">Logga in krävs</h1>
+              <p class="muted small" style="margin:6px 0 0 0">
+                Logga in via dashboard (⚙️) och öppna “Skapa ny kund” därifrån, så token följer med (MVP).
+              </p>
+            </div>
+            <div class="card__side">
+              <a id="backToDashLink" class="btn btn-primary" href="./dashboard.html" aria-label="Till dashboard">
+                Till dashboard
+              </a>
+            </div>
+          </div>
+
+          <div class="muted small" style="margin-top:10px;">
+            Skapa kund är blockerat utan token. (Fail-closed)
+          </div>
+        </section>
+
+        <!-- ======================================================
+             BLOCK 6 — Create customer (hidden tills token finns)
+        ======================================================= -->
+        <section id="createCard" class="card paperCard is-hidden" aria-label="Skapa ny kund" style="margin-top: var(--sp-4);">
+          <div class="card__head">
+            <div class="card__meta">
+              <h1 class="h2" style="margin:0">Skapa ny kund</h1>
+              <p class="muted small" style="margin:6px 0 0 0">
+                Lägg upp företagsuppgifter och skapa partner i backend. (Företagsuppgifter sparas inte i denna AO.)
+              </p>
+            </div>
+            <div class="card__side" style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; justify-content:flex-end;">
+              <span class="badge badge-success" aria-label="Token i minnet">TOKEN: OK</span>
+            </div>
+          </div>
+
+          <div class="form" style="margin-top:12px; gap:12px;">
+            <!-- KRAV 3: Formfält -->
+            <div class="field">
+              <label class="label2" for="companyName">Företagsnamn <span class="muted small">(required)</span></label>
+              <input id="companyName" class="input" type="text" autocomplete="organization" placeholder="t.ex. Kiosk Nova" />
+              <div class="muted small" style="margin-top:6px;">
+                PartnerId genereras automatiskt: slug + suffix.
+              </div>
+            </div>
+
+            <div class="grid" style="display:grid; gap:12px; grid-template-columns: 1fr; margin-top: 4px;">
+              <div class="field">
+                <label class="label2" for="contactPerson">Kontaktperson <span class="muted small">(optional)</span></label>
+                <input id="contactPerson" class="input" type="text" autocomplete="name" placeholder="t.ex. Anders" />
+              </div>
+
+              <div class="field">
+                <label class="label2" for="email">E-post <span class="muted small">(optional)</span></label>
+                <input id="email" class="input" type="email" autocomplete="email" placeholder="t.ex. hej@kiosknova.se" />
+              </div>
+
+              <div class="field">
+                <label class="label2" for="phone">Telefon <span class="muted small">(optional)</span></label>
+                <input id="phone" class="input" type="tel" autocomplete="tel" placeholder="t.ex. 070-123 45 67" />
+              </div>
+
+              <div class="field">
+                <label class="label2" for="note">Notering <span class="muted small">(optional)</span></label>
+                <textarea id="note" class="input" rows="3" placeholder="Intern notering (sparas inte i denna AO)"></textarea>
+              </div>
+            </div>
+
+            <!-- Live preview -->
+            <div class="card" style="padding:12px; margin-top: 6px;">
+              <div class="muted small">Förhandsvisning</div>
+              <div style="display:grid; gap:6px; margin-top:8px;">
+                <div style="display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap;">
+                  <div style="font-weight:900;">PartnerId</div>
+                  <div id="pidPreview" class="badge" aria-label="Genererad partnerId">—</div>
+                </div>
+                <div class="muted small">
+                  Skapas med: <span id="createPayloadPreview">—</span>
+                </div>
+              </div>
+            </div>
+
+            <div style="display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end; margin-top: 6px;">
+              <button id="regenBtn" type="button" class="btn btn-ghost">Ny suffix</button>
+              <button id="createBtn" type="button" class="btn btn-primary">Skapa kund</button>
+            </div>
+
+            <div id="formMsg" class="muted small" style="min-height:18px;"></div>
+          </div>
+        </section>
+
+        <!-- ======================================================
+             BLOCK 7 — Success (hidden tills skapad)
+        ======================================================= -->
+        <section id="successCard" class="card paperCard is-hidden" aria-label="Kund skapad" style="margin-top: var(--sp-4);">
+          <div class="card__head">
+            <div class="card__meta">
+              <h2 class="h2" style="margin:0">Kund skapad</h2>
+              <p class="muted small" style="margin:6px 0 0 0">
+                Partner är skapad i backend.
+              </p>
+            </div>
+            <div class="card__side">
+              <span id="successPidBadge" class="badge badge-success" aria-label="PartnerId">—</span>
+            </div>
+          </div>
+
+          <div class="form" style="margin-top:12px; gap:12px;">
+            <div class="field">
+              <label class="label2" for="successPid">PartnerId</label>
+              <input id="successPid" class="input" type="text" readonly value="" />
+            </div>
+
+            <div style="display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end;">
+              <a id="inviteLink" class="btn btn-primary" href="./dashboard.html" aria-label="Skapa invite">
+                Skapa invite
+              </a>
+              <a id="partnerLink" class="btn btn-ghost" href="./partner.html" aria-label="Till partner-sidan">
+                Till partner-sidan
+              </a>
+            </div>
+
+            <div class="muted small">
+              Tips: “Skapa invite” tar dig tillbaka till dashboard med partnerId förifyllt.
+            </div>
+          </div>
+        </section>
+
+      </div>
+    </main>
+  </div>
+
+  <!-- ==========================================================
+       BLOCK 8 — JS (inline, no extra file)
+  =========================================================== -->
+  <script type="module">
+    /* ==========================================================
+       BLOCK 8.1 — Config
+    =========================================================== */
+    const API_BASE = 'https://uppdrag.andersmenyit.workers.dev'; // HOOK: api-base
+
+    /* ==========================================================
+       BLOCK 8.2 — DOM hooks
+    =========================================================== */
+    const $ = (sel) => document.querySelector(sel);
+
+    const elStatus = $('#statusSlot');
+
+    const elGuardCard = $('#guardCard');
+    const elCreateCard = $('#createCard');
+    const elSuccessCard = $('#successCard');
+
+    const elBackToDash = $('#backToDashLink');
+
+    const elCompany = $('#companyName');
+    const elContact = $('#contactPerson');
+    const elEmail = $('#email');
+    const elPhone = $('#phone');
+    const elNote = $('#note');
+
+    const elPidPreview = $('#pidPreview');
+    const elPayloadPreview = $('#createPayloadPreview');
+    const elMsg = $('#formMsg');
+
+    const elRegen = $('#regenBtn');
+    const elCreate = $('#createBtn');
+
+    const elSuccessPidBadge = $('#successPidBadge');
+    const elSuccessPid = $('#successPid');
+    const elInviteLink = $('#inviteLink');
+    const elPartnerLink = $('#partnerLink');
+
+    /* ==========================================================
+       BLOCK 8.3 — State (in-memory only)
+    =========================================================== */
+    const state = {
+      adminToken: '',          // in-memory only
+      partnerId: '',
+      lastSlug: '',
+      busy: false
+    };
+
+    /* ==========================================================
+       BLOCK 8.4 — UI helpers (XSS-safe)
+    =========================================================== */
+    function toast(msg, type = 'info', ttl = 1600) {
+      if (!elStatus) return;
+      const div = document.createElement('div');
+      div.className = `toast toast--${type === 'danger' ? 'danger' : type === 'warn' ? 'warn' : type === 'success' ? 'success' : 'info'}`;
+      div.setAttribute('role', 'status');
+      div.textContent = (msg ?? '').toString();
+      elStatus.appendChild(div);
+      setTimeout(() => { try { div.remove(); } catch (_) {} }, Math.max(500, Number(ttl) || 1600));
+    }
+
+    function setText(node, text) {
+      if (!node) return;
+      node.textContent = (text ?? '').toString();
+    }
+
+    function show(node, on) {
+      if (!node) return;
+      if (on) node.classList.remove('is-hidden');
+      else node.classList.add('is-hidden');
+    }
+
+    function disable(node, on) {
+      if (!node) return;
+      node.disabled = !!on;
+    }
+
+    /* ==========================================================
+       BLOCK 8.5 — Token: read query ?t= (fail-closed)
+       + säkerhet: ta bort t= från URL efter inläsning
+    =========================================================== */
+    function readTokenFromQuery() {
+      try {
+        const u = new URL(window.location.href);
+        const t = (u.searchParams.get('t') || '').toString();
+        if (t) {
+          state.adminToken = t;
+          // Ta bort token från URL (minskar läckrisk)
+          u.searchParams.delete('t');
+          window.history.replaceState({}, document.title, u.toString());
+          return true;
+        }
+      } catch (_) {}
+      return false;
+    }
+
+    function setGuardUi() {
+      const ok = !!state.adminToken;
+      show(elGuardCard, !ok);
+      show(elCreateCard, ok);
+      show(elSuccessCard, false);
+
+      // tillbaka-länk (utan token)
+      if (elBackToDash) elBackToDash.setAttribute('href', './dashboard.html');
+      if (!ok) return;
+
+      // fail-closed: skapa ska vara aktivt först när required fält finns
+      refreshPreview();
+    }
+
+    /* ==========================================================
+       BLOCK 8.6 — partnerId generator (KRAV 4)
+    =========================================================== */
+    function slugifyName(input) {
+      // a–z0–9 + bindestreck, max 24 tecken
+      const s0 = (input ?? '').toString().trim().toLowerCase();
+      // normalisera diakritiska tecken
+      const s1 = s0.normalize('NFKD').replace(/[\u0300-\u036f]/g, '');
+      // ersätt & med "and" för stabil slug
+      const s2 = s1.replace(/&/g, ' and ');
+      // tillåt endast a-z0-9, mellanslag, bindestreck
+      const s3 = s2.replace(/[^a-z0-9\s-]/g, ' ');
+      // collapse whitespace/dash
+      const s4 = s3.replace(/[\s_-]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+      const s5 = s4.slice(0, 24).replace(/-+$/g, '');
+      return s5 || '';
+    }
+
+    function randBase36(len) {
+      const n = Math.max(4, Math.min(6, Number(len) || 4));
+      let out = '';
+      // crypto om möjligt, annars Math.random
+      try {
+        const bytes = new Uint8Array(n);
+        window.crypto.getRandomValues(bytes);
+        for (let i = 0; i < bytes.length; i++) out += (bytes[i] % 36).toString(36);
+        return out;
+      } catch (_) {
+        while (out.length < n) out += Math.floor(Math.random() * 36).toString(36);
+        return out.slice(0, n);
+      }
+    }
+
+    function buildPartnerId(companyName, forceNewSuffix = false) {
+      const slug = slugifyName(companyName);
+      state.lastSlug = slug;
+
+      if (!slug) {
+        state.partnerId = '';
+        return '';
+      }
+
+      const existing = state.partnerId || '';
+      const shouldReuse = !forceNewSuffix && existing.startsWith(slug + '-') && existing.length >= (slug.length + 1 + 4);
+      if (shouldReuse) return existing;
+
+      const suffixLen = 4 + Math.floor(Math.random() * 3); // 4–6
+      const suffix = randBase36(suffixLen);
+      const pid = `${slug}-${suffix}`;
+      state.partnerId = pid;
+      return pid;
+    }
+
+    /* ==========================================================
+       BLOCK 8.7 — Preview + validation
+    =========================================================== */
+    function refreshPreview(forceNewSuffix = false) {
+      const name = (elCompany?.value || '').toString().trim();
+      const pid = buildPartnerId(name, forceNewSuffix);
+
+      setText(elPidPreview, pid || '—');
+
+      const safeName = name || '—';
+      const safePid = pid || '—';
+      setText(elPayloadPreview, `{"partnerId":"${safePid}","name":"${safeName}"}`);
+
+      // required: företagsnamn
+      const can = !!state.adminToken && !!name && !!pid;
+      disable(elCreate, !can || state.busy);
+
+      if (!name) {
+        setText(elMsg, 'Företagsnamn krävs.');
+      } else if (!pid) {
+        setText(elMsg, 'Kunde inte skapa partnerId (kontrollera namnet).');
+      } else {
+        setText(elMsg, '');
+      }
+    }
+
+    function setBusy(on) {
+      state.busy = !!on;
+      disable(elCreate, on);
+      disable(elRegen, on);
+      disable(elCompany, on);
+      disable(elContact, on);
+      disable(elEmail, on);
+      disable(elPhone, on);
+      disable(elNote, on);
+    }
+
+    /* ==========================================================
+       BLOCK 8.8 — API call (KRAV 6)
+    =========================================================== */
+    function authHeaders() {
+      return {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${state.adminToken}`
+      };
+    }
+
+    async function apiCreatePartner(partnerId, name) {
+      const url = `${API_BASE.replace(/\/$/, '')}/admin/partners/create`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({ partnerId, name })
+      });
+      const data = await res.json().catch(() => null);
+      return { ok: res.ok, status: res.status, data };
+    }
+
+    function looksLikeDuplicate(resp) {
+      // Vi vet inte exakta felkoder => heuristik (utan att bli "smart")
+      const msg = (resp?.data?.message || resp?.data?.error || '').toString().toLowerCase();
+      return (resp?.status === 409) || msg.includes('duplicate') || msg.includes('exists') || msg.includes('already');
+    }
+
+    async function doCreate() {
+      if (!state.adminToken) {
+        toast('Logga in via dashboard (⚙️)', 'warn', 1600);
+        return;
+      }
+
+      const name = (elCompany?.value || '').toString().trim();
+      if (!name) {
+        toast('Företagsnamn krävs', 'warn', 1600);
+        refreshPreview(false);
+        return;
+      }
+
+      // partnerId genereras från name
+      const pid = buildPartnerId(name, false);
+      if (!pid) {
+        toast('Kunde inte skapa partnerId', 'danger', 1800);
+        return;
+      }
+
+      setBusy(true);
+      toast('Skapar kund…', 'info', 900);
+
+      const res = await apiCreatePartner(pid, name);
+
+      // fail-closed vid 403
+      if (res.status === 403) {
+        state.adminToken = '';
+        setBusy(false);
+        setGuardUi();
+        toast('Session låst (403). Logga in via dashboard (⚙️).', 'warn', 2200);
+        return;
+      }
+
+      if (!res.ok || !res.data || res.data.ok !== true) {
+        setBusy(false);
+
+        if (looksLikeDuplicate(res)) {
+          toast('PartnerId upptagen. Generera ny suffix och försök igen.', 'warn', 2200);
+          refreshPreview(true);
+          return;
+        }
+
+        const code = (res?.data?.errorCode || res?.data?.code || res?.status || '').toString();
+        toast(`Kunde inte skapa kund${code ? ` (${code})` : ''}`, 'danger', 2200);
+        return;
+      }
+
+      // success UI (KRAV 6)
+      toast('Kund skapad', 'success', 1100);
+
+      setText(elSuccessPidBadge, pid);
+      if (elSuccessPid) elSuccessPid.value = pid;
+
+      // länkar:
+      // - tillbaka till dashboard med ?partnerId=<id> (förifyll invite)
+      // - till partner-sidan (vi har inget "partnerId" kontrakt där, så behåll enkel länk)
+      if (elInviteLink) elInviteLink.setAttribute('href', `./dashboard.html?partnerId=${encodeURIComponent(pid)}`);
+      if (elPartnerLink) elPartnerLink.setAttribute('href', './partner.html');
+
+      show(elCreateCard, false);
+      show(elGuardCard, false);
+      show(elSuccessCard, true);
+
+      setBusy(false);
+    }
+
+    /* ==========================================================
+       BLOCK 8.9 — Events
+    =========================================================== */
+    if (elCompany) {
+      elCompany.addEventListener('input', () => refreshPreview(false));
+      elCompany.addEventListener('blur', () => refreshPreview(false));
+    }
+
+    if (elRegen) elRegen.addEventListener('click', () => refreshPreview(true));
+    if (elCreate) elCreate.addEventListener('click', doCreate);
+
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !state.busy) {
+        // Enter i formulär -> skapa (om möjligt)
+        const can = !elCreate?.disabled;
+        if (can) doCreate();
+      }
+    });
+
+    /* ==========================================================
+       BLOCK 8.10 — Boot
+    =========================================================== */
+    (function boot() {
+      const ok = readTokenFromQuery();
+      setGuardUi();
+      if (ok) refreshPreview(false);
+    })();
+  </script>
+
+  <!-- ==========================================================
+       BLOCK 9 — Minimal helpers
+  =========================================================== -->
+  <style>
+    .is-hidden { display:none !important; }
+    /* Lite bättre mobil-layout för fält (utan att kräva CSS-ändring) */
+    @media (min-width: 820px) {
+      .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+  </style>
+</body>
+</html>
