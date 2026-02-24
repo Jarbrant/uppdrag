@@ -7,12 +7,13 @@
    AO 1/3 (FAS 1.0) — Loot-val “Välj 1 av 3” efter varje checkpoint
    AO 2/3 (FAS 1.0) — Worker voucher API (extern)
    AO 3/3 (FAS 1.0) — Koppla loot -> voucher create + QR + verify + status refresh
+   AO 5/6 (FAS 1.0) — Reward pool (pick3) + claim (stock--) + voucher i D1
    Policy: UI-only, fail-closed, ingen engine
    AO 3/3 policy: Inga nya storage-keys för vouchers (vouchers hålls i minnet)
 ============================================================ */
 
 /* ============================================================
-   BLOCK 0 — AO 3/3: Voucher API base (KRAV 1)
+   BLOCK 0 — API base (AO 3/3 + AO 5/6)
 ============================================================ */
 const VOUCHER_API_BASE = 'https://uppdrag.andersmenyit.workers.dev';
 
@@ -40,14 +41,14 @@ const elViewGridBtn = $('#viewGridBtn');
 const elGridWrap = $('#gridWrap');
 const elGridHint = $('#gridHint');
 
-// AO 1/3: loot + rewards list hooks
+// loot + rewards list hooks
 const elLootOverlay = $('#lootOverlay');     // HOOK: loot-overlay
 const elLootCards = $('#lootCards');         // HOOK: loot-cards
 const elLootSkip = $('#lootSkipBtn');        // HOOK: loot-skip
 const elRewardsList = $('#rewardsList');     // HOOK: rewards-list
 const elRewardsEmpty = $('#rewardsEmpty');   // HOOK: rewards-empty
 
-// AO 3/3: voucher modal hooks
+// voucher modal hooks
 const elVoucherOverlay = $('#voucherOverlay');         // HOOK: voucher-overlay
 const elVoucherMeta = $('#voucherMeta');               // HOOK: voucher-meta
 const elVoucherStatusBadge = $('#voucherStatusBadge'); // HOOK: voucher-status-badge
@@ -698,140 +699,18 @@ function onCheckpointApproved() {
 }
 
 /* ============================================================
-   BLOCK 10.1 — AO 1/3 + AO 3/3 State (IN-MEMORY)
-   - rewardsUnlocked: historik av val (bakgrund)
-   - vouchers: det som visas i listan + kan öppnas i voucher-modal
+   BLOCK 10.1 — State (IN-MEMORY)
 ============================================================ */
 const state = {
-  rewardsUnlocked: [],            // { partnerId, partnerName, rewardId, rewardTitle, rewardShort, tier, expiresMinutes, cpIndex }
-  vouchers: [],                   // { voucherId, partnerId, partnerName, rewardId, rewardTitle, expiresAt, status, verifyUrl, cpIndex, tier }
-  lootOptionsByCheckpoint: {}     // { [cpIndex]: [rewardId, rewardId, rewardId] }
+  rewardsUnlocked: [],  // historik (bakgrund)
+  vouchers: [],         // { voucherId, partnerId, partnerName, rewardId, rewardTitle, expiresAt, status, verifyUrl, cpIndex, tier }
+  pickCache: {}         // { [seedKey]: picks[] } (in-memory, ingen storage)
 };
 
-// AO 1/3 demo catalog (12–20 rewards)
-const partnerRewardsCatalog = [
-  { partnerId: 'p1', partnerName: 'Café Nova',      rewardId: 'r1',  rewardTitle: 'Gratis saft',           rewardShort: 'En liten saft i kassan.',       tier: 'cp',    expiresMinutes: 120 },
-  { partnerId: 'p1', partnerName: 'Café Nova',      rewardId: 'r2',  rewardTitle: 'Kanelbulle -30%',       rewardShort: 'Rabatt på en bulle.',          tier: 'cp',    expiresMinutes: 120 },
-  { partnerId: 'p2', partnerName: 'Glasspiraten',   rewardId: 'r3',  rewardTitle: 'Strösselbonus',         rewardShort: 'Extra strössel på glassen.',   tier: 'cp',    expiresMinutes: 120 },
-  { partnerId: 'p2', partnerName: 'Glasspiraten',   rewardId: 'r4',  rewardTitle: 'Mini-glass',            rewardShort: 'En mini-glass (MVP).',         tier: 'cp',    expiresMinutes: 120 },
-  { partnerId: 'p3', partnerName: 'Bokhörnan',      rewardId: 'r5',  rewardTitle: 'Mysterie-klistermärke', rewardShort:'Välj 1 av 3 stickers.',          tier: 'cp',    expiresMinutes: 120 },
-  { partnerId: 'p3', partnerName: 'Bokhörnan',      rewardId: 'r6',  rewardTitle: 'Bokmärke',              rewardShort: 'Ett bokmärke i disken.',       tier: 'cp',    expiresMinutes: 120 },
-  { partnerId: 'p4', partnerName: 'SportZonen',     rewardId: 'r7',  rewardTitle: 'Vatten -20%',           rewardShort: 'Rabatt på vattenflaska.',      tier: 'cp',    expiresMinutes: 120 },
-  { partnerId: 'p4', partnerName: 'SportZonen',     rewardId: 'r8',  rewardTitle: 'Power high-five',       rewardShort: 'Ett hemligt handslag (lol).',  tier: 'cp',    expiresMinutes: 120 },
-  { partnerId: 'p5', partnerName: 'Pizzaplaneten',  rewardId: 'r9',  rewardTitle: 'Extra topping',         rewardShort: 'En extra topping (MVP).',      tier: 'cp',    expiresMinutes: 120 },
-  { partnerId: 'p5', partnerName: 'Pizzaplaneten',  rewardId: 'r10', rewardTitle: 'Dipp',                 rewardShort: 'Valfri dipp i kassan.',        tier: 'cp',    expiresMinutes: 120 },
-
-  // Final-tier (skattkista)
-  { partnerId: 'pf', partnerName: 'Skattkistan',    rewardId: 'f1',  rewardTitle: 'Stjärnmynt',            rewardShort: 'FINAL-belöning (MVP).',        tier: 'final', expiresMinutes: 720 },
-  { partnerId: 'pf', partnerName: 'Skattkistan',    rewardId: 'f2',  rewardTitle: 'Guldbadge',             rewardShort: 'FINAL-belöning (MVP).',        tier: 'final', expiresMinutes: 720 },
-  { partnerId: 'pf', partnerName: 'Skattkistan',    rewardId: 'f3',  rewardTitle: 'Hemlig kod',            rewardShort: 'FINAL-belöning (MVP).',        tier: 'final', expiresMinutes: 720 },
-  { partnerId: 'pf', partnerName: 'Skattkistan',    rewardId: 'f4',  rewardTitle: 'Superbonus',            rewardShort: 'FINAL-belöning (MVP).',        tier: 'final', expiresMinutes: 720 }
-];
-
-function byRewardId(id) {
-  const rid = asText(id);
-  if (!rid) return null;
-  return partnerRewardsCatalog.find((r) => asText(r.rewardId) === rid) || null;
-}
-
 /* ============================================================
-   BLOCK 10.2 — Deterministic “random” (seed -> rng)
-============================================================ */
-function seedToUint32(seedStr) {
-  const s = (seedStr ?? '').toString();
-  let h = 5381;
-  for (let i = 0; i < s.length; i++) {
-    h = ((h << 5) + h) + s.charCodeAt(i);
-    h = h >>> 0;
-  }
-  return h >>> 0;
-}
-
-function mulberry32(seed) {
-  let a = (seed >>> 0);
-  return function rng() {
-    a |= 0;
-    a = (a + 0x6D2B79F5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-function pickUnique3(list, rng) {
-  const arr = Array.isArray(list) ? list.slice() : [];
-  if (arr.length <= 3) return arr.slice(0, 3);
-
-  for (let i = arr.length - 1; i > 0; i--) {
-    const j = Math.floor(rng() * (i + 1));
-    const tmp = arr[i];
-    arr[i] = arr[j];
-    arr[j] = tmp;
-  }
-  return arr.slice(0, 3);
-}
-
-function computeLootOptionsForCheckpoint(cpIndex, tier) {
-  const idx = Number(cpIndex);
-  const t = (tier === 'final') ? 'final' : 'cp';
-
-  const cached = state.lootOptionsByCheckpoint[String(idx)];
-  if (Array.isArray(cached) && cached.length === 3) return cached.slice(0, 3);
-
-  const urlId = asText(qsGet('id'));
-  const gameId = urlId || payloadFingerprint || asText(elName?.textContent) || 'game';
-  const seedStr = `${gameId}::${idx}::${t}`;
-
-  let rng = null;
-  try {
-    const seed = seedToUint32(seedStr);
-    rng = mulberry32(seed);
-  } catch (_) {
-    rng = null;
-  }
-
-  const tierPool = partnerRewardsCatalog.filter((r) => asText(r.tier) === t);
-  const pool = (tierPool.length >= 3) ? tierPool : partnerRewardsCatalog.slice();
-
-  const rand = rng || (() => Math.random());
-
-  const picked = pickUnique3(pool, rand)
-    .map((r) => asText(r.rewardId))
-    .filter((x) => !!x);
-
-  const uniq = [];
-  for (const id of picked) {
-    if (!uniq.includes(id)) uniq.push(id);
-    if (uniq.length === 3) break;
-  }
-  if (uniq.length < 3) {
-    for (const r of pool) {
-      const id = asText(r.rewardId);
-      if (!id) continue;
-      if (uniq.includes(id)) continue;
-      uniq.push(id);
-      if (uniq.length === 3) break;
-    }
-  }
-  if (uniq.length < 3) {
-    for (const r of partnerRewardsCatalog) {
-      const id = asText(r.rewardId);
-      if (!id) continue;
-      if (uniq.includes(id)) continue;
-      uniq.push(id);
-      if (uniq.length === 3) break;
-    }
-  }
-
-  state.lootOptionsByCheckpoint[String(idx)] = uniq.slice(0, 3);
-  return uniq.slice(0, 3);
-}
-
-/* ============================================================
-   BLOCK 10.3 — AO 3/3: Base url (subpath-safe) + verify url + QR
+   BLOCK 10.2 — Base url (subpath-safe) + verify url + QR
 ============================================================ */
 function currentBaseUrl() {
-  // party.html ligger i /pages/party.html → base = repo-root
   try {
     const u = new URL(window.location.href);
     u.hash = '';
@@ -852,17 +731,34 @@ function buildVerifyUrl(voucherId, partnerId) {
 }
 
 function buildQrUrl(dataUrl, sizePx = 220) {
-  // enkel QR via qrserver (ingen lib)
   const s = Math.max(120, Math.min(320, Number(sizePx) || 220));
   const encoded = encodeURIComponent(dataUrl);
   return `https://api.qrserver.com/v1/create-qr-code/?size=${s}x${s}&data=${encoded}`;
 }
 
 /* ============================================================
-   BLOCK 10.4 — AO 3/3: Voucher API calls (KRAV 1/2/4)
+   BLOCK 10.3 — Voucher API calls (AO 3/3 + AO 5/6)
 ============================================================ */
-async function apiCreateVoucher(payload) {
-  const url = `${VOUCHER_API_BASE.replace(/\/$/, '')}/vouchers/create`;
+async function apiGetVoucher(voucherId) {
+  const url = `${VOUCHER_API_BASE.replace(/\/$/, '')}/vouchers/${encodeURIComponent(asText(voucherId))}`;
+  const res = await fetch(url, { method: 'GET' });
+  const data = await res.json().catch(() => null);
+  return { ok: res.ok, status: res.status, data };
+}
+
+async function apiPick3({ tier, seed, partnerPool }) {
+  const base = VOUCHER_API_BASE.replace(/\/$/, '');
+  const u = new URL(`${base}/rewards/pick3`);
+  if (tier) u.searchParams.set('tier', asText(tier));
+  if (seed) u.searchParams.set('seed', asText(seed));
+  if (partnerPool) u.searchParams.set('partnerPool', asText(partnerPool));
+  const res = await fetch(u.toString(), { method: 'GET' });
+  const data = await res.json().catch(() => null);
+  return { ok: res.ok, status: res.status, data };
+}
+
+async function apiClaimVoucher(payload) {
+  const url = `${VOUCHER_API_BASE.replace(/\/$/, '')}/vouchers/claim`;
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -872,16 +768,8 @@ async function apiCreateVoucher(payload) {
   return { ok: res.ok, status: res.status, data };
 }
 
-async function apiGetVoucher(voucherId) {
-  const url = `${VOUCHER_API_BASE.replace(/\/$/, '')}/vouchers/${encodeURIComponent(asText(voucherId))}`;
-  const res = await fetch(url, { method: 'GET' });
-  const data = await res.json().catch(() => null);
-  return { ok: res.ok, status: res.status, data };
-}
-
 /* ============================================================
-   BLOCK 10.5 — Rewards list render (AO 3/3)
-   - Varje rad: status badge + Visa-knapp
+   BLOCK 10.4 — Rewards list render
 ============================================================ */
 function statusLabel(status) {
   const s = asText(status);
@@ -897,6 +785,17 @@ function statusClass(status) {
   if (s === 'expired') return 'badge badge--expired';
   if (s === 'valid') return 'badge badge--valid';
   return 'badge badge--neutral';
+}
+
+function formatTime(ms) {
+  const n = Number(ms);
+  if (!Number.isFinite(n) || n <= 0) return '—';
+  try {
+    const d = new Date(n);
+    return d.toLocaleString('sv-SE', { year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' });
+  } catch (_) {
+    return String(n);
+  }
 }
 
 function renderRewardsPanel() {
@@ -967,7 +866,7 @@ function renderRewardsPanel() {
 }
 
 /* ============================================================
-   BLOCK 10.6 — AO 3/3: Voucher modal (KRAV 3/4/7)
+   BLOCK 10.5 — Voucher modal
 ============================================================ */
 let activeVoucherRef = null;
 
@@ -1006,17 +905,6 @@ function setVoucherBadge(status) {
   elVoucherStatusBadge.textContent = statusLabel(s);
 }
 
-function formatTime(ms) {
-  const n = Number(ms);
-  if (!Number.isFinite(n) || n <= 0) return '—';
-  try {
-    const d = new Date(n);
-    return d.toLocaleString('sv-SE', { year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' });
-  } catch (_) {
-    return String(n);
-  }
-}
-
 async function refreshVoucherStatus(v) {
   const voucherId = asText(v?.voucherId);
   if (!voucherId) return false;
@@ -1031,7 +919,6 @@ async function refreshVoucherStatus(v) {
     const status = asText(out.data.voucher.status);
     const expiresAt = Number(out.data.voucher.expiresAt) || 0;
 
-    // uppdatera i state (in-memory)
     for (let i = 0; i < state.vouchers.length; i++) {
       if (asText(state.vouchers[i]?.voucherId) === voucherId) {
         state.vouchers[i].status = status || state.vouchers[i].status;
@@ -1039,7 +926,6 @@ async function refreshVoucherStatus(v) {
       }
     }
 
-    // uppdatera modal om den visar samma voucher
     if (activeVoucherRef && asText(activeVoucherRef.voucherId) === voucherId) {
       activeVoucherRef.status = status || activeVoucherRef.status;
       if (expiresAt) activeVoucherRef.expiresAt = expiresAt;
@@ -1114,7 +1000,6 @@ function bindVoucherModalStaticEvents() {
         await navigator.clipboard.writeText(link);
         toast('Länk kopierad', 'success', 1000);
       } catch (_) {
-        // fail-soft fallback
         try {
           elVoucherLinkInput.focus();
           elVoucherLinkInput.select();
@@ -1154,7 +1039,7 @@ function bindVoucherModalStaticEvents() {
 }
 
 /* ============================================================
-   BLOCK 10.7 — Loot modal UI (open/close + render)
+   BLOCK 10.6 — Loot modal UI
 ============================================================ */
 function lootDomOk() {
   return !!(elLootOverlay && elLootCards && elLootSkip);
@@ -1174,35 +1059,52 @@ function closeLootModal() {
   try { if (elLootCards) elLootCards.innerHTML = ''; } catch (_) {}
 }
 
-function renderLootCards(rewardIds, onPick, isFinalLoot) {
+function renderLootLoading(message) {
+  if (!elLootCards) return;
+  try { elLootCards.innerHTML = ''; } catch (_) {}
+  const div = document.createElement('div');
+  div.className = 'muted small';
+  div.style.padding = '10px';
+  div.textContent = message || 'Laddar belöningar…';
+  elLootCards.appendChild(div);
+}
+
+function buildRewardShortFromPick(p) {
+  const type = asText(p?.type);
+  const valueText = asText(p?.valueText);
+  if (!type && !valueText) return '';
+  if (!valueText) return type;
+  return `${type}: ${valueText}`;
+}
+
+function renderLootCardsFromPicks(picks, onPick, isFinalLoot) {
   if (!elLootCards) return false;
 
   try { elLootCards.innerHTML = ''; } catch (_) {}
 
-  const ids = Array.isArray(rewardIds) ? rewardIds : [];
-  for (let i = 0; i < ids.length; i++) {
-    const rid = ids[i];
-    const r = byRewardId(rid);
-    if (!r) continue;
+  const list = Array.isArray(picks) ? picks : [];
+  for (let i = 0; i < list.length; i++) {
+    const r = list[i] || {};
+    const rewardId = asText(r.rewardId);
+    if (!rewardId) continue;
 
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'lootCardBtn';
     btn.setAttribute('role', 'listitem');
-    btn.setAttribute('data-reward-id', asText(r.rewardId));
+    btn.setAttribute('data-reward-id', rewardId);
 
     const partner = document.createElement('div');
     partner.className = 'lootCardPartner';
-    partner.textContent = asText(r.partnerName) || 'Partner';
+    partner.textContent = asText(r.partnerName) || asText(r.partnerId) || 'Partner';
 
     const title = document.createElement('div');
     title.className = 'lootCardTitle';
 
-    // AO 3/3: FINAL badge (KRAV 5)
     const titleText = document.createElement('span');
-    titleText.textContent = asText(r.rewardTitle) || 'Belöning';
-
+    titleText.textContent = asText(r.title) || rewardId;
     title.appendChild(titleText);
+
     if (isFinalLoot || asText(r.tier) === 'final') {
       const pill = document.createElement('span');
       pill.className = 'lootFinalPill';
@@ -1212,17 +1114,26 @@ function renderLootCards(rewardIds, onPick, isFinalLoot) {
 
     const short = document.createElement('div');
     short.className = 'lootCardShort muted small';
-    short.textContent = asText(r.rewardShort) || '';
+    short.textContent = buildRewardShortFromPick(r);
 
     btn.appendChild(partner);
     btn.appendChild(title);
-    if (asText(r.rewardShort)) btn.appendChild(short);
+    if (short.textContent) btn.appendChild(short);
 
     btn.addEventListener('click', () => {
       try { onPick?.(r); } catch (_) {}
     });
 
     elLootCards.appendChild(btn);
+  }
+
+  // fail-soft: om inget kunde renderas
+  if (!elLootCards.children.length) {
+    const div = document.createElement('div');
+    div.className = 'muted small';
+    div.style.padding = '10px';
+    div.textContent = 'Inga belöningar tillgängliga just nu.';
+    elLootCards.appendChild(div);
   }
 
   return true;
@@ -1246,52 +1157,80 @@ function bindLootModalStaticEvents() {
 }
 
 /* ============================================================
-   BLOCK 10.8 — AO 3/3 Trigger: loot pick -> voucher create -> add to list
+   BLOCK 10.7 — AO 5/6: Loot -> pick3 -> claim (stock--) -> voucher
 ============================================================ */
 let lootInProgress = false;
 
-async function createVoucherForReward({ gameId, checkpointIndex, reward }) {
-  const r = reward || {};
-  const tier = asText(r.tier) === 'final' ? 'final' : 'cp';
+function getGameIdForSeed() {
+  const urlId = asText(qsGet('id'));
+  return urlId || payloadFingerprint || 'demo';
+}
 
-  // TTL: reward.expiresMinutes eller default cp=120, final=720
-  const ttl = Number.isFinite(Number(r.expiresMinutes))
-    ? Number(r.expiresMinutes)
-    : (tier === 'final' ? 720 : 120);
+function makeSeed(gameId, checkpointIndex, tier, salt = '') {
+  const t = (asText(tier) === 'final') ? 'final' : 'cp';
+  const base = `${asText(gameId)}:${Number(checkpointIndex) || 0}:${t}`;
+  return salt ? `${base}:${asText(salt)}` : base;
+}
 
+async function fetchPick3FailSoft({ tier, seed, partnerPool }) {
+  const cacheKey = `${asText(tier)}::${asText(seed)}::${asText(partnerPool)}`;
+  if (state.pickCache[cacheKey]) return state.pickCache[cacheKey];
+
+  const out = await apiPick3({ tier, seed, partnerPool });
+  if (!out.ok || !out.data || out.data.ok !== true) return null;
+
+  const picks = Array.isArray(out.data.picks) ? out.data.picks : [];
+  // cache i minnet (ingen storage)
+  state.pickCache[cacheKey] = picks;
+  return picks;
+}
+
+async function claimVoucherForReward({ gameId, checkpointIndex, rewardId }) {
   const payload = {
     gameId: asText(gameId) || 'demo',
     checkpointIndex: Number.isFinite(Number(checkpointIndex)) ? Number(checkpointIndex) : 0,
-    partnerId: asText(r.partnerId),
-    rewardId: asText(r.rewardId),
-    ttlMinutes: clampInt(ttl, 1, 60 * 24 * 30)
+    rewardId: asText(rewardId)
   };
 
-  // validation fail-closed
-  if (!payload.partnerId || !payload.rewardId) {
-    return { ok: false, error: 'bad_reward' };
+  if (!payload.gameId || !payload.rewardId) {
+    return { ok: false, error: 'bad_request' };
   }
 
   try {
-    const out = await apiCreateVoucher(payload);
-    if (!out.ok || !out.data || out.data.ok !== true || !out.data.voucherId) {
-      return { ok: false, error: (out.data && out.data.error) ? out.data.error : 'api_error' };
+    const out = await apiClaimVoucher(payload);
+    const data = out.data || null;
+
+    if (out.ok && data && data.ok === true && data.voucherId) {
+      return { ok: true, data };
     }
 
-    const voucherId = asText(out.data.voucherId);
-    const expiresAt = Number(out.data.expiresAt) || 0;
+    // out_of_stock
+    if (out.status === 409 && data && asText(data.error) === 'out_of_stock') {
+      return { ok: false, error: 'out_of_stock' };
+    }
 
-    return {
-      ok: true,
-      voucher: {
-        voucherId,
-        expiresAt,
-        status: 'valid'
-      }
-    };
+    // not_found
+    if (out.status === 404) {
+      return { ok: false, error: 'not_found' };
+    }
+
+    // bad request
+    if (out.status === 400) {
+      return { ok: false, error: 'bad_request' };
+    }
+
+    return { ok: false, error: 'api_error' };
   } catch (_) {
     return { ok: false, error: 'network_error' };
   }
+}
+
+function pushVoucherToState(vObj) {
+  const voucherId = asText(vObj?.voucherId);
+  if (!voucherId) return false;
+  const exists = state.vouchers.some((x) => asText(x?.voucherId) === voucherId);
+  if (!exists) state.vouchers.push(vObj);
+  return true;
 }
 
 function triggerLootAfterCheckpoint(cpIndex, isFinal, onDone) {
@@ -1303,9 +1242,6 @@ function triggerLootAfterCheckpoint(cpIndex, isFinal, onDone) {
 
   if (lootInProgress) return;
   lootInProgress = true;
-
-  const tier = isFinal ? 'final' : 'cp';
-  const options = computeLootOptionsForCheckpoint(cpIndex, tier);
 
   const finish = () => {
     lootInProgress = false;
@@ -1325,86 +1261,133 @@ function triggerLootAfterCheckpoint(cpIndex, isFinal, onDone) {
     return;
   }
 
-  renderLootCards(options, async (reward) => {
-    const r = reward || {};
+  const tier = isFinal ? 'final' : 'cp';
+  const gameId = getGameIdForSeed();
+  const partnerPool = ''; // optional i framtiden (galleria-zon). tom = alla.
 
-    // logga valet i rewardsUnlocked (bakgrund)
-    const rewardItem = {
-      partnerId: asText(r.partnerId),
-      partnerName: asText(r.partnerName),
-      rewardId: asText(r.rewardId),
-      rewardTitle: asText(r.rewardTitle),
-      rewardShort: asText(r.rewardShort),
-      tier: asText(r.tier),
-      expiresMinutes: Number.isFinite(Number(r.expiresMinutes)) ? Number(r.expiresMinutes) : 0,
-      cpIndex: Number(cpIndex)
-    };
-    const dupReward = state.rewardsUnlocked.some((x) => asText(x?.rewardId) === rewardItem.rewardId && Number(x?.cpIndex) === rewardItem.cpIndex);
-    if (!dupReward) state.rewardsUnlocked.push(rewardItem);
+  let retry = 0;
+  const maxRetries = 3;
 
-    // AO 3/3: skapa voucher via API (fail-closed: ingen crash)
-    const urlId = asText(qsGet('id'));
-    const gameId = urlId || payloadFingerprint || 'demo';
+  const loadAndRender = async (salt) => {
+    const seed = makeSeed(gameId, cpIndex, tier, salt);
+    renderLootLoading('Laddar belöningar…');
 
-    toast('Skapar voucher…', 'info', 1100);
+    let picks = null;
+    try {
+      picks = await fetchPick3FailSoft({ tier, seed, partnerPool });
+    } catch (_) {
+      picks = null;
+    }
 
-    const created = await createVoucherForReward({
-      gameId,
-      checkpointIndex: Number(cpIndex),
-      reward: r
-    });
+    if (!picks) {
+      toast('Belöningar kunde inte hämtas', 'warn', 1600);
+      finish(); // fail-soft: fortsätt spel utan loot
+      return;
+    }
 
-    if (!created.ok || !created.voucher) {
-      toast('API offline — belöning sparad utan voucher', 'warn', 1800);
-
-      // spara ändå något i listan, men utan Visa
-      const fallbackVoucher = {
-        voucherId: '',
-        partnerId: asText(r.partnerId),
-        partnerName: asText(r.partnerName),
-        rewardId: asText(r.rewardId),
-        rewardTitle: asText(r.rewardTitle),
-        expiresAt: 0,
-        status: '—',
-        verifyUrl: '',
-        cpIndex: Number(cpIndex),
-        tier: asText(r.tier)
-      };
-      state.vouchers.push(fallbackVoucher);
-      renderRewardsPanel();
+    // fail-soft: 0–3 picks
+    if (!Array.isArray(picks) || picks.length === 0) {
+      toast('Inga belöningar tillgängliga', 'warn', 1600);
       finish();
       return;
     }
 
-    const voucherId = asText(created.voucher.voucherId);
-    const expiresAt = Number(created.voucher.expiresAt) || 0;
-    const verifyUrl = buildVerifyUrl(voucherId, asText(r.partnerId));
+    renderLootCardsFromPicks(picks, async (pick) => {
+      const rewardId = asText(pick?.rewardId);
+      if (!rewardId) {
+        toast('Ogiltig belöning', 'warn', 1200);
+        return;
+      }
 
-    const vObj = {
-      voucherId,
-      partnerId: asText(r.partnerId),
-      partnerName: asText(r.partnerName),
-      rewardId: asText(r.rewardId),
-      rewardTitle: asText(r.rewardTitle),
-      expiresAt,
-      status: 'valid',
-      verifyUrl,
-      cpIndex: Number(cpIndex),
-      tier: asText(r.tier)
-    };
+      toast('Reserverar belöning…', 'info', 1100);
 
-    // dedupe per checkpoint (om dubbelklick)
-    const exists = state.vouchers.some((x) => asText(x?.voucherId) === voucherId);
-    if (!exists) state.vouchers.push(vObj);
+      const claimed = await claimVoucherForReward({
+        gameId,
+        checkpointIndex: Number(cpIndex),
+        rewardId
+      });
 
-    renderRewardsPanel();
-    toast('Voucher skapad', 'success', 1200);
+      if (claimed.ok && claimed.data) {
+        const d = claimed.data;
 
-    // auto-öppna voucher-modal så spelaren ser QR direkt
-    openVoucherModal(vObj, { refresh: false });
+        const voucherId = asText(d.voucherId);
+        const partnerId = asText(d.partnerId);
+        const partnerName = asText(d.partnerName);
+        const rewardTitle = asText(d.rewardTitle);
+        const expiresAt = Number(d.expiresAt) || 0;
+        const status = asText(d.status) || 'valid';
 
-    finish();
-  }, isFinal);
+        const verifyUrl = buildVerifyUrl(voucherId, partnerId);
+
+        // logga valet i rewardsUnlocked (bakgrund)
+        const rewardItem = {
+          partnerId,
+          partnerName,
+          rewardId: asText(d.rewardId) || rewardId,
+          rewardTitle,
+          rewardShort: buildRewardShortFromPick(pick),
+          tier: asText(pick?.tier) || tier,
+          expiresMinutes: 0,
+          cpIndex: Number(cpIndex)
+        };
+        state.rewardsUnlocked.push(rewardItem);
+
+        const vObj = {
+          voucherId,
+          partnerId,
+          partnerName,
+          rewardId: asText(d.rewardId) || rewardId,
+          rewardTitle,
+          expiresAt,
+          status: status === 'redeemed' ? 'redeemed' : status === 'expired' ? 'expired' : 'valid',
+          verifyUrl,
+          cpIndex: Number(cpIndex),
+          tier: asText(pick?.tier) || tier
+        };
+
+        pushVoucherToState(vObj);
+        renderRewardsPanel();
+        toast('Voucher skapad', 'success', 1200);
+
+        // visa QR direkt
+        openVoucherModal(vObj, { refresh: false });
+
+        finish();
+        return;
+      }
+
+      if (claimed.error === 'out_of_stock') {
+        toast('Slut – välj en annan', 'warn', 1600);
+        retry += 1;
+        if (retry > maxRetries) {
+          toast('För många försök. Hoppa över belöning.', 'warn', 1800);
+          finish();
+          return;
+        }
+        // ny pick3 med seed salt (retry1..)
+        loadAndRender(`retry${retry}`);
+        return;
+      }
+
+      if (claimed.error === 'not_found') {
+        toast('Belöning finns inte längre', 'warn', 1600);
+        retry += 1;
+        if (retry > maxRetries) {
+          finish();
+          return;
+        }
+        loadAndRender(`retry${retry}`);
+        return;
+      }
+
+      // network/api error => fail-soft
+      toast('API offline — hoppar över belöning', 'warn', 1800);
+      finish();
+    }, isFinal);
+  };
+
+  // start initial load
+  loadAndRender('');
 }
 
 /* ============================================================
@@ -1425,7 +1408,7 @@ function triggerLootAfterCheckpoint(cpIndex, isFinal, onDone) {
 
   bindViewToggle();
   bindLootModalStaticEvents();
-  bindVoucherModalStaticEvents(); // AO 3/3
+  bindVoucherModalStaticEvents();
 
   const mode = qsGet('mode');
   const payloadRaw = qsGet('payload');
@@ -1463,7 +1446,6 @@ function triggerLootAfterCheckpoint(cpIndex, isFinal, onDone) {
   checkpoints = buildCheckpointsFromPayload(payload);
   setText(elName, payload.name || 'Skattjakt');
 
-  // init rewards panel (AO 3/3)
   renderRewardsPanel();
 
   // Map init (fail-soft)
@@ -1546,7 +1528,7 @@ function triggerLootAfterCheckpoint(cpIndex, isFinal, onDone) {
       const cpIndex = Number(cp.index);
       const isFinal = (cp.isFinal === true);
 
-      // AO 3/3: loot -> voucher -> sedan checkpoint clear
+      // AO 5/6: loot -> pick3 -> claim -> sedan checkpoint clear
       triggerLootAfterCheckpoint(cpIndex, isFinal, () => {
         onCheckpointApproved();
       });
