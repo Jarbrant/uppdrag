@@ -16,7 +16,7 @@ export function initAdminExport(api) {
     setPillState,
     scheduleSave,
     renderAllFULL,
-    onFillRandomCodes,     // () => number changed
+    onFillRandomCodes,     // () => number
     onPublishToLibrary,    // () => void
     elPreviewList,         // DOM node
   } = api || {};
@@ -42,6 +42,11 @@ export function initAdminExport(api) {
       'rgba(255,255,255,.85)';
   }
 
+  function setExportLinkValue(value) {
+    if (!elExportLink) return;
+    elExportLink.value = value || '';
+  }
+
   function selectAll(el) {
     if (!el) return;
     try {
@@ -59,8 +64,8 @@ export function initAdminExport(api) {
       return { ok: false, reason: 'too-large', encodedLength: encoded.length };
     }
 
-    // Behåll exakt samma beteende som tidigare admin.js:
-    // payload param får already-encoded sträng (safeDecodePayload i party-map.js klarar dubbel decode)
+    // Behåller tidigare beteende:
+    // payload param får already-encoded sträng (party-map.js klarar dubbel decode)
     const url = new URL('party.html', window.location.href);
     url.searchParams.set('mode', 'party');
     url.searchParams.set('payload', encoded);
@@ -95,12 +100,12 @@ export function initAdminExport(api) {
     const built = buildParticipantLinkOrFail();
     if (!built.ok) {
       setExportMessage('Payload för stor att dela som länk. Använd KOPIERA JSON istället.', 'danger');
-      if (elExportLink) elExportLink.value = '';
+      setExportLinkValue('');
       selectAll(elExportJSON);
       return;
     }
 
-    if (elExportLink) elExportLink.value = built.url;
+    setExportLinkValue(built.url);
 
     const res = await copyToClipboard(built.url);
     if (res && res.ok) { setExportMessage('Länk kopierad (startar deltagarvyn).', 'info'); return; }
@@ -244,7 +249,7 @@ export function initAdminExport(api) {
 
     elExportRoot = card;
 
-    // Förifyll
+    // Förifyll JSON
     try { if (elExportJSON) elExportJSON.value = getDraftJSON({ pretty: true }); } catch (_) {}
   }
 
@@ -293,7 +298,7 @@ export function initAdminExport(api) {
     const baseUrl = new URL(built.url);
     const payloadEncoded = built.payloadEncoded;
 
-    const d = getDraft();
+    const d = getDraft?.() || {};
     const count = clampInt(d?.checkpointCount ?? 0, 1, 20);
 
     for (let i = 0; i < count; i++) {
@@ -371,5 +376,6 @@ export function initAdminExport(api) {
     ensureExportPanel,
     renderQRPanelDebounced,
     setExportMessage,
+    setExportLinkValue,
   };
 }
