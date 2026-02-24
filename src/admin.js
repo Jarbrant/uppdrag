@@ -317,7 +317,7 @@ function tryLoadFromLibraryOnBoot() {
   const id = qsGet('load'); // HOOK: qs-load-library
   if (!id) return false;
 
-  const entry = findLibraryEntry(id);
+  const entry = findLibraryEntryLocal(id);
   if (!entry || typeof entry.payloadJSON !== 'string') {
     showStatus('Kunde inte hitta den sparade kartan (load-id).', 'warn');
     return false;
