@@ -13,7 +13,6 @@ import { readLibrary, findLibraryEntry, upsertLibraryEntry, deleteLibraryEntry }
    BLOCK 1 — Storage key + draft shape (state/draft)
 ============================================================ */
 const DRAFT_KEY = 'PARTY_DRAFT_V1';      // HOOK: draft-storage-key (stabil)
-const LIB_KEY = 'PARTY_LIBRARY_V1';      // HOOK: library-storage-key (stabil)
 
 /* ============================================================
    BLOCK 2 — DOM hooks (UI)
