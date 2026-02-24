@@ -1,6 +1,10 @@
 /* ============================================================
  * FIL: worker/index.js (HEL FIL)
  * AO 1/6 — Worker + D1: Partners + Invites + Rewards + pick3
+ * Litet AO (PATCH): Admin GET endpoints för dashboard:
+ *   - GET /admin/partners/list
+ *   - GET /admin/rewards/stats
+ *   - GET /admin/rewards/list?partnerId=<optional>
  *
  * Bindings (env):
  *   - DB (D1 binding)
@@ -12,6 +16,9 @@
  *   Admin (X-ADMIN-KEY):
  *     POST /admin/partners/create
  *     POST /admin/partners/invite
+ *     GET  /admin/partners/list
+ *     GET  /admin/rewards/stats
+ *     GET  /admin/rewards/list?partnerId=<optional>
  *
  *   Partner invite flow:
  *     POST /partners/set-pin      { inviteToken, pin }
@@ -265,6 +272,91 @@ async function adminInvitePartner(req, env) {
   return { status: 200, body: { ok: true, inviteToken, expiresAt } };
 }
 
+/* ============================================================
+ * BLOCK 6.1 — Admin GET: partners list (NY)
+ * GET /admin/partners/list
+ * Output: { ok:true, partners:[{partnerId,name,isActive,createdAt,hasPin}] }
+ * ============================================================ */
+async function adminPartnersList(env) {
+  const out = await env.DB
+    .prepare(`SELECT partnerId, name, isActive, createdAt,
+                     CASE WHEN pinHash IS NULL OR pinHash = '' THEN 0 ELSE 1 END AS hasPin
+              FROM partners
+              ORDER BY createdAt DESC`)
+    .all();
+
+  return { status: 200, body: { ok: true, partners: out.results || [] } };
+}
+
+/* ============================================================
+ * BLOCK 6.2 — Admin GET: rewards stats (NY)
+ * GET /admin/rewards/stats
+ * Output:
+ * {
+ *   ok:true,
+ *   partners:{ total, active },
+ *   rewards:{ total, active, inStock, outOfStock, cpTotal, finalTotal }
+ * }
+ * ============================================================ */
+async function adminRewardsStats(env) {
+  const partnersTotal = await env.DB.prepare('SELECT COUNT(1) AS n FROM partners').first();
+  const partnersActive = await env.DB.prepare('SELECT COUNT(1) AS n FROM partners WHERE isActive = 1').first();
+
+  const rewardsTotal = await env.DB.prepare('SELECT COUNT(1) AS n FROM rewards').first();
+  const rewardsActive = await env.DB.prepare('SELECT COUNT(1) AS n FROM rewards WHERE isActive = 1').first();
+  const rewardsInStock = await env.DB.prepare('SELECT COUNT(1) AS n FROM rewards WHERE stock > 0').first();
+  const rewardsOutStock = await env.DB.prepare('SELECT COUNT(1) AS n FROM rewards WHERE stock <= 0').first();
+
+  const rewardsCp = await env.DB.prepare("SELECT COUNT(1) AS n FROM rewards WHERE tier = 'cp'").first();
+  const rewardsFinal = await env.DB.prepare("SELECT COUNT(1) AS n FROM rewards WHERE tier = 'final'").first();
+
+  return {
+    status: 200,
+    body: {
+      ok: true,
+      partners: {
+        total: Number(partnersTotal?.n) || 0,
+        active: Number(partnersActive?.n) || 0
+      },
+      rewards: {
+        total: Number(rewardsTotal?.n) || 0,
+        active: Number(rewardsActive?.n) || 0,
+        inStock: Number(rewardsInStock?.n) || 0,
+        outOfStock: Number(rewardsOutStock?.n) || 0,
+        cpTotal: Number(rewardsCp?.n) || 0,
+        finalTotal: Number(rewardsFinal?.n) || 0
+      }
+    }
+  };
+}
+
+/* ============================================================
+ * BLOCK 6.3 — Admin GET: rewards list (NY, optional men nyttig)
+ * GET /admin/rewards/list?partnerId=<optional>
+ * Output: { ok:true, rewards:[...] }
+ * ============================================================ */
+async function adminRewardsList(env, url) {
+  const partnerId = asText(url.searchParams.get('partnerId'));
+
+  if (partnerId && partnerId.length > 80) {
+    return { status: 400, body: { ok: false, error: 'bad_request' } };
+  }
+
+  let sql = `SELECT rewardId, partnerId, title, type, valueText, stock, ttlMinutes, tier, isActive, createdAt, updatedAt
+             FROM rewards`;
+  const binds = [];
+
+  if (partnerId) {
+    sql += ' WHERE partnerId = ?';
+    binds.push(partnerId);
+  }
+
+  sql += ' ORDER BY updatedAt DESC';
+
+  const out = await env.DB.prepare(sql).bind(...binds).all();
+  return { status: 200, body: { ok: true, rewards: out.results || [] } };
+}
+
 async function partnerSetPin(req, env) {
   const parsed = await readJson(req);
   if (!parsed.ok || !isPlainObject(parsed.value)) return { status: 400, body: { ok: false, error: 'bad_request' } };
@@ -458,11 +550,9 @@ async function rewardsPick3(req, env, url) {
   let partnerIds = [];
   if (pool) {
     partnerIds = pool.split(',').map((s) => s.trim()).filter(Boolean);
-    // fail-closed: för många
     if (partnerIds.length > 50) return { status: 400, body: { ok: false, error: 'bad_request' } };
   }
 
-  // SQL: isActive=1 och stock>0 + tier
   let sql = `
     SELECT r.rewardId, r.partnerId, p.name AS partnerName, r.title, r.type, r.valueText, r.ttlMinutes, r.tier
     FROM rewards r
@@ -480,10 +570,7 @@ async function rewardsPick3(req, env, url) {
   const rows = await env.DB.prepare(sql).bind(...binds).all();
   const all = rows.results || [];
 
-  if (all.length < 3) {
-    // fail-closed: om katalogen inte kan ge 3 -> 404 (eller 200 med färre? men KRAV säger alltid 3)
-    return { status: 404, body: { ok: false, error: 'not_found' } };
-  }
+  if (all.length < 3) return { status: 404, body: { ok: false, error: 'not_found' } };
 
   const rng = seed ? mulberry32(seedToUint32(seed)) : (() => Math.random());
   const picks = pick3Unique(all, rng);
@@ -520,7 +607,9 @@ export default {
     const { url, path, method } = route(req);
 
     try {
-      // Admin auth
+      // ======================================================
+      // Admin endpoints
+      // ======================================================
       if (path === '/admin/partners/create' && method === 'POST') {
         if (!requireAdmin(req, env)) return json({ ok: false, error: 'forbidden' }, 403, cors);
         const out = await adminCreatePartner(req, env);
@@ -533,13 +622,38 @@ export default {
         return json(out.body, out.status, cors);
       }
 
+      // NEW: list partners
+      if (path === '/admin/partners/list' && method === 'GET') {
+        if (!requireAdmin(req, env)) return json({ ok: false, error: 'forbidden' }, 403, cors);
+        const out = await adminPartnersList(env);
+        return json(out.body, out.status, cors);
+      }
+
+      // NEW: rewards stats
+      if (path === '/admin/rewards/stats' && method === 'GET') {
+        if (!requireAdmin(req, env)) return json({ ok: false, error: 'forbidden' }, 403, cors);
+        const out = await adminRewardsStats(env);
+        return json(out.body, out.status, cors);
+      }
+
+      // NEW: rewards list (optional)
+      if (path === '/admin/rewards/list' && method === 'GET') {
+        if (!requireAdmin(req, env)) return json({ ok: false, error: 'forbidden' }, 403, cors);
+        const out = await adminRewardsList(env, url);
+        return json(out.body, out.status, cors);
+      }
+
+      // ======================================================
       // Partner invite flow
+      // ======================================================
       if (path === '/partners/set-pin' && method === 'POST') {
         const out = await partnerSetPin(req, env);
         return json(out.body, out.status, cors);
       }
 
+      // ======================================================
       // Rewards CRUD (partnerId+pin)
+      // ======================================================
       if (path === '/rewards/create' && method === 'POST') {
         const out = await rewardsCreate(req, env);
         return json(out.body, out.status, cors);
@@ -553,7 +667,9 @@ export default {
         return json(out.body, out.status, cors);
       }
 
+      // ======================================================
       // Game pick3
+      // ======================================================
       if (path === '/rewards/pick3' && method === 'GET') {
         const out = await rewardsPick3(req, env, url);
         return json(out.body, out.status, cors);
