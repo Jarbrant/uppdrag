@@ -1,1 +1,273 @@
+<!-- ============================================================
+     FIL: pages/login.html  (HEL FIL)
+     AO-LOGIN-03 — Admin Login (sessionStorage token, MVP)
+     Policy: UI-only, XSS-safe, fail-closed, subpath-safe
+     Skapar: sessionStorage['ADMIN_TOKEN_MVP'] = adminToken
+     Redirect: dashboard.html (default) eller ?next=<path> (valfritt)
+============================================================ -->
+<!doctype html>
+<html lang="sv">
+<head>
+  <!-- ==========================================================
+       BLOCK 1 — Meta + CSS
+  =========================================================== -->
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Admin — Logga in</title>
+  <meta name="description" content="Admin login (MVP) som sparar token i sessionStorage." />
+  <link rel="stylesheet" href="../styles/main.css" />
+</head>
 
+<body class="theme-admin">
+  <!-- ==========================================================
+       BLOCK 2 — App Root
+  =========================================================== -->
+  <div id="app" class="app">
+
+    <!-- ========================================================
+         BLOCK 3 — Topbar
+    ========================================================= -->
+    <header class="topbar">
+      <div class="topbar__inner">
+        <div class="brand">
+          <div class="brand__mark" aria-hidden="true">◎</div>
+          <div class="brand__text">
+            <div class="brand__name">Admin</div>
+            <div class="brand__tag muted">Login</div>
+          </div>
+        </div>
+
+        <div class="topbar__right" style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; justify-content:flex-end;">
+          <a class="badge" href="./dashboard.html" aria-label="Till dashboard">Dashboard</a>
+          <a class="badge" href="./new-customer.html" aria-label="Skapa ny kund">Skapa kund</a>
+          <span class="badge badge-success" aria-label="MVP">MVP</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- ========================================================
+         BLOCK 4 — Main
+    ========================================================= -->
+    <main class="main">
+      <div class="container">
+
+        <!-- ======================================================
+             BLOCK 4.1 — Status / Toast slot
+        ======================================================= -->
+        <div id="statusSlot" class="slot" aria-live="polite"></div>
+
+        <!-- ======================================================
+             BLOCK 5 — Login card
+        ======================================================= -->
+        <section class="card paperCard" aria-label="Admin login" style="margin-top: var(--sp-4);">
+          <div class="card__head">
+            <div class="card__meta">
+              <h1 class="h2" style="margin:0">Logga in</h1>
+              <p class="muted small" style="margin:6px 0 0 0">
+                MVP: token sparas i <strong>sessionStorage</strong>. Refresh kan kräva ny login.
+              </p>
+            </div>
+            <div class="card__side" style="display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end;">
+              <button id="logoutBtn" type="button" class="btn btn-ghost">Rensa session</button>
+            </div>
+          </div>
+
+          <div class="form" style="margin-top:12px; gap:12px;">
+            <div class="field">
+              <label class="label2" for="userInput">Username</label>
+              <input id="userInput" class="input" type="text" autocomplete="username" placeholder="t.ex. anders" />
+            </div>
+
+            <div class="field">
+              <label class="label2" for="passInput">Password</label>
+              <input id="passInput" class="input" type="password" autocomplete="current-password" placeholder="••••••••" />
+            </div>
+
+            <div style="display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end;">
+              <button id="loginBtn" type="button" class="btn btn-primary">Logga in</button>
+              <a id="backLink" class="btn btn-ghost" href="./dashboard.html">Till dashboard</a>
+            </div>
+
+            <div id="hint" class="muted small" style="min-height:18px;"></div>
+
+            <div class="card" style="padding:12px;">
+              <div class="muted small">Status</div>
+              <div style="display:flex; gap:10px; align-items:center; justify-content:space-between; flex-wrap:wrap; margin-top:8px;">
+                <div style="font-weight:900;">Session</div>
+                <span id="sessionBadge" class="badge">Låst</span>
+              </div>
+              <div class="muted small" style="margin-top:8px;">
+                Token-key: <code style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">ADMIN_TOKEN_MVP</code>
+              </div>
+            </div>
+          </div>
+        </section>
+
+      </div>
+    </main>
+  </div>
+
+  <!-- ==========================================================
+       BLOCK 6 — JS (inline)
+  =========================================================== -->
+  <script type="module">
+    /* ==========================================================
+       BLOCK 6.1 — Config
+    =========================================================== */
+    const API_BASE = 'https://uppdrag.andersmenyit.workers.dev'; // HOOK: api-base
+    const TOKEN_KEY = 'ADMIN_TOKEN_MVP';
+
+    /* ==========================================================
+       BLOCK 6.2 — DOM hooks
+    =========================================================== */
+    const $ = (sel) => document.querySelector(sel);
+
+    const elStatus = $('#statusSlot');
+    const elUser = $('#userInput');
+    const elPass = $('#passInput');
+    const elLogin = $('#loginBtn');
+    const elLogout = $('#logoutBtn');
+    const elHint = $('#hint');
+    const elBadge = $('#sessionBadge');
+    const elBack = $('#backLink');
+
+    /* ==========================================================
+       BLOCK 6.3 — UI helpers (XSS-safe)
+    =========================================================== */
+    function toast(msg, type = 'info', ttl = 1600) {
+      if (!elStatus) return;
+      const div = document.createElement('div');
+      div.className = `toast toast--${type === 'danger' ? 'danger' : type === 'warn' ? 'warn' : type === 'success' ? 'success' : 'info'}`;
+      div.setAttribute('role', 'status');
+      div.textContent = (msg ?? '').toString();
+      elStatus.appendChild(div);
+      setTimeout(() => { try { div.remove(); } catch (_) {} }, Math.max(500, Number(ttl) || 1600));
+    }
+
+    function setText(node, text) {
+      if (!node) return;
+      node.textContent = (text ?? '').toString();
+    }
+
+    function setBadge(ok) {
+      if (!elBadge) return;
+      if (ok) {
+        elBadge.className = 'badge badge-success';
+        elBadge.textContent = 'Upplåst';
+      } else {
+        elBadge.className = 'badge';
+        elBadge.textContent = 'Låst';
+      }
+    }
+
+    function getNextTarget() {
+      // valfritt: ?next=./new-customer.html
+      try {
+        const u = new URL(window.location.href);
+        const next = (u.searchParams.get('next') || '').toString().trim();
+        if (next && next.startsWith('./')) return next;
+      } catch (_) {}
+      return './dashboard.html';
+    }
+
+    function updateBackLink() {
+      const next = getNextTarget();
+      if (elBack) elBack.setAttribute('href', next);
+    }
+
+    /* ==========================================================
+       BLOCK 6.4 — Token storage (session-only)
+    =========================================================== */
+    function setToken(token) {
+      try { sessionStorage.setItem(TOKEN_KEY, (token || '').toString()); } catch (_) {}
+    }
+
+    function clearToken() {
+      try { sessionStorage.removeItem(TOKEN_KEY); } catch (_) {}
+    }
+
+    function hasToken() {
+      try { return !!sessionStorage.getItem(TOKEN_KEY); } catch (_) { return false; }
+    }
+
+    /* ==========================================================
+       BLOCK 6.5 — API
+    =========================================================== */
+    async function apiLogin(username, password) {
+      const url = `${API_BASE.replace(/\/$/, '')}/admin/login`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password })
+      });
+      const data = await res.json().catch(() => null);
+      return { ok: res.ok, status: res.status, data };
+    }
+
+    /* ==========================================================
+       BLOCK 6.6 — Actions
+    =========================================================== */
+    async function doLogin() {
+      const username = (elUser?.value || '').toString().trim();
+      const password = (elPass?.value || '').toString();
+
+      if (!username || !password) {
+        toast('Username + password krävs', 'warn', 1600);
+        setText(elHint, 'Fyll i båda fälten.');
+        return;
+      }
+
+      setText(elHint, '');
+      toast('Loggar in…', 'info', 900);
+
+      const res = await apiLogin(username, password);
+
+      if (!res.ok || !res.data || res.data.ok !== true || !res.data.adminToken) {
+        clearToken();
+        setBadge(false);
+        toast('Fel login', 'danger', 1600);
+        const code = (res?.data?.errorCode || res?.data?.code || res?.status || '').toString();
+        setText(elHint, code ? `Login misslyckades (${code}).` : 'Login misslyckades.');
+        return;
+      }
+
+      const token = (res.data.adminToken || '').toString();
+      setToken(token);
+      setBadge(true);
+      toast('Inloggad', 'success', 1000);
+
+      // Redirect till next (default dashboard)
+      const next = getNextTarget();
+      window.location.href = next;
+    }
+
+    function doLogout() {
+      clearToken();
+      setBadge(false);
+      toast('Session rensad', 'info', 1200);
+      setText(elHint, 'Du är nu utloggad (sessionStorage rensad).');
+      try { elPass.value = ''; } catch (_) {}
+    }
+
+    /* ==========================================================
+       BLOCK 6.7 — Events + Boot
+    =========================================================== */
+    if (elLogin) elLogin.addEventListener('click', doLogin);
+    if (elLogout) elLogout.addEventListener('click', doLogout);
+
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') doLogin();
+    });
+
+    (function boot() {
+      updateBackLink();
+      setBadge(hasToken());
+      if (hasToken()) {
+        setText(elHint, 'Redan inloggad (session finns).');
+      } else {
+        setText(elHint, 'Inte inloggad.');
+      }
+    })();
+  </script>
+</body>
+</html>
