@@ -1,6 +1,6 @@
 <!-- ============================================================
      FIL: pages/dashboard.html  (HEL FIL)
-     AO-DASH-LOCAL-01 — Frontend-only Admin Dashboard/Skapa kund
+     AO-DASH-LOCAL-UI-02 — Frontend-only Admin Dashboard/Skapa kund
      Backend: NONE (no Cloudflare Worker)
      Auth: sessionStorage token only (test)
 ============================================================ -->
@@ -55,79 +55,89 @@
           </div>
         </section>
 
-        <!-- Create customer -->
-        <section id="createCard" class="card paperCard is-hidden" aria-label="Skapa ny kund" style="margin-top: var(--sp-4);">
-          <div class="card__head">
-            <div class="card__meta">
-              <h1 class="h2" style="margin:0">Skapa ny kund (lokalt)</h1>
-              <p class="muted small" style="margin:6px 0 0 0">
-                Skapar kund i <strong>localStorage</strong>. Användarnamn och lösenord anges manuellt.
-              </p>
-            </div>
-            <div class="card__side" style="display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end;">
-              <button id="logoutBtn" type="button" class="btn btn-ghost">Logga ut</button>
-            </div>
-          </div>
-
-          <div class="form" style="margin-top:12px; gap:12px;">
-            <div class="grid" style="display:grid; gap:12px; grid-template-columns: 1fr;">
-              <div class="field">
-                <label class="label2" for="companyName">Företagsnamn (required)</label>
-                <input id="companyName" class="input" type="text" placeholder="t.ex. Kiosk Nova" />
+        <!-- Main grid -->
+        <div id="mainGrid" class="dashGrid is-hidden" style="margin-top: var(--sp-4);">
+          <!-- Create customer -->
+          <section id="createCard" class="card paperCard" aria-label="Skapa ny kund">
+            <div class="card__head">
+              <div class="card__meta">
+                <h1 class="h2" style="margin:0">Skapa ny kund</h1>
+                <p class="muted small" style="margin:6px 0 0 0">
+                  Skapas lokalt i <strong>localStorage</strong>. Du väljer användarnamn och lösenord manuellt.
+                </p>
               </div>
+              <div class="card__side" style="display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end;">
+                <button id="logoutBtn" type="button" class="btn btn-ghost">Logga ut</button>
+              </div>
+            </div>
 
+            <div class="form" style="margin-top:12px; gap:14px;">
               <div class="field">
-                <label class="label2" for="partnerIdInput">PartnerId (required)</label>
-                <input id="partnerIdInput" class="input" type="text" placeholder="t.ex. kiosk-nova-x7k2" />
+                <label class="label2" for="companyName">Företagsnamn <span class="muted small">(required)</span></label>
+                <input id="companyName" class="input input--dark" type="text" placeholder="t.ex. Kiosk Nova" />
               </div>
 
               <div class="field">
-                <label class="label2" for="custUsername">Användarnamn (required)</label>
-                <input id="custUsername" class="input" type="text" placeholder="t.ex. kiosk-nova-admin" />
+                <label class="label2" for="partnerIdInput">PartnerId <span class="muted small">(required)</span></label>
+                <input id="partnerIdInput" class="input input--dark" type="text" placeholder="t.ex. kiosk-nova-x7k2" />
+                <div class="muted small" style="margin-top:6px;">Tips: a–z, 0–9 och bindestreck.</div>
               </div>
 
               <div class="field">
-                <label class="label2" for="custPassword">Lösenord (required)</label>
-                <input id="custPassword" class="input" type="text" placeholder="t.ex. MinKod123" />
+                <label class="label2" for="custUsername">Användarnamn <span class="muted small">(required)</span></label>
+                <input id="custUsername" class="input input--dark" type="text" placeholder="t.ex. kiosk-nova-admin" />
+              </div>
+
+              <div class="field">
+                <label class="label2" for="custPassword">Lösenord <span class="muted small">(required)</span></label>
+                <input id="custPassword" class="input input--dark" type="text" placeholder="t.ex. MinKod123" />
+                <div class="muted small" style="margin-top:6px;">Testläge: visas i klartext så du kan kopiera.</div>
+              </div>
+
+              <!-- Preview -->
+              <div class="card previewCard" style="padding:12px; margin-top:4px;">
+                <div class="muted small">Förhandsvisning</div>
+
+                <div class="previewRow">
+                  <div class="previewKey">PartnerId</div>
+                  <div id="pidPreview" class="badge">—</div>
+                </div>
+
+                <div class="previewRow">
+                  <div class="previewKey">Användarnamn</div>
+                  <div id="userPreview" class="badge">—</div>
+                </div>
+              </div>
+
+              <div class="actionsRow">
+                <div id="formMsg" class="muted small" style="min-height:18px;"></div>
+                <div style="display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end;">
+                  <button id="createBtn" type="button" class="btn btn-primary">Skapa kund</button>
+                  <button id="clearCustomersBtn" type="button" class="btn btn-ghost">Rensa lokala kunder</button>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- List customers -->
+          <section id="listCard" class="card paperCard" aria-label="Lokala kunder">
+            <div class="card__head">
+              <div class="card__meta">
+                <h2 class="h2" style="margin:0">Lokala kunder</h2>
+                <p class="muted small" style="margin:6px 0 0 0">
+                  Sparas i din webbläsare (localStorage).
+                </p>
+              </div>
+              <div class="card__side" style="display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end;">
+                <button id="exportBtn" type="button" class="btn btn-ghost" title="Kopiera JSON">Exportera</button>
               </div>
             </div>
 
-            <div class="card" style="padding:12px; margin-top:6px;">
-              <div class="muted small">Förhandsvisning</div>
-              <div style="display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; margin-top:8px;">
-                <div style="font-weight:900;">PartnerId</div>
-                <div id="pidPreview" class="badge">—</div>
-              </div>
-              <div style="display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; margin-top:8px;">
-                <div style="font-weight:900;">Användarnamn</div>
-                <div id="userPreview" class="badge">—</div>
-              </div>
+            <div style="margin-top:12px;">
+              <div id="localCustomerList" class="muted small">—</div>
             </div>
-
-            <div style="display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end;">
-              <button id="createBtn" type="button" class="btn btn-primary">Skapa kund</button>
-              <button id="clearCustomersBtn" type="button" class="btn btn-ghost">Rensa lokala kunder</button>
-            </div>
-
-            <div id="formMsg" class="muted small" style="min-height:18px;"></div>
-          </div>
-        </section>
-
-        <!-- List customers -->
-        <section id="listCard" class="card paperCard is-hidden" aria-label="Lokala kunder" style="margin-top: var(--sp-4);">
-          <div class="card__head">
-            <div class="card__meta">
-              <h2 class="h2" style="margin:0">Lokala kunder</h2>
-              <p class="muted small" style="margin:6px 0 0 0">
-                Sparas i din webbläsare (localStorage).
-              </p>
-            </div>
-          </div>
-
-          <div style="margin-top:12px;">
-            <div id="localCustomerList" class="muted small">—</div>
-          </div>
-        </section>
+          </section>
+        </div>
 
       </div>
     </main>
@@ -142,8 +152,7 @@
     const elStatus = $('#statusSlot');
 
     const elGuardCard = $('#guardCard');
-    const elCreateCard = $('#createCard');
-    const elListCard = $('#listCard');
+    const elMainGrid = $('#mainGrid');
 
     const elLogout = $('#logoutBtn');
 
@@ -158,10 +167,9 @@
 
     const elCreate = $('#createBtn');
     const elClearCustomers = $('#clearCustomersBtn');
+    const elExport = $('#exportBtn');
 
     const elLocalList = $('#localCustomerList');
-
-    const state = { busy: false };
 
     function toast(msg, type = 'info', ttl = 1600) {
       if (!elStatus) return;
@@ -196,8 +204,7 @@
     function setUiByAuth() {
       const ok = isLoggedIn();
       show(elGuardCard, !ok);
-      show(elCreateCard, ok);
-      show(elListCard, ok);
+      show(elMainGrid, ok);
       refreshPreview();
       renderLocalCustomers();
     }
@@ -250,30 +257,29 @@
 
       elLocalList.innerHTML = '';
       const table = document.createElement('table');
-      table.style.cssText = 'width:100%; border-collapse:collapse; font-size:13px;';
+      table.className = 'niceTable';
 
       const thead = document.createElement('thead');
       thead.innerHTML =
-        '<tr style="text-align:left; border-bottom:1px solid rgba(255,255,255,.15);">' +
-        '<th style="padding:4px 8px;">PartnerId</th>' +
-        '<th style="padding:4px 8px;">Företag</th>' +
-        '<th style="padding:4px 8px;">Användarnamn</th>' +
-        '<th style="padding:4px 8px;">Lösenord</th>' +
-        '<th style="padding:4px 8px;">Skapad</th>' +
+        '<tr>' +
+        '<th>PartnerId</th>' +
+        '<th>Företag</th>' +
+        '<th>Användarnamn</th>' +
+        '<th>Lösenord</th>' +
+        '<th>Skapad</th>' +
         '</tr>';
       table.appendChild(thead);
 
       const tbody = document.createElement('tbody');
-      const td = (val) => {
-        const el = document.createElement('td');
-        el.style.padding = '4px 8px';
-        el.textContent = (val ?? '').toString();
-        return el;
-      };
 
       for (const c of list) {
         const tr = document.createElement('tr');
-        tr.style.borderBottom = '1px solid rgba(255,255,255,.08)';
+        const td = (val) => {
+          const el = document.createElement('td');
+          el.textContent = (val ?? '').toString();
+          return el;
+        };
+
         tr.appendChild(td(c.partnerId));
         tr.appendChild(td(c.name));
         tr.appendChild(td(c.username));
@@ -335,6 +341,15 @@
       refreshPreview();
     }
 
+    async function copyToClipboard(text) {
+      try {
+        await navigator.clipboard.writeText(text);
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+
     if (elCompany) elCompany.addEventListener('input', refreshPreview);
     if (elPartnerId) elPartnerId.addEventListener('input', refreshPreview);
     if (elCustUser) elCustUser.addEventListener('input', refreshPreview);
@@ -349,6 +364,12 @@
       renderLocalCustomers();
     });
 
+    if (elExport) elExport.addEventListener('click', async () => {
+      const data = loadLocalCustomers();
+      const ok = await copyToClipboard(JSON.stringify(data, null, 2));
+      toast(ok ? 'Exporterade kunder (JSON) kopierat' : 'Kunde inte kopiera (clipboard)', ok ? 'success' : 'warn', 1800);
+    });
+
     if (elLogout) elLogout.addEventListener('click', () => {
       try { sessionStorage.removeItem(TOKEN_KEY); } catch (_) {}
       toast('Utloggad', 'info', 1200);
@@ -360,10 +381,81 @@
     })();
   </script>
 
+  <!-- Local UI polish (safe, only this page) -->
   <style>
     .is-hidden { display:none !important; }
-    @media (min-width: 820px) {
-      .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+    /* Two-column layout on desktop */
+    .dashGrid {
+      display: grid;
+      gap: 16px;
+      grid-template-columns: 1fr;
+      align-items: start;
+    }
+    @media (min-width: 980px) {
+      .dashGrid { grid-template-columns: 1.1fr 0.9fr; }
+    }
+
+    /* Dark inputs to match theme */
+    .input--dark {
+      background: rgba(10, 18, 28, 0.55);
+      border: 1px solid rgba(255,255,255,0.12);
+      color: rgba(255,255,255,0.92);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.05);
+    }
+    .input--dark::placeholder { color: rgba(255,255,255,0.45); }
+    .input--dark:focus {
+      outline: none;
+      border-color: rgba(120, 200, 255, 0.55);
+      box-shadow: 0 0 0 3px rgba(80, 170, 255, 0.18);
+    }
+
+    /* Preview */
+    .previewCard { border: 1px solid rgba(255,255,255,0.10); }
+    .previewRow {
+      display:flex;
+      justify-content:space-between;
+      gap:10px;
+      flex-wrap:wrap;
+      margin-top:10px;
+      align-items:center;
+    }
+    .previewKey { font-weight: 900; opacity: .92; }
+
+    /* Actions row */
+    .actionsRow {
+      display:flex;
+      align-items:flex-end;
+      justify-content:space-between;
+      gap:12px;
+      flex-wrap:wrap;
+      margin-top:6px;
+    }
+
+    /* Nice table */
+    .niceTable {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+      overflow: hidden;
+      border-radius: 12px;
+    }
+    .niceTable thead th {
+      text-align: left;
+      font-weight: 900;
+      padding: 10px 10px;
+      border-bottom: 1px solid rgba(255,255,255,0.15);
+      color: rgba(255,255,255,0.92);
+    }
+    .niceTable tbody td {
+      padding: 8px 10px;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+      color: rgba(255,255,255,0.86);
+      vertical-align: top;
+      word-break: break-word;
+    }
+    .niceTable tbody tr:hover td {
+      background: rgba(255,255,255,0.03);
     }
   </style>
 </body>
