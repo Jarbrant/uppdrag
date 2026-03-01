@@ -1,10 +1,7 @@
 <!-- ============================================================
      FIL: pages/dashboard.html  (HEL FIL)
-     AO-DASH-LOCAL-PROD-01 — Admin Dashboard (Frontend-only, GitHub Pages)
-     Backend: NONE
-     Auth: sessionStorage token only (MVP/test)
-     Storage: localStorage for customers
-     Policy: UI-only, XSS-safe, fail-closed
+     AO-DASH-LOCAL-PROD-02 — Admin Dashboard (Frontend-only, GitHub Pages)
+     Fix: Snygg tabell vid skapad kund (actions bryts inte vertikalt)
 ============================================================ -->
 <!doctype html>
 <html lang="sv">
@@ -29,7 +26,6 @@
       .dashGrid { grid-template-columns: 1.1fr 0.9fr; }
     }
 
-    /* Form rows: label + input on same row */
     .rowField {
       display:grid;
       grid-template-columns: 220px 1fr;
@@ -52,7 +48,6 @@
       .hint { grid-column: auto; margin-top: 0; }
     }
 
-    /* Bigger dark inputs */
     .inputBig {
       background: rgba(10, 18, 28, 0.55);
       border: 1px solid rgba(255,255,255,0.12);
@@ -62,6 +57,7 @@
       font-size: 16px;
       padding: 10px 12px;
       border-radius: 12px;
+      width: 100%;
     }
     .inputBig::placeholder { color: rgba(255,255,255,0.45); }
     .inputBig:focus {
@@ -103,44 +99,6 @@
       white-space: nowrap;
     }
 
-    .niceTable {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 13px;
-      overflow: hidden;
-      border-radius: 12px;
-    }
-    .niceTable thead th {
-      text-align: left;
-      font-weight: 900;
-      padding: 10px 10px;
-      border-bottom: 1px solid rgba(255,255,255,0.15);
-      color: rgba(255,255,255,0.92);
-    }
-    .niceTable tbody td {
-      padding: 8px 10px;
-      border-bottom: 1px solid rgba(255,255,255,0.08);
-      color: rgba(255,255,255,0.86);
-      vertical-align: top;
-      word-break: break-word;
-    }
-    .niceTable tbody tr:hover td {
-      background: rgba(255,255,255,0.03);
-    }
-
-    .btnMini {
-      padding: 6px 10px;
-      border-radius: 999px;
-      font-size: 12px;
-    }
-
-    .cellActions {
-      display:flex;
-      gap:8px;
-      flex-wrap:wrap;
-      justify-content:flex-end;
-    }
-
     .mono {
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
       font-size: 12px;
@@ -150,6 +108,71 @@
     .dangerLink {
       border-color: rgba(255,120,120,.35) !important;
       color: rgba(255,210,210,.92) !important;
+    }
+
+    /* ====== TABLE FIXES ====== */
+    .tableWrap {
+      width: 100%;
+      overflow-x: auto;           /* om det blir trångt -> scroll istället för ful brytning */
+      -webkit-overflow-scrolling: touch;
+      border-radius: 12px;
+    }
+
+    .niceTable {
+      width: 100%;
+      min-width: 720px;           /* viktig: tvingar layout så actions får plats */
+      border-collapse: collapse;
+      font-size: 13px;
+      overflow: hidden;
+      border-radius: 12px;
+      table-layout: fixed;        /* ger stabila kolumner */
+    }
+
+    .niceTable thead th {
+      text-align: left;
+      font-weight: 900;
+      padding: 10px 10px;
+      border-bottom: 1px solid rgba(255,255,255,0.15);
+      color: rgba(255,255,255,0.92);
+    }
+
+    .niceTable tbody td {
+      padding: 8px 10px;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+      color: rgba(255,255,255,0.86);
+      vertical-align: top;
+      word-break: break-word;
+    }
+
+    .niceTable tbody tr:hover td {
+      background: rgba(255,255,255,0.03);
+    }
+
+    /* Kolumnbredder (stabilt) */
+    .colPid   { width: 170px; }
+    .colName  { width: 140px; }
+    .colUser  { width: 140px; }
+    .colPass  { width: 160px; }
+    .colAct   { width: 230px; }   /* actions får plats -> inga vertikala knappar */
+
+    .btnMini {
+      padding: 6px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      white-space: nowrap;        /* viktig: bryt inte */
+      word-break: normal;
+    }
+
+    .cellActions {
+      display:flex;
+      gap:8px;
+      flex-wrap: nowrap;          /* viktig: bryt inte */
+      justify-content:flex-end;
+      white-space: nowrap;        /* viktig */
+    }
+
+    .cellActions .btn {
+      white-space: nowrap;
     }
   </style>
 </head>
@@ -179,7 +202,6 @@
       <div class="container">
         <div id="statusSlot" class="slot" aria-live="polite"></div>
 
-        <!-- Guard -->
         <section id="guardCard" class="card paperCard" aria-label="Login krävs" style="margin-top: var(--sp-4);">
           <div class="card__head">
             <div class="card__meta">
@@ -194,7 +216,6 @@
           </div>
         </section>
 
-        <!-- Content -->
         <div id="mainGrid" class="dashGrid is-hidden">
           <!-- Create -->
           <section class="card paperCard" aria-label="Skapa ny kund">
@@ -350,7 +371,6 @@
       const pid = normalizePartnerId(elPartnerId?.value || '');
       const username = (elCustUser?.value || '').toString().trim();
 
-      // Keep normalized partnerId
       try {
         const raw = (elPartnerId?.value || '').toString();
         if (raw && raw !== pid) elPartnerId.value = pid;
@@ -483,10 +503,22 @@ Password: ${c.password}`;
         return;
       }
 
-      // Bygg DOM utan att injicera HTML från data (XSS-safe)
       elLocalList.textContent = '';
+
+      const wrap = document.createElement('div');
+      wrap.className = 'tableWrap';
+
       const table = document.createElement('table');
       table.className = 'niceTable';
+
+      const colgroup = document.createElement('colgroup');
+      const mkcol = (cls) => { const c = document.createElement('col'); c.className = cls; return c; };
+      colgroup.appendChild(mkcol('colPid'));
+      colgroup.appendChild(mkcol('colName'));
+      colgroup.appendChild(mkcol('colUser'));
+      colgroup.appendChild(mkcol('colPass'));
+      colgroup.appendChild(mkcol('colAct'));
+      table.appendChild(colgroup);
 
       const thead = document.createElement('thead');
       const trh = document.createElement('tr');
@@ -576,10 +608,10 @@ Password: ${c.password}`;
       }
 
       table.appendChild(tbody);
-      elLocalList.appendChild(table);
+      wrap.appendChild(table);
+      elLocalList.appendChild(wrap);
     }
 
-    // Events
     if (elCompany) elCompany.addEventListener('input', refreshPreview);
     if (elPartnerId) elPartnerId.addEventListener('input', refreshPreview);
     if (elCustUser) elCustUser.addEventListener('input', refreshPreview);
