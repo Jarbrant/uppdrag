@@ -1,6 +1,8 @@
 <!-- ============================================================
      FIL: pages/login.html  (HEL FIL)
-     AO-LOGIN-LOCAL-01 — Frontend-only admin login (NO BACKEND)
+     AO-LOGIN-LOCAL-PROD-01 — Snygg inloggningssida (Frontend-only)
+     Backend: NONE (GitHub Pages)
+     Auth: sessionStorage token only (MVP/test)
      Policy: UI-only, XSS-safe, fail-closed
 ============================================================ -->
 <!doctype html>
@@ -8,14 +10,106 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Admin — Login (Local)</title>
-  <meta name="description" content="Frontend-only login för test (ingen backend)." />
+  <title>Admin — Logga in</title>
+  <meta name="description" content="Admin login (frontend-only)." />
   <link rel="stylesheet" href="../styles/main.css" />
+
+  <style>
+    .is-hidden { display:none !important; }
+
+    .authWrap {
+      margin-top: var(--sp-5);
+      display: grid;
+      place-items: center;
+    }
+
+    .authCard {
+      width: min(720px, 100%);
+    }
+
+    .heroRow {
+      display:flex;
+      justify-content:space-between;
+      align-items:flex-start;
+      gap: 14px;
+      flex-wrap: wrap;
+    }
+
+    .pill {
+      display:inline-flex;
+      align-items:center;
+      gap:8px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,.12);
+      background: rgba(255,255,255,.04);
+      font-size: 12px;
+      color: rgba(255,255,255,.85);
+      white-space: nowrap;
+    }
+
+    .rowField {
+      display:grid;
+      grid-template-columns: 180px 1fr;
+      align-items:center;
+      gap: 12px;
+    }
+    @media (max-width: 720px) {
+      .rowField { grid-template-columns: 1fr; gap: 6px; }
+    }
+
+    .labelInline {
+      font-weight: 900;
+      color: rgba(255,255,255,.92);
+    }
+
+    .inputBig {
+      background: rgba(10, 18, 28, 0.55);
+      border: 1px solid rgba(255,255,255,0.12);
+      color: rgba(255,255,255,0.92);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.05);
+      height: 46px;
+      font-size: 16px;
+      padding: 10px 12px;
+      border-radius: 12px;
+      width: 100%;
+    }
+    .inputBig::placeholder { color: rgba(255,255,255,0.45); }
+    .inputBig:focus {
+      outline: none;
+      border-color: rgba(120, 200, 255, 0.55);
+      box-shadow: 0 0 0 3px rgba(80, 170, 255, 0.18);
+    }
+
+    .inputWithBtn {
+      display:flex;
+      gap: 10px;
+      align-items:center;
+    }
+
+    .btnMini {
+      padding: 10px 12px;
+      border-radius: 12px;
+      font-size: 13px;
+      white-space: nowrap;
+    }
+
+    .hint {
+      margin-top: 8px;
+      color: rgba(255,255,255,.65);
+      font-size: 13px;
+      line-height: 1.35;
+    }
+
+    .dangerLink {
+      border-color: rgba(255,120,120,.35) !important;
+      color: rgba(255,210,210,.92) !important;
+    }
+  </style>
 </head>
 
 <body class="theme-admin">
   <div id="app" class="app">
-
     <header class="topbar">
       <div class="topbar__inner">
         <div class="brand">
@@ -27,8 +121,8 @@
         </div>
 
         <div class="topbar__right" style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; justify-content:flex-end;">
-          <a class="badge" href="./dashboard.html" aria-label="Öppna dashboard">Dashboard</a>
-          <a class="badge" href="./dashboard.html" aria-label="Skapa kund">Skapa kund</a>
+          <a class="badge" href="./dashboard.html" aria-label="Dashboard">Dashboard</a>
+          <a class="badge" href="./login.html" aria-label="Login">Login</a>
           <span class="badge badge-success" aria-label="MVP">MVP</span>
         </div>
       </div>
@@ -36,48 +130,58 @@
 
     <main class="main">
       <div class="container">
-
         <div id="statusSlot" class="slot" aria-live="polite"></div>
 
-        <section class="card paperCard" style="margin-top: var(--sp-4);">
-          <div class="card__head">
-            <div class="card__meta">
-              <h1 class="h2" style="margin:0">Logga in</h1>
-              <p class="muted small" style="margin:6px 0 0 0">
-                Testläge: ingen backend. Inlogg lagras i <strong>sessionStorage</strong>.
-              </p>
-            </div>
-
-            <div class="card__side" style="display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end;">
-              <button id="clearBtn" type="button" class="btn btn-ghost" aria-label="Rensa session">
-                Rensa session
-              </button>
-            </div>
-          </div>
-
-          <div class="form" style="margin-top:12px; gap:12px;">
-            <div class="grid" style="display:grid; gap:12px; grid-template-columns: 1fr;">
-              <div class="field">
-                <label class="label2" for="user">Username</label>
-                <input id="user" class="input" type="text" autocomplete="username" placeholder="anders" />
-              </div>
-
-              <div class="field">
-                <label class="label2" for="pass">Password</label>
-                <input id="pass" class="input" type="password" autocomplete="current-password" placeholder="TestAdmin" />
+        <div class="authWrap">
+          <section class="card paperCard authCard" aria-label="Logga in">
+            <div class="card__head">
+              <div class="card__meta">
+                <div class="heroRow">
+                  <div>
+                    <h1 class="h2" style="margin:0">Logga in</h1>
+                    <p class="muted small" style="margin:6px 0 0 0">
+                      Testläge (frontend-only). Token sparas i <strong>sessionStorage</strong>.
+                    </p>
+                  </div>
+                  <div style="display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end;">
+                    <span class="pill" title="Auth-läge">Auth: sessionStorage</span>
+                    <button id="clearBtn" type="button" class="btn btn-ghost dangerLink" aria-label="Rensa session">
+                      Rensa session
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
 
-            <div style="display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end;">
-              <button id="loginBtn" type="button" class="btn btn-primary">Logga in</button>
-              <a class="btn btn-ghost" href="./dashboard.html">Till dashboard</a>
-            </div>
+            <div class="form" style="margin-top:12px; gap:14px;">
+              <div class="rowField">
+                <label class="labelInline" for="user">Användarnamn</label>
+                <input id="user" class="inputBig" type="text" autocomplete="username" placeholder="anders" />
+              </div>
 
-            <div class="muted small" style="margin-top:10px;">
-              Token-key: <code>ADMIN_TOKEN_MVP</code>
+              <div class="rowField">
+                <label class="labelInline" for="pass">Lösenord</label>
+                <div class="inputWithBtn">
+                  <input id="pass" class="inputBig" type="password" autocomplete="current-password" placeholder="TestAdmin" />
+                  <button id="togglePassBtn" type="button" class="btn btn-ghost btnMini" aria-label="Visa lösenord">
+                    Visa
+                  </button>
+                </div>
+              </div>
+
+              <div class="actionsRow" style="display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end; margin-top: 6px;">
+                <button id="loginBtn" type="button" class="btn btn-primary">Logga in</button>
+                <a class="btn btn-ghost" href="./dashboard.html">Till dashboard</a>
+              </div>
+
+              <div class="hint">
+                <div><strong>Status:</strong> <span id="statusText">Utloggad</span></div>
+                <div><span class="muted small">Token-key:</span> <code>ADMIN_TOKEN_MVP</code></div>
+                <div class="muted small">Tips: tryck Enter för att logga in.</div>
+              </div>
             </div>
-          </div>
-        </section>
+          </section>
+        </div>
 
       </div>
     </main>
@@ -86,7 +190,7 @@
   <script type="module">
     const TOKEN_KEY = 'ADMIN_TOKEN_MVP';
 
-    // TEST credentials
+    // TEST credentials (ändra här om du vill)
     const ADMIN_USER = 'anders';
     const ADMIN_PASS = 'TestAdmin';
 
@@ -96,6 +200,8 @@
     const elPass = $('#pass');
     const elLogin = $('#loginBtn');
     const elClear = $('#clearBtn');
+    const elToggle = $('#togglePassBtn');
+    const elStatusText = $('#statusText');
 
     function toast(msg, type = 'info', ttl = 1600) {
       if (!elStatus) return;
@@ -107,8 +213,16 @@
       setTimeout(() => { try { div.remove(); } catch (_) {} }, Math.max(500, Number(ttl) || 1600));
     }
 
+    function isLoggedIn() {
+      try { return !!sessionStorage.getItem(TOKEN_KEY); } catch (_) { return false; }
+    }
+
+    function setStatusUi() {
+      if (!elStatusText) return;
+      elStatusText.textContent = isLoggedIn() ? 'Inloggad' : 'Utloggad';
+    }
+
     function setTokenLocal() {
-      // Frontend-only token (ingen säkerhet, bara test)
       sessionStorage.setItem(TOKEN_KEY, 'DEV_LOCAL_TOKEN');
     }
 
@@ -122,35 +236,52 @@
 
       if (u === ADMIN_USER && p === ADMIN_PASS) {
         setTokenLocal();
-        toast('Inloggad (local)', 'success', 1200);
-        setTimeout(() => { window.location.href = './dashboard.html'; }, 350);
+        setStatusUi();
+        toast('Inloggad', 'success', 1200);
+        setTimeout(() => { window.location.href = './dashboard.html'; }, 250);
         return;
       }
 
       toast('Fel användarnamn eller lösenord', 'danger', 1800);
     }
 
+    function togglePassword() {
+      if (!elPass || !elToggle) return;
+      const showing = elPass.getAttribute('data-show') === '1';
+      if (showing) {
+        elPass.setAttribute('data-show', '0');
+        elPass.type = 'password';
+        elToggle.textContent = 'Visa';
+      } else {
+        elPass.setAttribute('data-show', '1');
+        elPass.type = 'text';
+        elToggle.textContent = 'Dölj';
+      }
+    }
+
     if (elLogin) elLogin.addEventListener('click', doLogin);
+
     if (elClear) elClear.addEventListener('click', () => {
       clearToken();
+      setStatusUi();
       toast('Session rensad', 'info', 1200);
+      try { elPass.value = ''; } catch (_) {}
+      try { elUser.focus(); } catch (_) {}
     });
+
+    if (elToggle) elToggle.addEventListener('click', togglePassword);
 
     window.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') doLogin();
     });
 
-    // Autofyll för test (valfritt)
-    try {
-      if (elUser && !elUser.value) elUser.value = 'anders';
-    } catch (_) {}
+    (function boot() {
+      setStatusUi();
+      // mild autofill (valfritt)
+      try {
+        if (elUser && !elUser.value) elUser.value = 'anders';
+      } catch (_) {}
+    })();
   </script>
-
-  <style>
-    .is-hidden { display:none !important; }
-    @media (min-width: 820px) {
-      .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    }
-  </style>
 </body>
 </html>
