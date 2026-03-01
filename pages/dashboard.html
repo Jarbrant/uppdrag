@@ -1,17 +1,157 @@
 <!-- ============================================================
      FIL: pages/dashboard.html  (HEL FIL)
-     AO-DASH-LOCAL-UI-02 — Frontend-only Admin Dashboard/Skapa kund
-     Backend: NONE (no Cloudflare Worker)
-     Auth: sessionStorage token only (test)
+     AO-DASH-LOCAL-PROD-01 — Admin Dashboard (Frontend-only, GitHub Pages)
+     Backend: NONE
+     Auth: sessionStorage token only (MVP/test)
+     Storage: localStorage for customers
+     Policy: UI-only, XSS-safe, fail-closed
 ============================================================ -->
 <!doctype html>
 <html lang="sv">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Admin — Dashboard (Local)</title>
-  <meta name="description" content="Admin dashboard (frontend-only test)." />
+  <title>Admin — Dashboard</title>
+  <meta name="description" content="Admin dashboard (frontend-only)." />
   <link rel="stylesheet" href="../styles/main.css" />
+
+  <style>
+    .is-hidden { display:none !important; }
+
+    .dashGrid {
+      display: grid;
+      gap: 16px;
+      grid-template-columns: 1fr;
+      align-items: start;
+      margin-top: var(--sp-4);
+    }
+    @media (min-width: 980px) {
+      .dashGrid { grid-template-columns: 1.1fr 0.9fr; }
+    }
+
+    /* Form rows: label + input on same row */
+    .rowField {
+      display:grid;
+      grid-template-columns: 220px 1fr;
+      align-items:center;
+      gap: 12px;
+    }
+    @media (max-width: 720px) {
+      .rowField { grid-template-columns: 1fr; gap: 6px; }
+    }
+
+    .labelInline {
+      font-weight: 900;
+      color: rgba(255,255,255,.92);
+    }
+    .hint {
+      grid-column: 2 / 3;
+      margin-top: -6px;
+    }
+    @media (max-width: 720px) {
+      .hint { grid-column: auto; margin-top: 0; }
+    }
+
+    /* Bigger dark inputs */
+    .inputBig {
+      background: rgba(10, 18, 28, 0.55);
+      border: 1px solid rgba(255,255,255,0.12);
+      color: rgba(255,255,255,0.92);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.05);
+      height: 46px;
+      font-size: 16px;
+      padding: 10px 12px;
+      border-radius: 12px;
+    }
+    .inputBig::placeholder { color: rgba(255,255,255,0.45); }
+    .inputBig:focus {
+      outline: none;
+      border-color: rgba(120, 200, 255, 0.55);
+      box-shadow: 0 0 0 3px rgba(80, 170, 255, 0.18);
+    }
+
+    .previewCard { border: 1px solid rgba(255,255,255,0.10); }
+    .previewRow {
+      display:flex;
+      justify-content:space-between;
+      gap:10px;
+      flex-wrap:wrap;
+      margin-top:10px;
+      align-items:center;
+    }
+    .previewKey { font-weight: 900; opacity: .92; }
+
+    .actionsRow {
+      display:flex;
+      align-items:flex-end;
+      justify-content:space-between;
+      gap:12px;
+      flex-wrap:wrap;
+      margin-top: 10px;
+    }
+
+    .pill {
+      display:inline-flex;
+      align-items:center;
+      gap:8px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,.12);
+      background: rgba(255,255,255,.04);
+      font-size: 12px;
+      color: rgba(255,255,255,.85);
+      white-space: nowrap;
+    }
+
+    .niceTable {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+      overflow: hidden;
+      border-radius: 12px;
+    }
+    .niceTable thead th {
+      text-align: left;
+      font-weight: 900;
+      padding: 10px 10px;
+      border-bottom: 1px solid rgba(255,255,255,0.15);
+      color: rgba(255,255,255,0.92);
+    }
+    .niceTable tbody td {
+      padding: 8px 10px;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+      color: rgba(255,255,255,0.86);
+      vertical-align: top;
+      word-break: break-word;
+    }
+    .niceTable tbody tr:hover td {
+      background: rgba(255,255,255,0.03);
+    }
+
+    .btnMini {
+      padding: 6px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+    }
+
+    .cellActions {
+      display:flex;
+      gap:8px;
+      flex-wrap:wrap;
+      justify-content:flex-end;
+    }
+
+    .mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size: 12px;
+      color: rgba(255,255,255,.86);
+    }
+
+    .dangerLink {
+      border-color: rgba(255,120,120,.35) !important;
+      color: rgba(255,210,210,.92) !important;
+    }
+  </style>
 </head>
 
 <body class="theme-admin">
@@ -37,7 +177,6 @@
 
     <main class="main">
       <div class="container">
-
         <div id="statusSlot" class="slot" aria-live="polite"></div>
 
         <!-- Guard -->
@@ -55,54 +194,52 @@
           </div>
         </section>
 
-        <!-- Main grid -->
-        <div id="mainGrid" class="dashGrid is-hidden" style="margin-top: var(--sp-4);">
-          <!-- Create customer -->
-          <section id="createCard" class="card paperCard" aria-label="Skapa ny kund">
+        <!-- Content -->
+        <div id="mainGrid" class="dashGrid is-hidden">
+          <!-- Create -->
+          <section class="card paperCard" aria-label="Skapa ny kund">
             <div class="card__head">
               <div class="card__meta">
                 <h1 class="h2" style="margin:0">Skapa ny kund</h1>
                 <p class="muted small" style="margin:6px 0 0 0">
-                  Skapas lokalt i <strong>localStorage</strong>. Du väljer användarnamn och lösenord manuellt.
+                  Sparas lokalt i <strong>localStorage</strong>. Du väljer användarnamn och lösenord manuellt.
                 </p>
               </div>
               <div class="card__side" style="display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end;">
+                <span class="pill" title="Auth-läge">Auth: sessionStorage</span>
                 <button id="logoutBtn" type="button" class="btn btn-ghost">Logga ut</button>
               </div>
             </div>
 
             <div class="form" style="margin-top:12px; gap:14px;">
-              <div class="field">
-                <label class="label2" for="companyName">Företagsnamn <span class="muted small">(required)</span></label>
-                <input id="companyName" class="input input--dark" type="text" placeholder="t.ex. Kiosk Nova" />
+              <div class="rowField">
+                <label class="labelInline" for="companyName">Företagsnamn <span class="muted small">(required)</span></label>
+                <input id="companyName" class="inputBig" type="text" placeholder="t.ex. Kiosk Nova" />
               </div>
 
-              <div class="field">
-                <label class="label2" for="partnerIdInput">PartnerId <span class="muted small">(required)</span></label>
-                <input id="partnerIdInput" class="input input--dark" type="text" placeholder="t.ex. kiosk-nova-x7k2" />
-                <div class="muted small" style="margin-top:6px;">Tips: a–z, 0–9 och bindestreck.</div>
+              <div class="rowField">
+                <label class="labelInline" for="partnerIdInput">PartnerId <span class="muted small">(required)</span></label>
+                <input id="partnerIdInput" class="inputBig mono" type="text" placeholder="t.ex. kiosk-nova-x7k2" />
+              </div>
+              <div class="hint muted small">Tips: a–z, 0–9 och bindestreck. Mellanslag blir “-”.</div>
+
+              <div class="rowField">
+                <label class="labelInline" for="custUsername">Användarnamn <span class="muted small">(required)</span></label>
+                <input id="custUsername" class="inputBig mono" type="text" placeholder="t.ex. kiosk-nova-admin" />
               </div>
 
-              <div class="field">
-                <label class="label2" for="custUsername">Användarnamn <span class="muted small">(required)</span></label>
-                <input id="custUsername" class="input input--dark" type="text" placeholder="t.ex. kiosk-nova-admin" />
+              <div class="rowField">
+                <label class="labelInline" for="custPassword">Lösenord <span class="muted small">(required)</span></label>
+                <input id="custPassword" class="inputBig mono" type="text" placeholder="t.ex. MinKod123" />
               </div>
+              <div class="hint muted small">Testläge: visas i klartext så du kan kopiera.</div>
 
-              <div class="field">
-                <label class="label2" for="custPassword">Lösenord <span class="muted small">(required)</span></label>
-                <input id="custPassword" class="input input--dark" type="text" placeholder="t.ex. MinKod123" />
-                <div class="muted small" style="margin-top:6px;">Testläge: visas i klartext så du kan kopiera.</div>
-              </div>
-
-              <!-- Preview -->
-              <div class="card previewCard" style="padding:12px; margin-top:4px;">
+              <div class="card previewCard" style="padding:12px;">
                 <div class="muted small">Förhandsvisning</div>
-
                 <div class="previewRow">
                   <div class="previewKey">PartnerId</div>
                   <div id="pidPreview" class="badge">—</div>
                 </div>
-
                 <div class="previewRow">
                   <div class="previewKey">Användarnamn</div>
                   <div id="userPreview" class="badge">—</div>
@@ -113,23 +250,23 @@
                 <div id="formMsg" class="muted small" style="min-height:18px;"></div>
                 <div style="display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end;">
                   <button id="createBtn" type="button" class="btn btn-primary">Skapa kund</button>
-                  <button id="clearCustomersBtn" type="button" class="btn btn-ghost">Rensa lokala kunder</button>
+                  <button id="clearCustomersBtn" type="button" class="btn btn-ghost dangerLink">Rensa</button>
                 </div>
               </div>
             </div>
           </section>
 
-          <!-- List customers -->
-          <section id="listCard" class="card paperCard" aria-label="Lokala kunder">
+          <!-- List -->
+          <section class="card paperCard" aria-label="Lokala kunder">
             <div class="card__head">
               <div class="card__meta">
                 <h2 class="h2" style="margin:0">Lokala kunder</h2>
                 <p class="muted small" style="margin:6px 0 0 0">
-                  Sparas i din webbläsare (localStorage).
+                  Endast denna webbläsare. (localStorage)
                 </p>
               </div>
               <div class="card__side" style="display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end;">
-                <button id="exportBtn" type="button" class="btn btn-ghost" title="Kopiera JSON">Exportera</button>
+                <button id="exportBtn" type="button" class="btn btn-ghost">Exportera</button>
               </div>
             </div>
 
@@ -213,7 +350,7 @@
       const pid = normalizePartnerId(elPartnerId?.value || '');
       const username = (elCustUser?.value || '').toString().trim();
 
-      // keep partnerId normalized
+      // Keep normalized partnerId
       try {
         const raw = (elPartnerId?.value || '').toString();
         if (raw && raw !== pid) elPartnerId.value = pid;
@@ -246,52 +383,6 @@
       try { localStorage.setItem(LOCAL_CUSTOMERS_KEY, JSON.stringify(list)); } catch (_) {}
     }
 
-    function renderLocalCustomers() {
-      if (!elLocalList) return;
-      const list = loadLocalCustomers();
-
-      if (!list.length) {
-        elLocalList.textContent = 'Inga kunder sparade ännu.';
-        return;
-      }
-
-      elLocalList.innerHTML = '';
-      const table = document.createElement('table');
-      table.className = 'niceTable';
-
-      const thead = document.createElement('thead');
-      thead.innerHTML =
-        '<tr>' +
-        '<th>PartnerId</th>' +
-        '<th>Företag</th>' +
-        '<th>Användarnamn</th>' +
-        '<th>Lösenord</th>' +
-        '<th>Skapad</th>' +
-        '</tr>';
-      table.appendChild(thead);
-
-      const tbody = document.createElement('tbody');
-
-      for (const c of list) {
-        const tr = document.createElement('tr');
-        const td = (val) => {
-          const el = document.createElement('td');
-          el.textContent = (val ?? '').toString();
-          return el;
-        };
-
-        tr.appendChild(td(c.partnerId));
-        tr.appendChild(td(c.name));
-        tr.appendChild(td(c.username));
-        tr.appendChild(td(c.password));
-        tr.appendChild(td(c.createdAt ? new Date(c.createdAt).toLocaleString('sv-SE') : '—'));
-        tbody.appendChild(tr);
-      }
-
-      table.appendChild(tbody);
-      elLocalList.appendChild(table);
-    }
-
     function existsPartnerId(list, pid) {
       return list.some(x => (x?.partnerId || '') === pid);
     }
@@ -299,6 +390,31 @@
     function existsUsername(list, u) {
       const uu = (u || '').toString().trim().toLowerCase();
       return list.some(x => ((x?.username || '').toString().trim().toLowerCase() === uu));
+    }
+
+    function mask(s) {
+      const n = Math.max(6, Math.min(12, (s || '').length || 8));
+      return '•'.repeat(n);
+    }
+
+    async function copyToClipboard(text) {
+      try {
+        await navigator.clipboard.writeText(text);
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+
+    function clearInputs() {
+      try {
+        elCompany.value = '';
+        elPartnerId.value = '';
+        elCustUser.value = '';
+        elCustPass.value = '';
+      } catch (_) {}
+      refreshPreview();
+      try { elCompany?.focus(); } catch (_) {}
     }
 
     function doCreateCustomer() {
@@ -317,39 +433,153 @@
       const list = loadLocalCustomers();
 
       if (existsPartnerId(list, pid)) {
-        toast('PartnerId finns redan lokalt. Välj en annan.', 'warn', 2200);
+        toast('PartnerId finns redan. Välj en annan.', 'warn', 2200);
         return;
       }
       if (existsUsername(list, username)) {
-        toast('Användarnamn finns redan lokalt. Välj en annan.', 'warn', 2200);
+        toast('Användarnamn finns redan. Välj en annan.', 'warn', 2200);
         return;
       }
 
-      list.push({ partnerId: pid, name, username, password, createdAt: Date.now() });
+      list.unshift({ partnerId: pid, name, username, password, createdAt: Date.now() });
       saveLocalCustomers(list);
 
-      toast('Kund skapad (lokalt)', 'success', 1400);
+      toast('Kund skapad', 'success', 1400);
       renderLocalCustomers();
-
-      // Rensa inputs
-      try {
-        elCompany.value = '';
-        elPartnerId.value = '';
-        elCustUser.value = '';
-        elCustPass.value = '';
-      } catch (_) {}
-      refreshPreview();
+      clearInputs();
     }
 
-    async function copyToClipboard(text) {
-      try {
-        await navigator.clipboard.writeText(text);
-        return true;
-      } catch (_) {
-        return false;
+    function removeCustomer(partnerId) {
+      const pid = (partnerId || '').toString();
+      const list = loadLocalCustomers();
+      const next = list.filter(x => (x?.partnerId || '') !== pid);
+      saveLocalCustomers(next);
+      renderLocalCustomers();
+      toast('Kund borttagen', 'info', 1400);
+    }
+
+    async function copyLogin(partnerId) {
+      const pid = (partnerId || '').toString();
+      const list = loadLocalCustomers();
+      const c = list.find(x => (x?.partnerId || '') === pid);
+      if (!c) return;
+
+      const txt =
+`Partner: ${c.name}
+PartnerId: ${c.partnerId}
+Username: ${c.username}
+Password: ${c.password}`;
+
+      const ok = await copyToClipboard(txt);
+      toast(ok ? 'Inlogg kopierad' : 'Kunde inte kopiera', ok ? 'success' : 'warn', 1800);
+    }
+
+    function renderLocalCustomers() {
+      if (!elLocalList) return;
+      const list = loadLocalCustomers();
+
+      if (!list.length) {
+        elLocalList.textContent = 'Inga kunder sparade ännu.';
+        return;
       }
+
+      // Bygg DOM utan att injicera HTML från data (XSS-safe)
+      elLocalList.textContent = '';
+      const table = document.createElement('table');
+      table.className = 'niceTable';
+
+      const thead = document.createElement('thead');
+      const trh = document.createElement('tr');
+      ['PartnerId', 'Företag', 'Användarnamn', 'Lösenord', ''].forEach(t => {
+        const th = document.createElement('th');
+        th.textContent = t;
+        trh.appendChild(th);
+      });
+      thead.appendChild(trh);
+      table.appendChild(thead);
+
+      const tbody = document.createElement('tbody');
+
+      for (const c of list) {
+        const tr = document.createElement('tr');
+
+        const tdPid = document.createElement('td');
+        tdPid.textContent = (c.partnerId || '').toString();
+        tr.appendChild(tdPid);
+
+        const tdName = document.createElement('td');
+        tdName.textContent = (c.name || '').toString();
+        tr.appendChild(tdName);
+
+        const tdUser = document.createElement('td');
+        tdUser.textContent = (c.username || '').toString();
+        tr.appendChild(tdUser);
+
+        const tdPass = document.createElement('td');
+        const passWrap = document.createElement('div');
+        passWrap.style.display = 'flex';
+        passWrap.style.gap = '8px';
+        passWrap.style.alignItems = 'center';
+        passWrap.style.justifyContent = 'space-between';
+
+        const passText = document.createElement('span');
+        passText.className = 'mono';
+        passText.textContent = mask(c.password);
+
+        const toggleBtn = document.createElement('button');
+        toggleBtn.type = 'button';
+        toggleBtn.className = 'btn btn-ghost btnMini';
+        toggleBtn.textContent = 'Visa';
+        toggleBtn.addEventListener('click', () => {
+          const showing = toggleBtn.getAttribute('data-show') === '1';
+          if (showing) {
+            toggleBtn.setAttribute('data-show', '0');
+            toggleBtn.textContent = 'Visa';
+            passText.textContent = mask(c.password);
+          } else {
+            toggleBtn.setAttribute('data-show', '1');
+            toggleBtn.textContent = 'Dölj';
+            passText.textContent = (c.password || '').toString();
+          }
+        });
+
+        passWrap.appendChild(passText);
+        passWrap.appendChild(toggleBtn);
+        tdPass.appendChild(passWrap);
+        tr.appendChild(tdPass);
+
+        const tdActions = document.createElement('td');
+        const act = document.createElement('div');
+        act.className = 'cellActions';
+
+        const copyBtn = document.createElement('button');
+        copyBtn.type = 'button';
+        copyBtn.className = 'btn btn-ghost btnMini';
+        copyBtn.textContent = 'Kopiera login';
+        copyBtn.addEventListener('click', () => copyLogin(c.partnerId));
+
+        const delBtn = document.createElement('button');
+        delBtn.type = 'button';
+        delBtn.className = 'btn btn-ghost btnMini dangerLink';
+        delBtn.textContent = 'Ta bort';
+        delBtn.addEventListener('click', () => {
+          if (!confirm(`Ta bort kunden "${(c.name || '').toString()}"?`)) return;
+          removeCustomer(c.partnerId);
+        });
+
+        act.appendChild(copyBtn);
+        act.appendChild(delBtn);
+        tdActions.appendChild(act);
+        tr.appendChild(tdActions);
+
+        tbody.appendChild(tr);
+      }
+
+      table.appendChild(tbody);
+      elLocalList.appendChild(table);
     }
 
+    // Events
     if (elCompany) elCompany.addEventListener('input', refreshPreview);
     if (elPartnerId) elPartnerId.addEventListener('input', refreshPreview);
     if (elCustUser) elCustUser.addEventListener('input', refreshPreview);
@@ -360,14 +590,14 @@
     if (elClearCustomers) elClearCustomers.addEventListener('click', () => {
       if (!confirm('Rensa ALLA lokalt sparade kunder?')) return;
       saveLocalCustomers([]);
-      toast('Lokala kunder rensade', 'info', 1400);
       renderLocalCustomers();
+      toast('Lokala kunder rensade', 'info', 1400);
     });
 
     if (elExport) elExport.addEventListener('click', async () => {
       const data = loadLocalCustomers();
       const ok = await copyToClipboard(JSON.stringify(data, null, 2));
-      toast(ok ? 'Exporterade kunder (JSON) kopierat' : 'Kunde inte kopiera (clipboard)', ok ? 'success' : 'warn', 1800);
+      toast(ok ? 'JSON kopierat' : 'Kunde inte kopiera', ok ? 'success' : 'warn', 1800);
     });
 
     if (elLogout) elLogout.addEventListener('click', () => {
@@ -376,87 +606,17 @@
       setUiByAuth();
     });
 
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        const active = document.activeElement;
+        const inForm = active === elCompany || active === elPartnerId || active === elCustUser || active === elCustPass;
+        if (inForm) doCreateCustomer();
+      }
+    });
+
     (function boot() {
       setUiByAuth();
     })();
   </script>
-
-  <!-- Local UI polish (safe, only this page) -->
-  <style>
-    .is-hidden { display:none !important; }
-
-    /* Two-column layout on desktop */
-    .dashGrid {
-      display: grid;
-      gap: 16px;
-      grid-template-columns: 1fr;
-      align-items: start;
-    }
-    @media (min-width: 980px) {
-      .dashGrid { grid-template-columns: 1.1fr 0.9fr; }
-    }
-
-    /* Dark inputs to match theme */
-    .input--dark {
-      background: rgba(10, 18, 28, 0.55);
-      border: 1px solid rgba(255,255,255,0.12);
-      color: rgba(255,255,255,0.92);
-      box-shadow: inset 0 1px 0 rgba(255,255,255,0.05);
-    }
-    .input--dark::placeholder { color: rgba(255,255,255,0.45); }
-    .input--dark:focus {
-      outline: none;
-      border-color: rgba(120, 200, 255, 0.55);
-      box-shadow: 0 0 0 3px rgba(80, 170, 255, 0.18);
-    }
-
-    /* Preview */
-    .previewCard { border: 1px solid rgba(255,255,255,0.10); }
-    .previewRow {
-      display:flex;
-      justify-content:space-between;
-      gap:10px;
-      flex-wrap:wrap;
-      margin-top:10px;
-      align-items:center;
-    }
-    .previewKey { font-weight: 900; opacity: .92; }
-
-    /* Actions row */
-    .actionsRow {
-      display:flex;
-      align-items:flex-end;
-      justify-content:space-between;
-      gap:12px;
-      flex-wrap:wrap;
-      margin-top:6px;
-    }
-
-    /* Nice table */
-    .niceTable {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 13px;
-      overflow: hidden;
-      border-radius: 12px;
-    }
-    .niceTable thead th {
-      text-align: left;
-      font-weight: 900;
-      padding: 10px 10px;
-      border-bottom: 1px solid rgba(255,255,255,0.15);
-      color: rgba(255,255,255,0.92);
-    }
-    .niceTable tbody td {
-      padding: 8px 10px;
-      border-bottom: 1px solid rgba(255,255,255,0.08);
-      color: rgba(255,255,255,0.86);
-      vertical-align: top;
-      word-break: break-word;
-    }
-    .niceTable tbody tr:hover td {
-      background: rgba(255,255,255,0.03);
-    }
-  </style>
 </body>
 </html>
