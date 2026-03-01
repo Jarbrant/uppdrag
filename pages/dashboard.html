@@ -1,7 +1,9 @@
 <!-- ============================================================
-     FIL: pages/new-customer.html  (HEL FIL)
-     AO-DASH-NEWCUSTOMER-02 — NY SIDA: Skapa ny kund (MANUELL)
-     Ändring: INTE ?t= längre. Token läses från sessionStorage (MVP).
+     FIL: pages/dashboard.html  (HEL FIL)
+     AO-DASH-NEWCUSTOMER-03 — Skapa ny kund med manuellt användarnamn + lösenord
+     Ändring: Användarnamn + lösenord är nu OBLIGATORISKA fält.
+              Skickas till backend som { partnerId, name, username, password }.
+              För pilot/test: sparas även lokalt i sessionStorage.
      Policy: UI-only, XSS-safe, fail-closed, subpath-safe
 ============================================================ -->
 <!doctype html>
@@ -13,7 +15,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Admin — Skapa ny kund</title>
-  <meta name="description" content="Skapa ny kund/partner i backend (MVP)." />
+  <meta name="description" content="Skapa ny kund/partner med manuellt användarnamn och lösenord." />
   <link rel="stylesheet" href="../styles/main.css" />
 </head>
 
@@ -83,13 +85,15 @@
 
         <!-- ======================================================
              BLOCK 6 — Create customer (hidden tills token finns)
+             ÄNDRING: Användarnamn + lösenord nu OBLIGATORISKA.
         ======================================================= -->
         <section id="createCard" class="card paperCard is-hidden" aria-label="Skapa ny kund" style="margin-top: var(--sp-4);">
           <div class="card__head">
             <div class="card__meta">
               <h1 class="h2" style="margin:0">Skapa ny kund</h1>
               <p class="muted small" style="margin:6px 0 0 0">
-                Fyll i uppgifter manuellt. I denna MVP skickas endast <strong>partnerId</strong> + <strong>företagsnamn</strong> till backend.
+                Fyll i uppgifter manuellt. <strong>PartnerId</strong>, <strong>företagsnamn</strong>,
+                <strong>användarnamn</strong> och <strong>lösenord</strong> krävs.
               </p>
             </div>
             <div class="card__side" style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; justify-content:flex-end;">
@@ -99,60 +103,58 @@
 
           <div class="form" style="margin-top:12px; gap:12px;">
 
-            <!-- REQUIRED -->
+            <!-- OBLIGATORISKA FÄLT -->
             <div class="grid" style="display:grid; gap:12px; grid-template-columns: 1fr; margin-top: 4px;">
               <div class="field">
-                <label class="label2" for="companyName">Företagsnamn <span class="muted small">(required)</span></label>
+                <label class="label2" for="companyName">Företagsnamn <span class="muted small">(obligatoriskt)</span></label>
                 <input id="companyName" class="input" type="text" autocomplete="organization" placeholder="t.ex. Kiosk Nova" />
               </div>
 
               <div class="field">
-                <label class="label2" for="partnerIdInput">PartnerId <span class="muted small">(required)</span></label>
+                <label class="label2" for="partnerIdInput">PartnerId <span class="muted small">(obligatoriskt)</span></label>
                 <input id="partnerIdInput" class="input" type="text" inputmode="text" placeholder="t.ex. kiosk-nova-x7k2" />
                 <div class="muted small" style="margin-top:6px;">
-                  Tips: använd a–z, 0–9 och bindestreck. (Vi kan lägga auto-generator senare om du vill.)
+                  Tips: använd a–z, 0–9 och bindestreck.
+                </div>
+              </div>
+
+              <div class="field">
+                <label class="label2" for="custUsername">Användarnamn <span class="muted small">(obligatoriskt)</span></label>
+                <input id="custUsername" class="input" type="text" autocomplete="off" placeholder="t.ex. kiosk-nova-admin" />
+                <div class="muted small" style="margin-top:6px;">
+                  Kundens inlogg. Välj ett unikt användarnamn.
+                </div>
+              </div>
+
+              <div class="field">
+                <label class="label2" for="custPassword">Lösenord <span class="muted small">(obligatoriskt)</span></label>
+                <input id="custPassword" class="input" type="text" autocomplete="off" placeholder="t.ex. MinKod123" />
+                <div class="muted small" style="margin-top:6px;">
+                  Kundens lösenord. Visas i klartext så du kan dela det med kunden.
                 </div>
               </div>
             </div>
 
-            <!-- OPTIONAL / framtida -->
+            <!-- VALFRIA FÄLT -->
             <div class="grid" style="display:grid; gap:12px; grid-template-columns: 1fr; margin-top: 4px;">
               <div class="field">
-                <label class="label2" for="contactPerson">Kontaktperson <span class="muted small">(optional)</span></label>
+                <label class="label2" for="contactPerson">Kontaktperson <span class="muted small">(valfritt)</span></label>
                 <input id="contactPerson" class="input" type="text" autocomplete="name" placeholder="t.ex. Anders" />
               </div>
 
               <div class="field">
-                <label class="label2" for="email">E-post <span class="muted small">(optional)</span></label>
+                <label class="label2" for="email">E-post <span class="muted small">(valfritt)</span></label>
                 <input id="email" class="input" type="email" autocomplete="email" placeholder="t.ex. hej@kiosknova.se" />
               </div>
 
               <div class="field">
-                <label class="label2" for="phone">Telefon <span class="muted small">(optional)</span></label>
+                <label class="label2" for="phone">Telefon <span class="muted small">(valfritt)</span></label>
                 <input id="phone" class="input" type="tel" autocomplete="tel" placeholder="t.ex. 070-123 45 67" />
               </div>
 
               <div class="field">
-                <label class="label2" for="note">Notering <span class="muted small">(optional)</span></label>
-                <textarea id="note" class="input" rows="3" placeholder="Intern notering (sparas inte i MVP)"></textarea>
-              </div>
-            </div>
-
-            <!-- Partner user (framtida) -->
-            <div class="card" style="padding:12px; margin-top: 6px;">
-              <div style="font-weight:900;">Kundens inlogg (framtida)</div>
-              <div class="muted small" style="margin-top:6px;">
-                Dessa fält samlas nu men skickas inte/sparas inte i MVP.
-              </div>
-              <div class="grid" style="display:grid; gap:12px; grid-template-columns: 1fr; margin-top: 10px;">
-                <div class="field">
-                  <label class="label2" for="custUsername">Användarnamn <span class="muted small">(optional)</span></label>
-                  <input id="custUsername" class="input" type="text" autocomplete="off" placeholder="t.ex. kiosk-nova-admin" />
-                </div>
-                <div class="field">
-                  <label class="label2" for="custPassword">Lösenord <span class="muted small">(optional)</span></label>
-                  <input id="custPassword" class="input" type="password" autocomplete="new-password" placeholder="••••••••" />
-                </div>
+                <label class="label2" for="note">Notering <span class="muted small">(valfritt)</span></label>
+                <textarea id="note" class="input" rows="3" placeholder="Intern notering"></textarea>
               </div>
             </div>
 
@@ -163,6 +165,10 @@
                 <div style="display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap;">
                   <div style="font-weight:900;">PartnerId</div>
                   <div id="pidPreview" class="badge" aria-label="PartnerId">—</div>
+                </div>
+                <div style="display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap;">
+                  <div style="font-weight:900;">Användarnamn</div>
+                  <div id="userPreview" class="badge" aria-label="Användarnamn">—</div>
                 </div>
                 <div class="muted small">
                   Skapas med: <span id="createPayloadPreview">—</span>
@@ -180,13 +186,14 @@
 
         <!-- ======================================================
              BLOCK 7 — Success (hidden tills skapad)
+             ÄNDRING: Visar även användarnamn + lösenord.
         ======================================================= -->
         <section id="successCard" class="card paperCard is-hidden" aria-label="Kund skapad" style="margin-top: var(--sp-4);">
           <div class="card__head">
             <div class="card__meta">
-              <h2 class="h2" style="margin:0">Kund skapad</h2>
+              <h2 class="h2" style="margin:0">Kund skapad ✓</h2>
               <p class="muted small" style="margin:6px 0 0 0">
-                Partner är skapad i backend.
+                Partner är skapad. Skriv ner inlogguppgifterna och ge till kunden.
               </p>
             </div>
             <div class="card__side">
@@ -200,8 +207,30 @@
               <input id="successPid" class="input" type="text" readonly value="" />
             </div>
 
+            <div class="field">
+              <label class="label2" for="successUser">Användarnamn</label>
+              <input id="successUser" class="input" type="text" readonly value="" />
+            </div>
+
+            <div class="field">
+              <label class="label2" for="successPass">Lösenord</label>
+              <input id="successPass" class="input" type="text" readonly value="" />
+            </div>
+
+            <!-- Lokalt sparade kunder (pilot) -->
+            <div class="card" style="padding:12px; margin-top: 6px;">
+              <div style="font-weight:900;">Sparade kunder (lokal pilot-lista)</div>
+              <div class="muted small" style="margin-top:6px;">
+                Dessa sparas i din webbläsares localStorage under testperioden.
+              </div>
+              <div id="localCustomerList" style="margin-top:10px; font-size:14px;"></div>
+            </div>
+
             <div style="display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end;">
-              <a id="inviteLink" class="btn btn-primary" href="./dashboard.html" aria-label="Skapa invite">
+              <button id="createAnotherBtn" type="button" class="btn btn-primary" aria-label="Skapa ny kund">
+                Skapa ännu en kund
+              </button>
+              <a id="inviteLink" class="btn btn-ghost" href="./dashboard.html" aria-label="Skapa invite">
                 Skapa invite
               </a>
               <a id="partnerLink" class="btn btn-ghost" href="./partner.html" aria-label="Till partner-sidan">
@@ -210,7 +239,7 @@
             </div>
 
             <div class="muted small">
-              Tips: “Skapa invite” tar dig tillbaka till dashboard med partnerId förifyllt.
+              Tips: "Skapa invite" tar dig tillbaka till dashboard med partnerId förifyllt.
             </div>
           </div>
         </section>
@@ -221,49 +250,57 @@
 
   <!-- ==========================================================
        BLOCK 8 — JS (inline, no extra file)
+       ÄNDRING: Användarnamn + lösenord obligatoriska.
+                Sparas lokalt i localStorage för pilot.
+                Skickas till backend i payload.
   =========================================================== -->
   <script type="module">
     /* ==========================================================
        BLOCK 8.1 — Config
     =========================================================== */
     const API_BASE = 'https://uppdrag.andersmenyit.workers.dev'; // HOOK: api-base
-    const TOKEN_KEY = 'ADMIN_TOKEN_MVP'; // MVP (sessionStorage) — NY KEY
+    const TOKEN_KEY = 'ADMIN_TOKEN_MVP';        // MVP (sessionStorage)
+    const LOCAL_CUSTOMERS_KEY = 'PILOT_CUSTOMERS'; // Pilot: localStorage
 
     /* ==========================================================
        BLOCK 8.2 — DOM hooks
     =========================================================== */
     const $ = (sel) => document.querySelector(sel);
 
-    const elStatus = $('#statusSlot');
+    const elStatus        = $('#statusSlot');
 
-    const elGuardCard = $('#guardCard');
-    const elCreateCard = $('#createCard');
-    const elSuccessCard = $('#successCard');
+    const elGuardCard     = $('#guardCard');
+    const elCreateCard    = $('#createCard');
+    const elSuccessCard   = $('#successCard');
 
-    const elBackToDash = $('#backToDashLink');
-    const elLoginLink = $('#loginLink');
+    const elBackToDash    = $('#backToDashLink');
+    const elLoginLink     = $('#loginLink');
 
-    const elCompany = $('#companyName');
-    const elPartnerId = $('#partnerIdInput');
+    const elCompany       = $('#companyName');
+    const elPartnerId     = $('#partnerIdInput');
+    const elCustUser      = $('#custUsername');
+    const elCustPass      = $('#custPassword');
 
-    const elContact = $('#contactPerson');
-    const elEmail = $('#email');
-    const elPhone = $('#phone');
-    const elNote = $('#note');
+    const elContact       = $('#contactPerson');
+    const elEmail         = $('#email');
+    const elPhone         = $('#phone');
+    const elNote          = $('#note');
 
-    const elCustUser = $('#custUsername');
-    const elCustPass = $('#custPassword');
+    const elPidPreview       = $('#pidPreview');
+    const elUserPreview      = $('#userPreview');
+    const elPayloadPreview   = $('#createPayloadPreview');
+    const elMsg              = $('#formMsg');
 
-    const elPidPreview = $('#pidPreview');
-    const elPayloadPreview = $('#createPayloadPreview');
-    const elMsg = $('#formMsg');
+    const elCreate           = $('#createBtn');
 
-    const elCreate = $('#createBtn');
-
-    const elSuccessPidBadge = $('#successPidBadge');
-    const elSuccessPid = $('#successPid');
-    const elInviteLink = $('#inviteLink');
-    const elPartnerLink = $('#partnerLink');
+    const elSuccessPidBadge  = $('#successPidBadge');
+    const elSuccessPid       = $('#successPid');
+    const elSuccessUser      = $('#successUser');
+    const elSuccessPass      = $('#successPass');
+    const elInviteLink       = $('#inviteLink');
+    const elPartnerLink      = $('#partnerLink');
+    const elCreateAnother    = $('#createAnotherBtn');
+    const elLocalList        = $('#localCustomerList');
 
     /* ==========================================================
        BLOCK 8.3 — State (session-only)
@@ -305,17 +342,14 @@
     function setBusy(on) {
       state.busy = !!on;
       disable(elCreate, on);
-
       disable(elCompany, on);
       disable(elPartnerId, on);
-
+      disable(elCustUser, on);
+      disable(elCustPass, on);
       disable(elContact, on);
       disable(elEmail, on);
       disable(elPhone, on);
       disable(elNote, on);
-
-      disable(elCustUser, on);
-      disable(elCustPass, on);
     }
 
     /* ==========================================================
@@ -340,38 +374,41 @@
       show(elSuccessCard, false);
 
       if (elBackToDash) elBackToDash.setAttribute('href', './dashboard.html');
-      if (elLoginLink) elLoginLink.setAttribute('href', './login.html');
+      if (elLoginLink)  elLoginLink.setAttribute('href', './login.html');
 
       refreshPreview();
     }
 
     /* ==========================================================
        BLOCK 8.6 — Preview + validation
+       ÄNDRING: Validerar nu även användarnamn + lösenord.
     =========================================================== */
     function normalizePartnerId(input) {
-      // mild normalization: trim + lower, ersätt mellanslag med bindestreck
       const s0 = (input ?? '').toString().trim().toLowerCase();
       const s1 = s0.replace(/\s+/g, '-');
       return s1;
     }
 
     function refreshPreview() {
-      const name = (elCompany?.value || '').toString().trim();
-      const pidRaw = (elPartnerId?.value || '').toString();
-      const pid = normalizePartnerId(pidRaw);
+      const name     = (elCompany?.value  || '').toString().trim();
+      const pidRaw   = (elPartnerId?.value || '').toString();
+      const pid      = normalizePartnerId(pidRaw);
+      const username = (elCustUser?.value  || '').toString().trim();
+      const password = (elCustPass?.value  || '').toString().trim();
 
-      // håll input synk (utan att bråka vid typing)
       try {
         if (elPartnerId && pidRaw && pidRaw !== pid) elPartnerId.value = pid;
       } catch (_) {}
 
-      setText(elPidPreview, pid || '—');
+      setText(elPidPreview,  pid      || '—');
+      setText(elUserPreview, username || '—');
 
-      const safeName = name || '—';
-      const safePid = pid || '—';
-      setText(elPayloadPreview, `{"partnerId":"${safePid}","name":"${safeName}"}`);
+      const safeName = name     || '—';
+      const safePid  = pid      || '—';
+      const safeUser = username || '—';
+      setText(elPayloadPreview, `{"partnerId":"${safePid}","name":"${safeName}","username":"${safeUser}","password":"***"}`);
 
-      const can = !!state.adminToken && !!name && !!pid && !state.busy;
+      const can = !!state.adminToken && !!name && !!pid && !!username && !!password && !state.busy;
       disable(elCreate, !can);
 
       if (!state.adminToken) {
@@ -380,13 +417,79 @@
         setText(elMsg, 'Företagsnamn krävs.');
       } else if (!pid) {
         setText(elMsg, 'PartnerId krävs.');
+      } else if (!username) {
+        setText(elMsg, 'Användarnamn krävs.');
+      } else if (!password) {
+        setText(elMsg, 'Lösenord krävs.');
       } else {
         setText(elMsg, '');
       }
     }
 
     /* ==========================================================
-       BLOCK 8.7 — API call (MVP: { partnerId, name })
+       BLOCK 8.7 — Lokal pilot-lagring (localStorage)
+       Sparar kunder lokalt så du kan se dem under test.
+    =========================================================== */
+    function loadLocalCustomers() {
+      try {
+        const raw = localStorage.getItem(LOCAL_CUSTOMERS_KEY);
+        return raw ? JSON.parse(raw) : [];
+      } catch (_) {
+        return [];
+      }
+    }
+
+    function saveLocalCustomer(entry) {
+      try {
+        const list = loadLocalCustomers();
+        list.push(entry);
+        localStorage.setItem(LOCAL_CUSTOMERS_KEY, JSON.stringify(list));
+      } catch (_) {}
+    }
+
+    function renderLocalCustomers() {
+      if (!elLocalList) return;
+      const list = loadLocalCustomers();
+      if (!list.length) {
+        elLocalList.textContent = 'Inga kunder sparade ännu.';
+        return;
+      }
+      elLocalList.innerHTML = '';
+      const table = document.createElement('table');
+      table.style.cssText = 'width:100%; border-collapse:collapse; font-size:13px;';
+      const thead = document.createElement('thead');
+      thead.innerHTML = '<tr style="text-align:left; border-bottom:1px solid rgba(255,255,255,.15);">'
+        + '<th style="padding:4px 8px;">PartnerId</th>'
+        + '<th style="padding:4px 8px;">Företag</th>'
+        + '<th style="padding:4px 8px;">Användarnamn</th>'
+        + '<th style="padding:4px 8px;">Lösenord</th>'
+        + '<th style="padding:4px 8px;">Skapad</th>'
+        + '</tr>';
+      table.appendChild(thead);
+      const tbody = document.createElement('tbody');
+      for (const c of list) {
+        const tr = document.createElement('tr');
+        tr.style.borderBottom = '1px solid rgba(255,255,255,.08)';
+        const td = (val) => {
+          const el = document.createElement('td');
+          el.style.padding = '4px 8px';
+          el.textContent = (val ?? '').toString();
+          return el;
+        };
+        tr.appendChild(td(c.partnerId));
+        tr.appendChild(td(c.name));
+        tr.appendChild(td(c.username));
+        tr.appendChild(td(c.password));
+        tr.appendChild(td(c.createdAt ? new Date(c.createdAt).toLocaleString('sv-SE') : '—'));
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+      elLocalList.appendChild(table);
+    }
+
+    /* ==========================================================
+       BLOCK 8.8 — API call
+       ÄNDRING: Skickar nu { partnerId, name, username, password }
     =========================================================== */
     function authHeaders() {
       return {
@@ -395,12 +498,12 @@
       };
     }
 
-    async function apiCreatePartner(partnerId, name) {
+    async function apiCreatePartner(partnerId, name, username, password) {
       const url = `${API_BASE.replace(/\/$/, '')}/admin/partners/create`;
       const res = await fetch(url, {
         method: 'POST',
         headers: authHeaders(),
-        body: JSON.stringify({ partnerId, name })
+        body: JSON.stringify({ partnerId, name, username, password })
       });
       const data = await res.json().catch(() => null);
       return { ok: res.ok, status: res.status, data };
@@ -418,19 +521,21 @@
         return;
       }
 
-      const name = (elCompany?.value || '').toString().trim();
-      const pid = normalizePartnerId((elPartnerId?.value || '').toString());
+      const name     = (elCompany?.value  || '').toString().trim();
+      const pid      = normalizePartnerId((elPartnerId?.value || '').toString());
+      const username = (elCustUser?.value  || '').toString().trim();
+      const password = (elCustPass?.value  || '').toString().trim();
 
-      if (!name || !pid) {
+      if (!name || !pid || !username || !password) {
         refreshPreview();
-        toast('Företagsnamn + partnerId krävs', 'warn', 1800);
+        toast('Alla obligatoriska fält måste fyllas i', 'warn', 1800);
         return;
       }
 
       setBusy(true);
       toast('Skapar kund…', 'info', 900);
 
-      const res = await apiCreatePartner(pid, name);
+      const res = await apiCreatePartner(pid, name, username, password);
 
       // fail-closed vid 403: rensa token i session (MVP)
       if (res.status === 403) {
@@ -455,28 +560,61 @@
         return;
       }
 
-      toast('Kund skapad', 'success', 1100);
+      // Spara lokalt för pilot
+      saveLocalCustomer({
+        partnerId: pid,
+        name,
+        username,
+        password,
+        createdAt: Date.now()
+      });
+
+      toast('Kund skapad ✓', 'success', 1400);
 
       setText(elSuccessPidBadge, pid);
-      if (elSuccessPid) elSuccessPid.value = pid;
+      if (elSuccessPid)  elSuccessPid.value  = pid;
+      if (elSuccessUser) elSuccessUser.value = username;
+      if (elSuccessPass) elSuccessPass.value = password;
 
-      if (elInviteLink) elInviteLink.setAttribute('href', `./dashboard.html?partnerId=${encodeURIComponent(pid)}`);
+      if (elInviteLink)  elInviteLink.setAttribute('href', `./dashboard.html?partnerId=${encodeURIComponent(pid)}`);
       if (elPartnerLink) elPartnerLink.setAttribute('href', './partner.html');
 
       show(elCreateCard, false);
-      show(elGuardCard, false);
+      show(elGuardCard,  false);
       show(elSuccessCard, true);
+
+      renderLocalCustomers();
 
       setBusy(false);
     }
 
     /* ==========================================================
-       BLOCK 8.8 — Events
+       BLOCK 8.9 — Events
+       ÄNDRING: Lyssnar även på användarnamn + lösenord för preview.
     =========================================================== */
-    if (elCompany) elCompany.addEventListener('input', refreshPreview);
+    if (elCompany)   elCompany.addEventListener('input',   refreshPreview);
     if (elPartnerId) elPartnerId.addEventListener('input', refreshPreview);
+    if (elCustUser)  elCustUser.addEventListener('input',  refreshPreview);
+    if (elCustPass)  elCustPass.addEventListener('input',  refreshPreview);
 
     if (elCreate) elCreate.addEventListener('click', doCreate);
+
+    if (elCreateAnother) {
+      elCreateAnother.addEventListener('click', () => {
+        show(elSuccessCard, false);
+        show(elCreateCard, true);
+        // Rensa formuläret
+        if (elCompany)   elCompany.value   = '';
+        if (elPartnerId) elPartnerId.value = '';
+        if (elCustUser)  elCustUser.value  = '';
+        if (elCustPass)  elCustPass.value  = '';
+        if (elContact)   elContact.value   = '';
+        if (elEmail)     elEmail.value     = '';
+        if (elPhone)     elPhone.value     = '';
+        if (elNote)      elNote.value      = '';
+        refreshPreview();
+      });
+    }
 
     window.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !state.busy) {
@@ -486,7 +624,7 @@
     });
 
     /* ==========================================================
-       BLOCK 8.9 — Boot
+       BLOCK 8.10 — Boot
     =========================================================== */
     (function boot() {
       readTokenFromSession();
