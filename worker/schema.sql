@@ -1,19 +1,24 @@
 -- ============================================================
 -- FIL: worker/schema.sql (HEL FIL)
 -- AO 1/6 — D1: partners + partner_invites + rewards
+-- ÄNDRING: username + passwordHash tillagda i partners-tabellen
+--          för manuellt skapande av kundkonton (pilot/MVP).
 -- ============================================================
 
 PRAGMA foreign_keys = ON;
 
 -- ============================================================
 -- TABLE: partners
+-- ÄNDRING: Nya kolumner username + passwordHash (pilot/MVP)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS partners (
-  partnerId  TEXT PRIMARY KEY,
-  name       TEXT NOT NULL,
-  pinHash    TEXT, -- nullable tills satt
-  isActive   INTEGER NOT NULL DEFAULT 1,
-  createdAt  INTEGER NOT NULL
+  partnerId     TEXT PRIMARY KEY,
+  name          TEXT NOT NULL,
+  username      TEXT,          -- NY: kundens användarnamn (pilot)
+  passwordHash  TEXT,          -- NY: sha256-hash av kundens lösenord (pilot)
+  pinHash       TEXT,          -- nullable tills satt (invite-flöde)
+  isActive      INTEGER NOT NULL DEFAULT 1,
+  createdAt     INTEGER NOT NULL
 );
 
 -- ============================================================
