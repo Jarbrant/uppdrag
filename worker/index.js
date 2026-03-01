@@ -16,7 +16,7 @@
  * Endpoints:
  *   Admin (Bearer):
  *     POST /admin/login                 { username, password } -> { ok:true, adminToken, expiresAt }
- *     POST /admin/partners/create       { partnerId, name, username, password }  ← ÄNDRAD
+ *     POST /admin/partners/create
  *     POST /admin/partners/invite
  *     GET  /admin/partners/list
  *     GET  /admin/partners/:partnerId/rewards
@@ -25,9 +25,6 @@
  *
  *   Partner invite flow:
  *     POST /partners/set-pin      { inviteToken, pin }
- *
- *   Partner login (pilot, NY):
- *     POST /partners/login        { username, password } -> { ok, partnerId, name }
  *
  *   Partner rewards (auth via partnerId+pin):
  *     POST /rewards/create
@@ -38,28 +35,34 @@
  *     GET  /rewards/pick3?tier=cp|final&partnerPool=csv(optional)&seed=string(optional)
  *
  *   Vouchers (verify kompatibilitet + claim):
- *     POST /vouchers/claim        { gameId, checkpointIndex, rewardId }
+ *     POST /vouchers/claim        { gameId, checkpointIndex, rewardId }   // stock-- + voucher create
  *     GET  /vouchers/:voucherId
  *     POST /vouchers/redeem       { voucherId, partnerId, pin }
  *
  * Policy:
  *   - Fail-closed: validera input, 400/403/404/409/410/500
  *   - CORS: endast origins i CORS_ORIGINS, annars 403 (fail-closed)
- *   - Inga persondata (inga pinHash/passwordHash i svar)
+ *   - Inga persondata (inga pinHash i svar)
  *
  * ÄNDRINGSLOGG (≤8):
  * 1) NY: /admin/login (username+password) -> HMAC-signad token + expiresAt
  * 2) NY: Bearer-verifiering för ALLA /admin/* endpoints (403 om saknas/ogiltig/utgången)
  * 3) CORS: allow-headers inkluderar Authorization
- * 4) ÄNDRAD: /admin/partners/create tar nu emot username + password (pilot)
- * 5) NY: /partners/login — partner-login med username + password (pilot)
- * 6) ÄNDRAD: /admin/partners/list returnerar nu även username + hasPin
+ *
+ * TESTÄNDRING:
+ * - Hårdkodad admin-login (anders / TestAdmin) för testmiljö
  * ============================================================ */
 
 /* ============================================================
  * BLOCK 1 — Small utils
  * ============================================================ */
 const enc = new TextEncoder();
+
+/* ============================================================
+ * BLOCK 1.0 — HARD CODED ADMIN (TEST ONLY)
+ * ============================================================ */
+const HARD_ADMIN_USER = 'anders';
+const HARD_ADMIN_PASS = 'TestAdmin';
 
 function nowMs() { return Date.now(); }
 
@@ -320,8 +323,10 @@ async function verifyAdminToken(env, token) {
   if (exp <= nowMs()) return { ok: false, code: 'forbidden' };
 
   // Fail-closed: lås till env.ADMIN_USER (MVP)
+  // TEST: tillåt även hårdkodad admin-user
   const envUser = asText(env.ADMIN_USER);
-  if (!envUser || sub !== envUser) return { ok: false, code: 'forbidden' };
+  const okUser = (envUser && sub === envUser) || (sub === HARD_ADMIN_USER);
+  if (!okUser) return { ok: false, code: 'forbidden' };
 
   return { ok: true, sub, iat, exp };
 }
@@ -340,6 +345,9 @@ async function requireAdminBearer(req, env) {
   return v.ok ? { ok: true, sub: v.sub, exp: v.exp } : { ok: false };
 }
 
+/* ============================================================
+ * BLOCK 5.1 — Admin login (ÄNDRAD: test fallback hardcoded)
+ * ============================================================ */
 async function adminLogin(req, env) {
   const parsed = await readJson(req);
   if (!parsed.ok || !isPlainObject(parsed.value)) return { status: 400, body: { ok: false, error: 'bad_request' } };
@@ -347,6 +355,16 @@ async function adminLogin(req, env) {
   const username = asText(parsed.value.username);
   const password = asText(parsed.value.password);
 
+  if (!username || !password) return { status: 403, body: { ok: false, error: 'forbidden' } };
+
+  // TEST MODE: hårdkodad admin-login
+  if (username === HARD_ADMIN_USER && password === HARD_ADMIN_PASS) {
+    const tok = await makeAdminToken(env, username);
+    if (!tok.ok || !tok.token) return { status: 500, body: { ok: false, error: 'server_error' } };
+    return { status: 200, body: { ok: true, adminToken: tok.token, expiresAt: tok.exp } };
+  }
+
+  // PROD MODE: env-secrets (som tidigare)
   const envUser = asText(env.ADMIN_USER);
   const envPassHash = asText(env.ADMIN_PASS_HASH);
 
@@ -402,52 +420,29 @@ function dbMissingTableResponse() {
 
 /* ============================================================
  * BLOCK 8 — Endpoint handlers: Admin (POST)
- * ÄNDRING: adminCreatePartner tar nu emot username + password.
- *          Hashar lösenordet och sparar som pinHash + passwordHash.
  * ============================================================ */
 async function adminCreatePartner(req, env) {
   const parsed = await readJson(req);
   if (!parsed.ok || !isPlainObject(parsed.value)) return { status: 400, body: { ok: false, error: 'bad_request' } };
 
   const partnerId = asText(parsed.value.partnerId);
-  const name      = asText(parsed.value.name);
-  const username  = asText(parsed.value.username);
-  const password  = asText(parsed.value.password);
+  const name = asText(parsed.value.name);
 
   if (!partnerId || partnerId.length > 80) return { status: 400, body: { ok: false, error: 'bad_request' } };
   if (!name || name.length > 120) return { status: 400, body: { ok: false, error: 'bad_request' } };
 
-  // username + password är valfria i backend (bakåtkompatibelt)
-  // men om de anges, validera
-  if (username && username.length > 80) return { status: 400, body: { ok: false, error: 'bad_request' } };
-  if (password && password.length > 120) return { status: 400, body: { ok: false, error: 'bad_request' } };
-
   const createdAt = nowMs();
-
-  // Om password anges: hasha och sätt som pinHash direkt (pilot-genväg)
-  // Detta gör att partnern kan logga in direkt utan invite-flöde
-  let ph = null;
-  let pwHash = null;
-  if (password) {
-    ph = await pinHash(password, env);
-    pwHash = await sha256Hex(password);
-  }
 
   try {
     await env.DB
-      .prepare('INSERT INTO partners (partnerId, name, username, passwordHash, pinHash, isActive, createdAt) VALUES (?, ?, ?, ?, ?, 1, ?)')
-      .bind(partnerId, name, username || null, pwHash, ph, createdAt)
+      .prepare('INSERT INTO partners (partnerId, name, pinHash, isActive, createdAt) VALUES (?, ?, NULL, 1, ?)')
+      .bind(partnerId, name, createdAt)
       .run();
-  } catch (e) {
-    // Duplicate partnerId ger constraint error
-    const msg = (e?.message || '').toLowerCase();
-    if (msg.includes('unique') || msg.includes('constraint') || msg.includes('duplicate')) {
-      return { status: 409, body: { ok: false, error: 'duplicate', message: 'PartnerId finns redan.' } };
-    }
+  } catch (_) {
     return { status: 400, body: { ok: false, error: 'bad_request' } };
   }
 
-  return { status: 200, body: { ok: true, partnerId, username: username || null } };
+  return { status: 200, body: { ok: true } };
 }
 
 async function adminInvitePartner(req, env) {
@@ -480,11 +475,10 @@ async function adminInvitePartner(req, env) {
 
 /* ============================================================
  * BLOCK 9 — Endpoint handlers: Admin (GET) AO 6/6
- * ÄNDRING: adminPartnersList returnerar nu även username.
  * ============================================================ */
 async function adminPartnersList(env) {
   const out = await env.DB
-    .prepare(`SELECT partnerId, name, username, isActive, createdAt,
+    .prepare(`SELECT partnerId, name, isActive, createdAt,
                      CASE WHEN pinHash IS NULL OR pinHash = '' THEN 0 ELSE 1 END AS hasPin
               FROM partners
               ORDER BY createdAt DESC`)
@@ -661,51 +655,6 @@ async function partnerSetPin(req, env) {
   }
 
   return { status: 200, body: { ok: true, partnerId } };
-}
-
-/* ============================================================
- * BLOCK 10.1 — Partner login (pilot/MVP, NY)
- * POST /partners/login  { username, password }
- * Returnerar { ok, partnerId, name } om korrekt.
- * ============================================================ */
-async function partnerLogin(req, env) {
-  const parsed = await readJson(req);
-  if (!parsed.ok || !isPlainObject(parsed.value)) return { status: 400, body: { ok: false, error: 'bad_request' } };
-
-  const username = asText(parsed.value.username);
-  const password = asText(parsed.value.password);
-
-  if (!username || !password) return { status: 400, body: { ok: false, error: 'bad_request' } };
-
-  // Sök partner på username
-  const row = await env.DB
-    .prepare('SELECT partnerId, name, username, passwordHash, pinHash, isActive FROM partners WHERE username = ?')
-    .bind(username)
-    .first();
-
-  if (!row) return { status: 403, body: { ok: false, error: 'forbidden' } };
-  if (Number(row.isActive) !== 1) return { status: 403, body: { ok: false, error: 'forbidden' } };
-
-  // Verifiera lösenord: kolla passwordHash först, fallback till pinHash
-  const inputHash = await sha256Hex(password);
-  const storedPwHash = asText(row.passwordHash);
-  const storedPinHash = asText(row.pinHash);
-  const inputPinHash = await pinHash(password, env);
-
-  const pwOk = (storedPwHash && inputHash === storedPwHash);
-  const pinOk = (storedPinHash && inputPinHash === storedPinHash);
-
-  if (!pwOk && !pinOk) return { status: 403, body: { ok: false, error: 'forbidden' } };
-
-  return {
-    status: 200,
-    body: {
-      ok: true,
-      partnerId: asText(row.partnerId),
-      name: asText(row.name),
-      username: asText(row.username)
-    }
-  };
 }
 
 /* ============================================================
@@ -1070,7 +1019,6 @@ async function voucherClaim(req, env) {
 
 /* ============================================================
  * BLOCK 14 — Router
- * ÄNDRING: Ny route /partners/login (pilot)
  * ============================================================ */
 function route(req) {
   const url = new URL(req.url);
@@ -1157,14 +1105,6 @@ export default {
       }
 
       // ======================================================
-      // Partner login (pilot, NY)
-      // ======================================================
-      if (path === '/partners/login' && method === 'POST') {
-        const out = await partnerLogin(req, env);
-        return json(out.body, out.status, cors);
-      }
-
-      // ======================================================
       // Rewards CRUD (partnerId+pin)
       // ======================================================
       if (path === '/rewards/create' && method === 'POST') {
@@ -1216,16 +1156,12 @@ export default {
 
 /* ============================================================
  * TESTNOTERINGAR (snabb)
- * 1) POST /admin/login rätt user/pass -> 200 + token
+ * 1) POST /admin/login (anders/TestAdmin) -> 200 + token
  * 2) GET /admin/partners/list utan Authorization -> 403
  * 3) GET /admin/partners/list med Bearer token -> 200
  * 4) Vänta > TTL -> samma call -> 403
- * 5) POST /admin/partners/create med username+password -> 200 + partnerId
- * 6) POST /partners/login med username+password -> 200 + partnerId
  *
  * RISK/EDGE CASES
  * - CORS_ORIGINS måste inkludera din dashboard-origin, annars får du 403 i browsern.
  * - ADMIN_TOKEN_SECRET måste vara satt, annars blir login 500/server_error eller admin 403.
- * - Om databasen redan har partners utan username/passwordHash-kolumner
- *   behöver du köra ALTER TABLE (se migration-SQL nedan).
  * ============================================================ */
