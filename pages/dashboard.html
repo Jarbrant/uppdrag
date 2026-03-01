@@ -1,7 +1,9 @@
 <!-- ============================================================
      FIL: pages/dashboard.html  (HEL FIL)
-     AO-DASH-LOCAL-PROD-02 — Admin Dashboard (Frontend-only, GitHub Pages)
-     Fix: Snygg tabell vid skapad kund (actions bryts inte vertikalt)
+     AO-DASH-LOCAL-PROD-03 — Frontend-only Admin Dashboard
+     Fix:
+      - Snygga stora inputs i "Skapa ny kund" (ingen smal pill-rendering)
+      - Snygga actions-knappar i tabellen (ikonknappar)
 ============================================================ -->
 <!doctype html>
 <html lang="sv">
@@ -26,6 +28,38 @@
       .dashGrid { grid-template-columns: 1.1fr 0.9fr; }
     }
 
+    /* ---------- Pills / badges ---------- */
+    .pill {
+      display:inline-flex;
+      align-items:center;
+      gap:8px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,.12);
+      background: rgba(255,255,255,.04);
+      font-size: 12px;
+      color: rgba(255,255,255,.85);
+      white-space: nowrap;
+    }
+
+    .mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size: 12px;
+      color: rgba(255,255,255,.86);
+    }
+
+    .dangerLink {
+      border-color: rgba(255,120,120,.35) !important;
+      color: rgba(255,210,210,.92) !important;
+    }
+
+    /* ---------- FORM (own layout; avoid global .field weirdness) ---------- */
+    .formBlock {
+      margin-top: 12px;
+      display: grid;
+      gap: 14px;
+    }
+
     .rowField {
       display:grid;
       grid-template-columns: 220px 1fr;
@@ -39,25 +73,30 @@
     .labelInline {
       font-weight: 900;
       color: rgba(255,255,255,.92);
+      line-height: 1.2;
     }
-    .hint {
+
+    .helpLine {
       grid-column: 2 / 3;
       margin-top: -6px;
     }
     @media (max-width: 720px) {
-      .hint { grid-column: auto; margin-top: 0; }
+      .helpLine { grid-column: auto; margin-top: 0; }
     }
 
     .inputBig {
+      display:block;              /* viktig: gör den inte inline */
+      width:100%;
       background: rgba(10, 18, 28, 0.55);
       border: 1px solid rgba(255,255,255,0.12);
       color: rgba(255,255,255,0.92);
       box-shadow: inset 0 1px 0 rgba(255,255,255,0.05);
-      height: 46px;
+      height: 48px;
       font-size: 16px;
       padding: 10px 12px;
-      border-radius: 12px;
-      width: 100%;
+      border-radius: 14px;
+      appearance: none;
+      -webkit-appearance: none;
     }
     .inputBig::placeholder { color: rgba(255,255,255,0.45); }
     .inputBig:focus {
@@ -86,46 +125,22 @@
       margin-top: 10px;
     }
 
-    .pill {
-      display:inline-flex;
-      align-items:center;
-      gap:8px;
-      padding: 6px 10px;
-      border-radius: 999px;
-      border: 1px solid rgba(255,255,255,.12);
-      background: rgba(255,255,255,.04);
-      font-size: 12px;
-      color: rgba(255,255,255,.85);
-      white-space: nowrap;
-    }
-
-    .mono {
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-      font-size: 12px;
-      color: rgba(255,255,255,.86);
-    }
-
-    .dangerLink {
-      border-color: rgba(255,120,120,.35) !important;
-      color: rgba(255,210,210,.92) !important;
-    }
-
-    /* ====== TABLE FIXES ====== */
+    /* ---------- TABLE (stable + nice actions) ---------- */
     .tableWrap {
       width: 100%;
-      overflow-x: auto;           /* om det blir trångt -> scroll istället för ful brytning */
+      overflow-x: auto;
       -webkit-overflow-scrolling: touch;
       border-radius: 12px;
     }
 
     .niceTable {
       width: 100%;
-      min-width: 720px;           /* viktig: tvingar layout så actions får plats */
+      min-width: 760px;
       border-collapse: collapse;
       font-size: 13px;
       overflow: hidden;
       border-radius: 12px;
-      table-layout: fixed;        /* ger stabila kolumner */
+      table-layout: fixed;
     }
 
     .niceTable thead th {
@@ -137,42 +152,58 @@
     }
 
     .niceTable tbody td {
-      padding: 8px 10px;
+      padding: 10px 10px;
       border-bottom: 1px solid rgba(255,255,255,0.08);
       color: rgba(255,255,255,0.86);
-      vertical-align: top;
+      vertical-align: middle;
       word-break: break-word;
     }
 
-    .niceTable tbody tr:hover td {
-      background: rgba(255,255,255,0.03);
-    }
+    .niceTable tbody tr:hover td { background: rgba(255,255,255,0.03); }
 
-    /* Kolumnbredder (stabilt) */
-    .colPid   { width: 170px; }
-    .colName  { width: 140px; }
-    .colUser  { width: 140px; }
-    .colPass  { width: 160px; }
-    .colAct   { width: 230px; }   /* actions får plats -> inga vertikala knappar */
-
-    .btnMini {
-      padding: 6px 10px;
-      border-radius: 999px;
-      font-size: 12px;
-      white-space: nowrap;        /* viktig: bryt inte */
-      word-break: normal;
-    }
+    .colPid   { width: 190px; }
+    .colName  { width: 150px; }
+    .colUser  { width: 150px; }
+    .colPass  { width: 170px; }
+    .colAct   { width: 160px; }
 
     .cellActions {
       display:flex;
-      gap:8px;
-      flex-wrap: nowrap;          /* viktig: bryt inte */
+      gap: 10px;
       justify-content:flex-end;
-      white-space: nowrap;        /* viktig */
+      flex-wrap: nowrap;
+      white-space: nowrap;
     }
 
-    .cellActions .btn {
-      white-space: nowrap;
+    .iconBtn {
+      width: 36px;
+      height: 36px;
+      border-radius: 999px;
+      display:inline-grid;
+      place-items:center;
+      border: 1px solid rgba(255,255,255,0.14);
+      background: rgba(255,255,255,0.04);
+      color: rgba(255,255,255,0.92);
+      cursor: pointer;
+      user-select: none;
+      padding: 0;
+      line-height: 1;
+      font-size: 16px;
+    }
+    .iconBtn:hover { background: rgba(255,255,255,0.08); }
+    .iconBtn:active { transform: translateY(1px); }
+    .iconBtn:focus { outline: none; box-shadow: 0 0 0 3px rgba(80, 170, 255, 0.18); }
+
+    .iconBtn--danger {
+      border-color: rgba(255,120,120,.35);
+      color: rgba(255,210,210,.92);
+    }
+
+    .passMask {
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap: 10px;
     }
   </style>
 </head>
@@ -232,7 +263,7 @@
               </div>
             </div>
 
-            <div class="form" style="margin-top:12px; gap:14px;">
+            <div class="formBlock">
               <div class="rowField">
                 <label class="labelInline" for="companyName">Företagsnamn <span class="muted small">(required)</span></label>
                 <input id="companyName" class="inputBig" type="text" placeholder="t.ex. Kiosk Nova" />
@@ -242,7 +273,7 @@
                 <label class="labelInline" for="partnerIdInput">PartnerId <span class="muted small">(required)</span></label>
                 <input id="partnerIdInput" class="inputBig mono" type="text" placeholder="t.ex. kiosk-nova-x7k2" />
               </div>
-              <div class="hint muted small">Tips: a–z, 0–9 och bindestreck. Mellanslag blir “-”.</div>
+              <div class="helpLine muted small">Tips: a–z, 0–9 och bindestreck. Mellanslag blir “-”.</div>
 
               <div class="rowField">
                 <label class="labelInline" for="custUsername">Användarnamn <span class="muted small">(required)</span></label>
@@ -253,7 +284,7 @@
                 <label class="labelInline" for="custPassword">Lösenord <span class="muted small">(required)</span></label>
                 <input id="custPassword" class="inputBig mono" type="text" placeholder="t.ex. MinKod123" />
               </div>
-              <div class="hint muted small">Testläge: visas i klartext så du kan kopiera.</div>
+              <div class="helpLine muted small">Testläge: visas i klartext så du kan kopiera.</div>
 
               <div class="card previewCard" style="padding:12px;">
                 <div class="muted small">Förhandsvisning</div>
@@ -547,53 +578,56 @@ Password: ${c.password}`;
         tdUser.textContent = (c.username || '').toString();
         tr.appendChild(tdUser);
 
+        // password cell
         const tdPass = document.createElement('td');
         const passWrap = document.createElement('div');
-        passWrap.style.display = 'flex';
-        passWrap.style.gap = '8px';
-        passWrap.style.alignItems = 'center';
-        passWrap.style.justifyContent = 'space-between';
+        passWrap.className = 'passMask';
 
         const passText = document.createElement('span');
         passText.className = 'mono';
         passText.textContent = mask(c.password);
 
-        const toggleBtn = document.createElement('button');
-        toggleBtn.type = 'button';
-        toggleBtn.className = 'btn btn-ghost btnMini';
-        toggleBtn.textContent = 'Visa';
-        toggleBtn.addEventListener('click', () => {
-          const showing = toggleBtn.getAttribute('data-show') === '1';
+        const eyeBtn = document.createElement('button');
+        eyeBtn.type = 'button';
+        eyeBtn.className = 'iconBtn';
+        eyeBtn.title = 'Visa/Dölj lösenord';
+        eyeBtn.setAttribute('aria-label', 'Visa/Dölj lösenord');
+        eyeBtn.textContent = '👁';
+        eyeBtn.addEventListener('click', () => {
+          const showing = eyeBtn.getAttribute('data-show') === '1';
           if (showing) {
-            toggleBtn.setAttribute('data-show', '0');
-            toggleBtn.textContent = 'Visa';
+            eyeBtn.setAttribute('data-show', '0');
             passText.textContent = mask(c.password);
           } else {
-            toggleBtn.setAttribute('data-show', '1');
-            toggleBtn.textContent = 'Dölj';
+            eyeBtn.setAttribute('data-show', '1');
             passText.textContent = (c.password || '').toString();
           }
         });
 
         passWrap.appendChild(passText);
-        passWrap.appendChild(toggleBtn);
+        passWrap.appendChild(eyeBtn);
         tdPass.appendChild(passWrap);
         tr.appendChild(tdPass);
 
+        // actions
         const tdActions = document.createElement('td');
         const act = document.createElement('div');
         act.className = 'cellActions';
 
         const copyBtn = document.createElement('button');
         copyBtn.type = 'button';
-        copyBtn.className = 'btn btn-ghost btnMini';
-        copyBtn.textContent = 'Kopiera login';
+        copyBtn.className = 'iconBtn';
+        copyBtn.title = 'Kopiera login';
+        copyBtn.setAttribute('aria-label', 'Kopiera login');
+        copyBtn.textContent = '📋';
         copyBtn.addEventListener('click', () => copyLogin(c.partnerId));
 
         const delBtn = document.createElement('button');
         delBtn.type = 'button';
-        delBtn.className = 'btn btn-ghost btnMini dangerLink';
-        delBtn.textContent = 'Ta bort';
+        delBtn.className = 'iconBtn iconBtn--danger';
+        delBtn.title = 'Ta bort kund';
+        delBtn.setAttribute('aria-label', 'Ta bort kund');
+        delBtn.textContent = '🗑';
         delBtn.addEventListener('click', () => {
           if (!confirm(`Ta bort kunden "${(c.name || '').toString()}"?`)) return;
           removeCustomer(c.partnerId);
